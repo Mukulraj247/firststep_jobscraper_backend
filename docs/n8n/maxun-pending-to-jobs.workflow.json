@@ -1,0 +1,196 @@
+{
+  "name": "Maxun pending → active + jobs insert",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-schedule",
+      "name": "Every 30 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 0]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "find",
+        "collection": "maxun_extracteddata",
+        "query": "{\"data.status\":\"pending\"}",
+        "options": {
+          "limit": 100,
+          "sort": "{\"createdAt\":1}"
+        }
+      },
+      "id": "b2c3d4e5-find-pending",
+      "name": "Find pending extracted",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [40, 0],
+      "credentials": {
+        "mongoDb": {
+          "name": "MongoDB firststep_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Set CREATED_BY after import (Auth0 subject).\n// Maps ALL Find results in one run — no Split In Batches needed (avoids loop/done wiring issues).\nconst CREATED_BY = 'auth0|REPLACE_WITH_YOUR_AUTH0_SUBJECT';\nconst now = new Date().toISOString();\n\nreturn items.map(({ json: doc }) => {\n  const d = doc.data || {};\n  const dateVal = d.date ? new Date(d.date) : new Date(doc.createdAt || now);\n  return {\n    json: {\n      _id: doc._id,\n      'data.status': 'active',\n      jobId: d.jobId,\n      jobUrl: d.jobUrl ?? '',\n      jobTitle: d.jobTitle ?? '',\n      companyName: d.companyName ?? '',\n      jobDescription: d.jobDescription ?? '',\n      jobCategory: d.jobCategory ?? '',\n      date: dateVal.toISOString(),\n      createdBy: CREATED_BY,\n      job_creation_type: 'automation',\n      status: 'active',\n      isFlagged: Boolean(d.isFlagged),\n      jobExperience: typeof d.jobExperience === 'number' ? d.jobExperience : 0,\n      __v: 0,\n      createdAt: now,\n      updatedAt: now,\n    },\n  };\n});\n"
+      },
+      "id": "d4e5f6a7-prepare",
+      "name": "Prepare update + job row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "update",
+        "collection": "maxun_extracteddata",
+        "updateKey": "_id",
+        "fields": "_id,data.status",
+        "upsert": false,
+        "options": {
+          "dateFields": "",
+          "useDotNotation": false
+        }
+      },
+      "id": "e5f6a7b8-update-extracted",
+      "name": "Mark extracted active",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [520, 0],
+      "credentials": {
+        "mongoDb": {
+          "name": "MongoDB firststep_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Run-once-for-each-item + $('Prepare').all() only sees paired items (~1 row) — use run-once-for-all.\nconst prepared = $('Prepare update + job row').all();\nif (prepared.length !== items.length) {\n  throw new Error(`Shape: Prepare has ${prepared.length} items but Update passed ${items.length}`);\n}\nfunction pickJob(p) {\n  return {\n    jobId: p.jobId,\n    jobUrl: p.jobUrl,\n    jobTitle: p.jobTitle,\n    companyName: p.companyName,\n    jobDescription: p.jobDescription,\n    jobCategory: p.jobCategory,\n    date: p.date,\n    createdBy: p.createdBy,\n    job_creation_type: p.job_creation_type,\n    status: p.status,\n    isFlagged: p.isFlagged,\n    jobExperience: p.jobExperience,\n    __v: p.__v,\n    createdAt: p.createdAt,\n    updatedAt: p.updatedAt,\n  };\n}\nreturn prepared.map(({ json: p }) => ({ json: pickJob(p) }));\n"
+      },
+      "id": "f6a7b8c9-shape-job",
+      "name": "Shape job for insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "insert",
+        "collection": "jobs",
+        "fields": "jobId,jobUrl,jobTitle,companyName,jobDescription,jobCategory,date,createdBy,job_creation_type,status,isFlagged,jobExperience,__v,createdAt,updatedAt",
+        "options": {
+          "dateFields": "date,createdAt,updatedAt",
+          "useDotNotation": false
+        }
+      },
+      "id": "a7b8c9d0-insert-jobs",
+      "name": "Insert into jobs",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [1000, 0],
+      "credentials": {
+        "mongoDb": {
+          "name": "MongoDB firststep_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Maxun → jobs\n\n1. Attach **MongoDB** credential (`firststep_db`).\n2. **Prepare** → set `CREATED_BY`.\n3. No **Split In Batches** — Find → Prepare maps all rows; Mongo runs per item.\n4. Optional: duplicate `jobId` — see `docs/n8n/README.md`.",
+        "height": 340,
+        "width": 380
+      },
+      "id": "sticky-note-n8n",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-240, -220]
+    }
+  ],
+  "connections": {
+    "Every 30 minutes": {
+      "main": [
+        [
+          {
+            "node": "Find pending extracted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find pending extracted": {
+      "main": [
+        [
+          {
+            "node": "Prepare update + job row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare update + job row": {
+      "main": [
+        [
+          {
+            "node": "Mark extracted active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark extracted active": {
+      "main": [
+        [
+          {
+            "node": "Shape job for insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape job for insert": {
+      "main": [
+        [
+          {
+            "node": "Insert into jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert into jobs": {
+      "main": [[]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

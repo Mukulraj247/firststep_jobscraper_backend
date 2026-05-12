@@ -45,6 +45,15 @@ ExtractedDataSchema.set('toJSON', {
 
 ExtractedDataSchema.index({ robotMetaId: 1, createdAt: 1 }, { name: 'extracted_data_robot_meta_created_at_idx' });
 ExtractedDataSchema.index({ runId: 1, createdAt: 1 }, { name: 'extracted_data_run_created_at_idx' });
+ExtractedDataSchema.index({ 'data.status': 1, createdAt: 1 }, { name: 'extracted_data_status_created_at_idx' });
+ExtractedDataSchema.index(
+  { 'data.jobId': 1 },
+  {
+    unique: true,
+    name: 'extracted_data_job_id_uidx',
+    partialFilterExpression: { 'data.jobId': { $type: 'string', $gt: '' } },
+  }
+);
 
 const ExtractedData = mongoose.models.ExtractedData || mongoose.model<IExtractedData>('ExtractedData', ExtractedDataSchema);
 

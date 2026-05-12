@@ -47,6 +47,8 @@ export async function saveConfigToBackend(payload: {
   previewRows?: Record<string, string>[];
   /** Recurring schedule stored under `config.schedule` (POST/PUT automations). */
   schedule?: { enabled: boolean; cron: string | null; timezone: string };
+  /** Per-automation metadata merged into every extracted row (sector/industry, F500). */
+  rowContext?: { sectorIndustry?: string; f500?: boolean };
 }): Promise<any> {
   const state = await getState();
   const apiBase = state.backendUrl.replace(/\/+$/, '');
@@ -72,6 +74,15 @@ export async function saveConfigToBackend(payload: {
   };
 
   const defaultName = `Scout-X scrape (${new Date().toISOString().slice(0, 16).replace('T', ' ')})`;
+
+  const rowCtx = payload.rowContext;
+  const serverRowContext = rowCtx
+    ? {
+        sectorIndustry: rowCtx.sectorIndustry ?? '',
+        f500: rowCtx.f500 === true ? 'yes' : rowCtx.f500 === false ? 'no' : '',
+      }
+    : undefined;
+
   const body = {
     name: (payload.automationName && String(payload.automationName).trim()) || defaultName,
     startUrl: payload.startUrl || '',
@@ -79,6 +90,7 @@ export async function saveConfigToBackend(payload: {
     config: {
       listExtraction,
       previewRows: payload.previewRows || [],
+      ...(serverRowContext ? { rowContext: serverRowContext } : {}),
       ...(payload.schedule ? { schedule: payload.schedule } : {}),
     },
   };

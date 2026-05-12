@@ -4,6 +4,7 @@ import { setServers as setDnsServers } from 'dns';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
 import ExtractedData from '../models/ExtractedData';
+import JobIdCounter from '../models/JobIdCounter';
 
 setDnsServers(['8.8.8.8', '1.1.1.1']);
 
@@ -26,6 +27,7 @@ export const syncDB = async () => {
         await Run.syncIndexes();
         await Robot.syncIndexes();
         await ExtractedData.syncIndexes();
+        await JobIdCounter.syncIndexes();
         console.log('MongoDB indexes synced.');
     } catch (err) {
         console.error('MongoDB index sync failed:', err);

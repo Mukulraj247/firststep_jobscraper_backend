@@ -466,6 +466,23 @@ function getTitleScore(element: Element, text: string, className: string, id: st
  */
 function getCompanyScore(element: Element, text: string, className: string, id: string, ariaLabel: string): number {
   let score = 0;
+  const trimmed = text.trim();
+  const metaBundle = `${className} ${id} ${ariaLabel}`.toLowerCase();
+
+  // Drupal / mega-menu: class `company-culture`, link text "Culture", href …/culture — not an employer
+  if (/\bcompany-culture\b|companyculture|culture-link|menu-item--culture|menu-link--culture/i.test(metaBundle)) {
+    return 0.05;
+  }
+  if (/^(culture|insights)$/i.test(trimmed)) {
+    return 0.05;
+  }
+  if (element.tagName === 'A') {
+    const href = ((element as HTMLAnchorElement).getAttribute('href') || '').toLowerCase();
+    if (href && /\/culture\b|\/insights\b|life-at|\/join-us\/|careers\/culture/i.test(href)) {
+      return 0.05;
+    }
+  }
+
   const parent = element.parentElement;
   const grandparent = parent?.parentElement;
 
@@ -515,16 +532,27 @@ function getCompanyScore(element: Element, text: string, className: string, id: 
     }
   }
 
-  // Strong positive signals
-  if (/company|employer|company[- ]?name|employer[- ]?name|brand|author|publisher/i.test(className + ' ' + id + ' ' + ariaLabel)) {
+  // Strong positive signals — skip when `company` is only from `company-culture` etc.
+  if (
+    !/\bcompany-culture\b|companyculture/i.test(metaBundle) &&
+    /company|employer|company[- ]?name|employer[- ]?name|brand|author|publisher/i.test(className + ' ' + id + ' ' + ariaLabel)
+  ) {
     score += 0.55;
   }
 
-  // Check ancestors for company-related classes
+  // Check ancestors for company-related classes (exclude company-culture nav wrappers)
   let ancestor: Element | null = parent;
   for (let depth = 0; depth < 5 && ancestor; depth++) {
     const ancClass = String(ancestor.className || '').toLowerCase();
-    if (/company|employer|brand|by[- ]?company|sponsored|agency|business|client/i.test(ancClass)) {
+    if (/\bcompany-culture\b|companyculture|culture-link/i.test(ancClass)) {
+      score -= 0.75;
+      break;
+    }
+    if (
+      /\b(employer|brand|sponsored|agency|business|client|hiring-organization)\b/i.test(ancClass) ||
+      /\bcompany[-_]?(name|card|logo|info)\b/i.test(ancClass) ||
+      /\bby[- ]?company\b/i.test(ancClass)
+    ) {
       score += 0.4;
       break;
     }

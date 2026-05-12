@@ -10,6 +10,7 @@ import { createQueuedAutomationRun } from '../services/automationRun';
 import { syncAutomationSchedule, resolveEffectiveScheduleState } from '../services/automationScheduler';
 import {
   applyColumnOverrides,
+  applyReadPipelineToExtractedData,
   buildDashboardStatus,
   ColumnOverride,
   computeRunDurationMs,
@@ -20,6 +21,7 @@ import {
   ROW_CONTEXT_KEYS,
   sanitizeRowContextFields,
 } from '../services/automation';
+import { CANONICAL_JOB_FIELD_ORDER } from '../services/canonicalJobRecord';
 import { validateAutomationScheduleCron } from '../utils/schedule';
 import { deleteAutomationCascade } from '../services/deleteAutomation';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
@@ -683,7 +685,12 @@ router.get('/automations/:id/data', async (req: any, res: any) => {
       runId: row.runId,
       source: row.source,
       createdAt: row.createdAt,
-      data: mergeRowContextIntoRowData(applyColumnOverrides(row.data, overrides), cfg.rowContext),
+      data: applyReadPipelineToExtractedData(
+        row.data,
+        row.createdAt ? new Date(row.createdAt) : new Date(),
+        overrides,
+        cfg.rowContext
+      ),
     }));
 
     const ctxKeySet = new Set<string>(ROW_CONTEXT_KEYS);
@@ -691,7 +698,10 @@ router.get('/automations/:id/data', async (req: any, res: any) => {
     ROW_CONTEXT_KEYS.forEach((k) => keySet.add(k));
     const rest = Array.from(keySet).filter((k) => !ctxKeySet.has(k));
     rest.sort((a, b) => a.localeCompare(b));
-    const columns = [...ROW_CONTEXT_KEYS, ...rest];
+    const canonicalKeys = CANONICAL_JOB_FIELD_ORDER as readonly string[];
+    const canonicalRest = canonicalKeys.filter((k) => !ctxKeySet.has(k) && rest.includes(k));
+    const otherRest = rest.filter((k) => !canonicalRest.includes(k));
+    const columns = [...ROW_CONTEXT_KEYS, ...canonicalRest, ...otherRest];
 
     return res.json({
       pagination: {
@@ -905,7 +915,12 @@ router.get('/runs/:id', async (req: any, res: any) => {
     let extractedRowsPayload = extractedFromDb.map((row: any) => ({
       id: row.id,
       source: row.source,
-      data: mergeRowContextIntoRowData(applyColumnOverrides(row.data, overrides), robotCfg.rowContext),
+      data: applyReadPipelineToExtractedData(
+        row.data,
+        row.createdAt ? new Date(row.createdAt) : new Date(),
+        overrides,
+        robotCfg.rowContext
+      ),
       createdAt: row.createdAt,
     }));
 

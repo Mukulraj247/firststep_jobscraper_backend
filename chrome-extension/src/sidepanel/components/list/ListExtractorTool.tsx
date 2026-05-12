@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { MSG } from '../../../shared/messages';
-import type { ListExtractionState, FieldConfig, SemanticType, PaginationConfig, CloudScheduleDraft } from '../../../shared/types';
+import type { ListExtractionState, FieldConfig, SemanticType, PaginationConfig, CloudScheduleDraft, RowContextDraft } from '../../../shared/types';
 import { configScheduleFromDraft } from '../../../shared/types';
 import { ExtensionScheduleForm, EXTENSION_SCHEDULE_OPTIONS, isValidCron } from '../ExtensionScheduleForm';
 import { ExtensionSchedulePicker } from '../ExtensionSchedulePicker';
@@ -228,6 +228,7 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
           fields: fieldsToSave,
           pagination: state.pagination,
           previewRows: state.previewRows,
+          rowContext: state.rowContext,
         }),
         SAVE_TO_BACKEND_TIMEOUT_MS,
         'Save to Scout-X'
@@ -293,6 +294,15 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
       await sendMessage(MSG.UPDATE_PAGINATION, { pagination });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update pagination');
+    }
+  };
+
+  const handleRowContextChange = async (patch: Partial<RowContextDraft>) => {
+    try {
+      const cur = state.rowContext || { sectorIndustry: '', f500: false };
+      await sendMessage(MSG.UPDATE_ROW_CONTEXT, { rowContext: { ...cur, ...patch } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update metadata');
     }
   };
 
@@ -517,6 +527,54 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
               </div>
             </div>
           )}
+
+          {/* Job Metadata (sectorIndustry + f500) */}
+          <div style={{ ...styles.card, marginTop: 8 }}>
+            <h3 style={styles.cardTitle}>Job Metadata</h3>
+            <p style={{ ...styles.muted, fontSize: 11, marginBottom: 10 }}>
+              These fields are saved with the automation and applied to every extracted row.
+              They are not scraped from the page.
+            </p>
+            <label style={styles.label}>Sector / Industry</label>
+            <input
+              style={styles.input}
+              placeholder="e.g. Healthcare, Banking, Technology"
+              value={state.rowContext?.sectorIndustry ?? ''}
+              onChange={(e) => handleRowContextChange({ sectorIndustry: e.target.value })}
+            />
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '4px 0' }}
+              onClick={() => handleRowContextChange({ f500: !(state.rowContext?.f500 ?? false) })}
+            >
+              <div
+                style={{
+                  width: 36,
+                  height: 20,
+                  borderRadius: 10,
+                  background: state.rowContext?.f500 ? '#0e7490' : '#333',
+                  position: 'relative',
+                  transition: 'background 0.2s',
+                  flexShrink: 0,
+                }}
+              >
+                <div
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: '50%',
+                    background: '#fff',
+                    position: 'absolute',
+                    top: 2,
+                    left: state.rowContext?.f500 ? 18 : 2,
+                    transition: 'left 0.2s',
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: 12, color: '#d1d5db', fontWeight: 600 }}>
+                Fortune 500 (F500)
+              </span>
+            </div>
+          </div>
 
           {/* Pagination & Auto-Scroll */}
           <div style={{ ...styles.card, marginTop: 8 }}>

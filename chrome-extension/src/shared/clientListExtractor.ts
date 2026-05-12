@@ -24,6 +24,9 @@ export class ClientListExtractor {
     /strong match/i,
     /ask orion/i,
     /^recommended$/i,
+    /** Short mega-menu labels mistaken for employer (e.g. SIA "Culture" under Join us) */
+    /^culture$/i,
+    /^insights$/i,
   ];
 
   private isNoisyCompanyValue(value: string): boolean {
@@ -32,27 +35,66 @@ export class ClientListExtractor {
     return ClientListExtractor.COMPANY_NOISE_PATTERNS.some((pattern) => pattern.test(normalized));
   }
 
+  /** Single-word / short nav labels that are not employer names */
+  private isLikelyNavOrSectionLabel(text: string): boolean {
+    const t = text.trim();
+    if (!t || t.length > 120) return false;
+    return /^(culture|insights|about(\s+us)?|contact|join\s+us)$/i.test(t.trim());
+  }
+
+  /**
+   * `[class*="company"]` matches compound classes like `company-culture` (nav), not just employer fields.
+   */
+  private isCompanyCandidateClassFalsePositive(node: Element): boolean {
+    const raw = (node as HTMLElement).className;
+    const cn = typeof raw === 'string' ? raw.toLowerCase() : '';
+    return /\bcompany-culture\b|companyculture|culture-link|menu-item--culture|nav-company\b/i.test(cn);
+  }
+
+  private inferCompanyFromPageMetadata(doc: Document | null): string | null {
+    if (!doc) return null;
+    const og = doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content')?.trim();
+    if (og && og.length <= 160 && !this.isLikelyNavOrSectionLabel(og)) return og;
+    const app = doc.querySelector('meta[name="application-name"]')?.getAttribute('content')?.trim();
+    if (app && app.length <= 160 && !this.isLikelyNavOrSectionLabel(app)) return app;
+    return null;
+  }
+
   private inferCompanyFromContainer(container: Element): string | null {
     const candidateSelectors = [
       '[data-testid*="company"]',
-      '[class*="company"]',
+      '[data-company]',
+      '[data-employer]',
+      '[class*="company-name"]',
+      '[class*="employer-name"]',
+      '[class*="employer"]',
       '[class*="subtitle"]',
       '[class*="meta"]',
       'a[href*="/company/"]',
       'h2 + div',
       'h3 + div',
+      /** Last — substring "company" also matches `company-culture` etc.; filter below */
+      '[class*="company"]',
     ];
 
     for (const selector of candidateSelectors) {
       for (const node of Array.from(container.querySelectorAll(selector))) {
+        if (this.isCompanyCandidateClassFalsePositive(node)) continue;
+        if (node.closest('nav, header, [role="navigation"]')) continue;
+
         const text = ((node as HTMLElement).innerText || node.textContent || '')
           .replace(/\s+/g, ' ')
           .trim();
-        if (!text || this.isNoisyCompanyValue(text)) continue;
+        if (!text || this.isNoisyCompanyValue(text) || this.isLikelyNavOrSectionLabel(text)) continue;
 
         // Common job-card subtitle format: "Company / Industry · Stage"
         const firstChunk = text.split('·')[0]?.split('/')[0]?.trim() || text;
-        if (firstChunk && !this.isNoisyCompanyValue(firstChunk) && firstChunk.length <= 120) {
+        if (
+          firstChunk &&
+          !this.isNoisyCompanyValue(firstChunk) &&
+          !this.isLikelyNavOrSectionLabel(firstChunk) &&
+          firstChunk.length <= 120
+        ) {
           return firstChunk;
         }
       }
@@ -544,8 +586,16 @@ export class ClientListExtractor {
         const companyKey = Object.keys(record).find((key) => /company/i.test(key));
         if (companyKey) {
           const rawCompany = (record[companyKey] || '').trim();
-          if (!rawCompany || this.isNoisyCompanyValue(rawCompany)) {
-            const inferredCompany = this.inferCompanyFromContainer(container);
+          const doc = container.ownerDocument;
+          if (
+            !rawCompany ||
+            this.isNoisyCompanyValue(rawCompany) ||
+            this.isLikelyNavOrSectionLabel(rawCompany)
+          ) {
+            let inferredCompany = this.inferCompanyFromContainer(container);
+            if (!inferredCompany || this.isLikelyNavOrSectionLabel(inferredCompany)) {
+              inferredCompany = this.inferCompanyFromPageMetadata(doc);
+            }
             if (inferredCompany) {
               record[companyKey] = inferredCompany;
             }

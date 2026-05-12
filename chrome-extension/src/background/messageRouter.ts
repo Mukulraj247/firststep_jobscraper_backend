@@ -167,6 +167,23 @@ async function handleMessage(
         break;
       }
 
+      case MSG.UPDATE_ROW_CONTEXT: {
+        const { rowContext } = message.payload || {};
+        if (rowContext && typeof rowContext === 'object') {
+          const cur = (await getState()).list.rowContext || { sectorIndustry: '', f500: false };
+          const next = {
+            sectorIndustry:
+              typeof rowContext.sectorIndustry === 'string'
+                ? rowContext.sectorIndustry
+                : cur.sectorIndustry,
+            f500: typeof rowContext.f500 === 'boolean' ? rowContext.f500 : cur.f500,
+          };
+          await updateListState({ rowContext: next });
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
       case MSG.UPDATE_CLOUD_SCHEDULE_DRAFT: {
         const draft = message.payload?.draft;
         if (!draft || typeof draft !== 'object') {

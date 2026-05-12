@@ -606,10 +606,20 @@ const paginateByPageNumber = async (
   currentPage: number
 ) => {
   const pageParam = pagination.pageParam || 'page';
-  const nextPage = (pagination.startPage || 1) + currentPage - 1;
+  // `advancePagination` passes `currentPage = pageIndex + 1` after each extracted page.
+  // Next URL page index must be startPage + currentPage (e.g. after page 1, currentPage=1 → next is startPage+1 = 2).
+  // The old `(startPage||1) + currentPage - 1` incorrectly stayed on page 1 when the start URL already had `page=1`.
+  const startBase =
+    typeof pagination.startPage === 'number' && !Number.isNaN(pagination.startPage)
+      ? pagination.startPage
+      : 1;
+  const nextPage = startBase + currentPage;
   const nextUrl = new URL(page.url() || startUrl);
   nextUrl.searchParams.set(pageParam, String(nextPage));
-  if (nextUrl.toString() === page.url()) return false;
+  const currentUrl = page.url() || '';
+  const samePageParam =
+    new URL(currentUrl || startUrl).searchParams.get(pageParam) === String(nextPage);
+  if (samePageParam || nextUrl.toString() === currentUrl) return false;
   await gotoForListExtraction(page, nextUrl.toString());
   await page.waitForTimeout(pagination.pageDelayMs || DEFAULT_SCROLL_DELAY_MS);
   logger.log('info', `List extractor navigated to page loop URL ${nextUrl}`);

@@ -1,0 +1,590 @@
+{
+  "name": "Maxun pending → active + enriched jobs insert",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-schedule",
+      "name": "Every 30 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 0]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "find",
+        "collection": "maxun_extracteddata",
+        "query": "{\"data.status\":\"pending\"}",
+        "options": {
+          "limit": 100,
+          "sort": "{\"createdAt\":1}"
+        }
+      },
+      "id": "b2c3d4e5-find-pending",
+      "name": "Find pending extracted",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [40, 0],
+      "credentials": {
+        "mongoDb": {
+          "name": "MongoDB firststep_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Set CREATED_BY after import (Auth0 subject).\nconst CREATED_BY = 'auth0|REPLACE_WITH_YOUR_AUTH0_SUBJECT';\nconst now = new Date().toISOString();\n\nreturn items.map(({ json: doc }) => {\n  const d = doc.data || {};\n  const dateVal = d.date ? new Date(d.date) : new Date(doc.createdAt || now);\n  return {\n    json: {\n      _id: doc._id,\n      'data.status': 'active',\n      jobId: d.jobId,\n      jobUrl: d.jobUrl ?? '',\n      jobSourceURL: d.jobUrl ?? '',\n      jobTitle: d.jobTitle ?? '',\n      companyName: d.companyName ?? '',\n      jobDescription: d.jobDescription ?? '',\n      jobCategory: d.jobCategory ?? '',\n      date: dateVal.toISOString(),\n      createdBy: CREATED_BY,\n      job_creation_type: 'automation',\n      status: 'active',\n      isFlagged: Boolean(d.isFlagged),\n      jobExperience: typeof d.jobExperience === 'number' ? d.jobExperience : 0,\n      __v: 0,\n      createdAt: now,\n      updatedAt: now,\n    },\n  };\n});\n"
+      },
+      "id": "d4e5f6a7-prepare",
+      "name": "Prepare update + job row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "update",
+        "collection": "maxun_extracteddata",
+        "updateKey": "_id",
+        "fields": "_id,data.status",
+        "upsert": false,
+        "options": {
+          "dateFields": "",
+          "useDotNotation": false
+        }
+      },
+      "id": "e5f6a7b8-update-extracted",
+      "name": "Mark extracted active",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [520, 0],
+      "credentials": {
+        "mongoDb": {
+          "name": "MongoDB firststep_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const prepared = $('Prepare update + job row').all();\nif (prepared.length !== items.length) {\n  throw new Error(`Shape: Prepare has ${prepared.length} items but Update passed ${items.length}`);\n}\nfunction pickJob(p) {\n  return {\n    jobId: p.jobId,\n    jobUrl: p.jobUrl,\n    jobSourceURL: p.jobSourceURL,\n    jobTitle: p.jobTitle,\n    companyName: p.companyName,\n    jobDescription: p.jobDescription,\n    jobCategory: p.jobCategory,\n    date: p.date,\n    createdBy: p.createdBy,\n    job_creation_type: p.job_creation_type,\n    status: p.status,\n    isFlagged: p.isFlagged,\n    jobExperience: p.jobExperience,\n    __v: p.__v,\n    createdAt: p.createdAt,\n    updatedAt: p.updatedAt,\n  };\n}\nreturn prepared.map(({ json: p }) => ({ json: pickJob(p) }));\n"
+      },
+      "id": "f6a7b8c9-shape-job",
+      "name": "Shape job for enrichment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": {
+        "batchSize": 4,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "c1d2e3f4-loop",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1000, 0],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "notes": "Batch size 4. Output 0 = done (after loop), Output 1 = loop body."
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nawait new Promise(resolve => setTimeout(resolve, 500));\nreturn items;"
+      },
+      "id": "d2e3f4a5-delay",
+      "name": "Delay 500ms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 0],
+      "notes": "500ms pause between scrape.do calls to avoid rate limiting."
+    },
+    {
+      "parameters": {
+        "url": "https://api.scrape.do",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "bd9cb6c5e3d844a990262114007beded4bd7c20b578"
+            },
+            {
+              "name": "url",
+              "value": "={{ $json.jobUrl }}"
+            },
+            {
+              "name": "super",
+              "value": "true"
+            },
+            {
+              "name": "regionalGeoCode",
+              "value": "northamerica"
+            },
+            {
+              "name": "render",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e3f4a5b6-scrape",
+      "name": "scrape.do",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1480, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map(item => {\n  try {\n    const rawHtml = item.json.data.replace(/<[^>]*>/g, '');\n    const match = rawHtml.match(/\"apply_url\":\"([^\"]+)\"/);\n\n    if (match && match[1]) {\n      let applyUrl = match[1];\n      applyUrl = applyUrl.replace(/\\\\u([0-9a-fA-F]{4})/g, (match, hex) => {\n        return String.fromCharCode(parseInt(hex, 16));\n      });\n      applyUrl = applyUrl\n        .replace(/\\\\n/g, '\\n')\n        .replace(/\\\\r/g, '\\r')\n        .replace(/\\\\t/g, '\\t')\n        .replace(/\\\\\\\\/g, '\\\\')\n        .replace(/\\\\\"/g, '\"')\n        .replace(/\\\\'/g, \"'\");\n\n      return { json: { apply_url: applyUrl } };\n    } else {\n      return { json: { apply_url: null } };\n    }\n  } catch (error) {\n    return { json: { ...item.json, apply_url: null, error: error.message } };\n  }\n});"
+      },
+      "id": "f4a5b6c7-extract-url",
+      "name": "Extract apply_url",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, -120]
+    },
+    {
+      "parameters": {
+        "html": "={{ $json.data }}",
+        "options": {}
+      },
+      "id": "a5b6c7d8-markdown",
+      "name": "Convert to Markdown",
+      "type": "n8n-nodes-base.markdown",
+      "typeVersion": 1,
+      "position": [1720, 120]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Job description:\n\n{{ $json.data.split('\\n\\nJob Description\\n\\n')[1] }}",
+        "options": {
+          "systemMessage": "You are a helpful assistant\n\nyour task is to extract the Requirements and Responsibilities only from the job description\n\ndon't modify the text just extract the section about the requirements and responsibilities only\n\nif you didn't find it say \"didn't find\""
+        }
+      },
+      "id": "b6c7d8e9-extract-reqs",
+      "name": "Extract Requirements",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [1960, 120]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c7d8e9f0-gemini",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [1960, 320],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "c5NRjKPbTLVeDQGk",
+          "name": "Google Gemini(PaLM) Api account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "d8e9f0a1-merge",
+      "name": "Merge apply_url + requirements",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [2200, 0],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f-jobTitle",
+              "name": "jobTitle",
+              "value": "={{ $('Loop Over Items').item.json.jobTitle }}",
+              "type": "string"
+            },
+            {
+              "id": "f-companyName",
+              "name": "companyName",
+              "value": "={{ $('Loop Over Items').item.json.companyName }}",
+              "type": "string"
+            },
+            {
+              "id": "f-jobUrl",
+              "name": "jobUrl",
+              "value": "={{ $json.apply_url ?? $('Loop Over Items').item.json.jobUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "f-jobSourceURL",
+              "name": "jobSourceURL",
+              "value": "={{ $('Loop Over Items').item.json.jobSourceURL }}",
+              "type": "string"
+            },
+            {
+              "id": "f-jobDescription",
+              "name": "jobDescription",
+              "value": "={{ $json.output ?? $('Loop Over Items').item.json.jobDescription }}",
+              "type": "string"
+            },
+            {
+              "id": "f-jobCategory",
+              "name": "jobCategory",
+              "value": "={{ $('Loop Over Items').item.json.jobCategory }}",
+              "type": "string"
+            },
+            {
+              "id": "f-date",
+              "name": "date",
+              "value": "={{ $('Loop Over Items').item.json.date }}",
+              "type": "string"
+            },
+            {
+              "id": "f-jobExperience",
+              "name": "jobExperience",
+              "value": "={{ $('Loop Over Items').item.json.jobExperience }}",
+              "type": "number"
+            },
+            {
+              "id": "f-jobId",
+              "name": "jobId",
+              "value": "={{ $('Loop Over Items').item.json.jobId }}",
+              "type": "string"
+            },
+            {
+              "id": "f-createdBy",
+              "name": "createdBy",
+              "value": "={{ $('Loop Over Items').item.json.createdBy }}",
+              "type": "string"
+            },
+            {
+              "id": "f-jobCreationType",
+              "name": "job_creation_type",
+              "value": "={{ $('Loop Over Items').item.json.job_creation_type }}",
+              "type": "string"
+            },
+            {
+              "id": "f-status",
+              "name": "status",
+              "value": "={{ $('Loop Over Items').item.json.status }}",
+              "type": "string"
+            },
+            {
+              "id": "f-isFlagged",
+              "name": "isFlagged",
+              "value": "={{ $('Loop Over Items').item.json.isFlagged }}",
+              "type": "boolean"
+            },
+            {
+              "id": "f-v",
+              "name": "__v",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "f-createdAt",
+              "name": "createdAt",
+              "value": "={{ $('Loop Over Items').item.json.createdAt }}",
+              "type": "string"
+            },
+            {
+              "id": "f-updatedAt",
+              "name": "updatedAt",
+              "value": "={{ $('Loop Over Items').item.json.updatedAt }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e9f0a1b2-edit-fields",
+      "name": "Edit Fields (final shape)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nif (!staticData.processedJobs) {\n  staticData.processedJobs = [];\n}\n\nconst items = $input.all();\nfor (const item of items) {\n  staticData.processedJobs.push(item.json);\n}\n\nreturn items;"
+      },
+      "id": "f0a1b2c3-accumulate",
+      "name": "Accumulate Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2680, 0],
+      "notes": "Stores each enriched job in workflow static data. After loop completes, all are bulk-retrieved."
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst jobs = staticData.processedJobs || [];\n\nstaticData.processedJobs = [];\n\nreturn jobs.map(job => ({ json: job }));"
+      },
+      "id": "a1b2c3d4-get-all",
+      "name": "Get All Processed Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 240],
+      "executeOnce": true,
+      "alwaysOutputData": false,
+      "notes": "Fires after loop completes (done output). Returns all accumulated enriched jobs for bulk insert."
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "operation": "insert",
+        "collection": "jobs",
+        "fields": "jobId,jobUrl,jobSourceURL,jobTitle,companyName,jobDescription,jobCategory,date,createdBy,job_creation_type,status,isFlagged,jobExperience,__v,createdAt,updatedAt",
+        "options": {
+          "dateFields": "date,createdAt,updatedAt",
+          "useDotNotation": false
+        }
+      },
+      "id": "b2c3d4e5-insert-jobs",
+      "name": "Insert into jobs",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [1480, 240],
+      "credentials": {
+        "mongoDb": {
+          "name": "MongoDB firststep_db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Maxun → enriched jobs\n\n1. Attach **MongoDB** credential (`firststep_db`).\n2. Attach **Google Gemini (PaLM)** credential.\n3. **Prepare** → set `CREATED_BY` to your Auth0 subject.\n4. Each pending job is scraped via **scrape.do**, apply_url extracted, and requirements/responsibilities extracted via **Gemini LLM**.\n5. Original `jobUrl` is preserved as `jobSourceURL`; scraped `apply_url` becomes the new `jobUrl`.\n6. Enriched jobs are bulk-inserted into `jobs` collection.",
+        "height": 400,
+        "width": 420
+      },
+      "id": "sticky-note-enriched",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-240, -280]
+    }
+  ],
+  "connections": {
+    "Every 30 minutes": {
+      "main": [
+        [
+          {
+            "node": "Find pending extracted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find pending extracted": {
+      "main": [
+        [
+          {
+            "node": "Prepare update + job row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare update + job row": {
+      "main": [
+        [
+          {
+            "node": "Mark extracted active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark extracted active": {
+      "main": [
+        [
+          {
+            "node": "Shape job for enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape job for enrichment": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Get All Processed Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delay 500ms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay 500ms": {
+      "main": [
+        [
+          {
+            "node": "scrape.do",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "scrape.do": {
+      "main": [
+        [
+          {
+            "node": "Extract apply_url",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Convert to Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract apply_url": {
+      "main": [
+        [
+          {
+            "node": "Merge apply_url + requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to Markdown": {
+      "main": [
+        [
+          {
+            "node": "Extract Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Requirements": {
+      "main": [
+        [
+          {
+            "node": "Merge apply_url + requirements",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Extract Requirements",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge apply_url + requirements": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields (final shape)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields (final shape)": {
+      "main": [
+        [
+          {
+            "node": "Accumulate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accumulate Result": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Processed Jobs": {
+      "main": [
+        [
+          {
+            "node": "Insert into jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert into jobs": {
+      "main": [[]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

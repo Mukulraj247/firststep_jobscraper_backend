@@ -1,0 +1,99 @@
+import { describe, it, expect } from 'vitest';
+import {
+  applyLegacyJobAliases,
+  buildCanonicalJobDataSync,
+  CANONICAL_JOB_CREATION_TYPE,
+  hasCanonicalExtractedShape,
+  pickPostedDateFromRow,
+} from './canonicalJobRecord';
+import { baseKeyForJobId, categoryCodeFromJobTitle } from './jobIdGenerator';
+
+describe('applyLegacyJobAliases', () => {
+  it('fills canonical keys from legacy scrape keys without removing originals', () => {
+    const out = applyLegacyJobAliases({
+      company: 'Acme',
+      title: 'Engineer',
+      url: 'https://jobs.example/1',
+      description: 'Do things',
+    });
+    expect(out.companyName).toBe('Acme');
+    expect(out.jobTitle).toBe('Engineer');
+    expect(out.jobUrl).toBe('https://jobs.example/1');
+    expect(out.jobDescription).toBe('Do things');
+    expect(out.company).toBe('Acme');
+  });
+
+  it('does not overwrite existing canonical values', () => {
+    const out = applyLegacyJobAliases({
+      companyName: 'KeepMe',
+      company: 'Other',
+    });
+    expect(out.companyName).toBe('KeepMe');
+  });
+});
+
+describe('buildCanonicalJobDataSync', () => {
+  const created = new Date('2026-02-05T12:00:00.000Z');
+
+  it('sets insertDefaults status to pending regardless of stray data.status', () => {
+    const row = buildCanonicalJobDataSync(
+      { jobTitle: 'X', status: 'active' } as Record<string, unknown>,
+      { createdAt: created, jobId: 'AB01FE001', insertDefaults: true }
+    );
+    expect(row.status).toBe('pending');
+  });
+
+  it('preserves non-pending status when insertDefaults is false', () => {
+    const row = buildCanonicalJobDataSync(
+      { jobTitle: 'X', status: 'active', jobUrl: 'https://x' } as Record<string, unknown>,
+      { createdAt: created, jobId: 'AB01FE002', insertDefaults: false }
+    );
+    expect(row.status).toBe('active');
+  });
+
+  it('defaults string fields to empty and jobExperience to 0', () => {
+    const row = buildCanonicalJobDataSync({}, { createdAt: created, jobId: 'XX01FE003', insertDefaults: true });
+    expect(row.jobUrl).toBe('');
+    expect(row.jobTitle).toBe('');
+    expect(row.jobExperience).toBe(0);
+    expect(row.isFlagged).toBe(false);
+    expect(row.job_creation_type).toBe(CANONICAL_JOB_CREATION_TYPE);
+  });
+});
+
+describe('hasCanonicalExtractedShape', () => {
+  it('returns true only when jobId, status, and job_creation_type are present', () => {
+    expect(
+      hasCanonicalExtractedShape({
+        jobId: 'SA16DE452',
+        status: 'pending',
+        job_creation_type: CANONICAL_JOB_CREATION_TYPE,
+      })
+    ).toBe(true);
+    expect(
+      hasCanonicalExtractedShape({ jobId: '', status: 'pending', job_creation_type: CANONICAL_JOB_CREATION_TYPE })
+    ).toBe(false);
+    expect(hasCanonicalExtractedShape({ jobId: 'X', status: 'pending', job_creation_type: 'job_collector' })).toBe(
+      false
+    );
+    expect(hasCanonicalExtractedShape({ jobId: 'X', status: 'pending' })).toBe(false);
+    expect(hasCanonicalExtractedShape({ company: 'x' })).toBe(false);
+  });
+});
+
+describe('pickPostedDateFromRow', () => {
+  it('uses posted fields when parseable', () => {
+    const d = pickPostedDateFromRow({ datePosted: '2025-01-02' }, new Date('2026-02-05T12:00:00.000Z'));
+    expect(d.toISOString().slice(0, 10)).toBe('2025-01-02');
+  });
+});
+
+describe('jobIdGenerator helpers', () => {
+  it('categoryCodeFromJobTitle uses first letters of first two words', () => {
+    expect(categoryCodeFromJobTitle('Software Engineer III')).toBe('SE');
+  });
+
+  it('baseKeyForJobId matches CC + DD + month code', () => {
+    expect(baseKeyForJobId('Software Engineer', new Date('2026-12-16T00:00:00.000Z'))).toBe('SE16DE');
+  });
+});

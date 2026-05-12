@@ -44,6 +44,8 @@ export const MSG = {
   STOP_SELECTION: 'maxun:stop-selection',
   UPDATE_FIELDS: 'maxun:update-fields',
   UPDATE_PAGINATION: 'maxun:update-pagination',
+  /** Side panel → background: update per-automation metadata (sectorIndustry, f500). */
+  UPDATE_ROW_CONTEXT: 'maxun:update-row-context',
   RUN_EXTRACTION: 'maxun:run-extraction',
   CANCEL_EXTRACTION: 'maxun:cancel-extraction',
   OPEN_DATA_TABLE: 'maxun:open-data-table',

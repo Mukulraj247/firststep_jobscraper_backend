@@ -6,6 +6,12 @@ import Robot, { IRobot } from '../models/Robot';
 import Run, { IRun } from '../models/Run';
 import { ListExtractionConfig } from './listExtractor';
 import { dispatchAutomationDestinations } from './destinations';
+import {
+  applyLegacyJobAliases,
+  buildCanonicalViewFromStoredData,
+  finalizeRowsWithCanonicalData,
+  hasCanonicalExtractedShape,
+} from './canonicalJobRecord';
 
 export interface AutomationRuntimeConfig {
   schedule?: {
@@ -365,24 +371,151 @@ export const applyColumnOverrides = (
   return out;
 };
 
+/** City / country lines wrongly stored under companyName (e.g. SIA "Mumbai, Inde"). */
+const LOCATION_LINE_IN_COMPANY_RE =
+  /mumbai|bangalore|bengaluru|delhi|pune|chennai|hyderabad|kolkata|gurgaon|noida|inde\b|india\b/i;
+
+function looksLikeJobTitleText(s: string): boolean {
+  const t = s.trim();
+  if (t.length < 6) return false;
+  return /\b(engineer|analyst|manager|developer|specialist|supervisor|lead|devops|qa|architect|scientist|consultant|director|officer|administrator|designer|associate|experience)\b/i.test(
+    t
+  );
+}
+
+function looksLikeDepartmentTag(s: string): boolean {
+  const t = s.trim();
+  if (!t || t.length > 80) return false;
+  if (/^ai\s*&\s*tech$/i.test(t)) return true;
+  if (/^internal\s+role$/i.test(t)) return true;
+  if (/^consulting$|^design$/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * Heals common mis-mappings when list fields were saved under the wrong column names
+ * (e.g. job title vs category vs location vs company). Safe for other sites: only moves
+ * values when patterns strongly suggest a swap; drops obvious non-job URLs for sia-partners.com.
+ */
+export const normalizeMisalignedJobBoardRow = (data: Record<string, any>): Record<string, any> => {
+  if (!data || typeof data !== 'object') return data;
+  const rawCategory = String(data.jobCategory ?? '').trim();
+  const rawTitle = String(data.jobTitle ?? '').trim();
+  const rawDesc = String(data.jobDescription ?? '').trim();
+
+  const out: Record<string, any> = { ...data };
+  let cn = String(out.companyName ?? '').trim();
+  let loc = String(out.location ?? '').trim();
+  let jt = String(out.jobTitle ?? '').trim();
+  let jc = String(out.jobCategory ?? '').trim();
+
+  // 1) Full job title captured in location while title holds a department tag (or is short).
+  if (loc && looksLikeJobTitleText(loc) && (!looksLikeJobTitleText(jt) || jt.length < loc.length)) {
+    out.jobTitle = loc;
+    out.location = '';
+    jt = out.jobTitle;
+    loc = '';
+  }
+
+  // 2) City / country line stored as company.
+  if (cn && LOCATION_LINE_IN_COMPANY_RE.test(cn) && (!String(out.location ?? '').trim() || String(out.location) === cn)) {
+    out.location = cn;
+    out.companyName = '';
+    cn = '';
+  }
+
+  // 3) Department tag in jobTitle, real title in jobCategory (typical SIA AI & Tech cards).
+  if (
+    jc &&
+    jt &&
+    jc.length > jt.length &&
+    looksLikeJobTitleText(jc) &&
+    (looksLikeDepartmentTag(jt) || !looksLikeJobTitleText(jt))
+  ) {
+    out.jobTitle = jc;
+    out.jobCategory = jt;
+    if (rawDesc && (rawDesc === rawCategory || rawDesc === rawTitle)) {
+      out.jobDescription = out.jobTitle;
+    }
+  }
+
+  // 4) Internal org labels stored as company (People, Global Administration).
+  cn = String(out.companyName ?? '').trim();
+  jc = String(out.jobCategory ?? '').trim();
+  if (cn && /^(PEOPLE|GLOBAL ADMINISTRATION)$/i.test(cn) && !jc) {
+    out.jobCategory = cn;
+    out.companyName = '';
+  }
+
+  // 5) Employer name missing on SIA career postings — cards often omit it.
+  const url = String(out.jobUrl ?? out.job_url ?? out.url ?? out.link ?? '');
+  if (/sia-partners\.com/i.test(url) && /\/career\//i.test(url) && !String(out.companyName ?? '').trim()) {
+    out.companyName = 'SIA Partners';
+  }
+
+  return out;
+};
+
+/**
+ * View Data / run-details: merges overrides + row context; for legacy rows, projects the same canonical `data`
+ * shape as persistence (without minting a new jobId when one already exists).
+ */
+export const applyReadPipelineToExtractedData = (
+  rowData: Record<string, any> | null | undefined,
+  createdAt: Date,
+  columnOverrides?: Record<string, ColumnOverride>,
+  rowContext?: RowContextFields | null
+): Record<string, any> => {
+  const raw = rowData && typeof rowData === 'object' ? rowData : {};
+  const pipelineInput = hasCanonicalExtractedShape(raw) ? { ...raw } : applyLegacyJobAliases({ ...raw });
+  const merged = mergeRowContextIntoRowData(
+    applyColumnOverrides(normalizeMisalignedJobBoardRow(pipelineInput), columnOverrides),
+    rowContext
+  );
+  if (hasCanonicalExtractedShape(raw)) {
+    return merged;
+  }
+  return buildCanonicalViewFromStoredData(merged as Record<string, unknown>, {
+    createdAt,
+    jobId: typeof raw.jobId === 'string' ? raw.jobId : undefined,
+  }) as Record<string, any>;
+};
+
+/** Removes rows that are not job postings (e.g. service pages scraped with the same item selector). */
+export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean => {
+  const url = String(data.jobUrl ?? data.job_url ?? data.url ?? data.link ?? '');
+  if (!url) return true;
+  if (!/sia-partners\.com/i.test(url)) return true;
+  if (/\/our-capabilities\//i.test(url)) return false;
+  return true;
+};
+
 export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot | any): Promise<ExtractedRow[]> => {
   const config = getAutomationConfig(robot);
   const extracted = extractRowsFromOutput(run.serializableOutput, config);
 
   // Transform once; both the persisted documents and the rows handed to
   // destinations (webhook / Sheets / Airtable / DB) get the override shape.
-  const rows = extracted.map((row) => ({
-    source: row.source,
-    data: mergeRowContextIntoRowData(
-      applyColumnOverrides(row.data, config.columnOverrides),
-      config.rowContext
-    ),
-  }));
+  const rows = extracted
+    .filter((row) => shouldKeepExtractedJobRow(row.data))
+    .map((row) => ({
+      source: row.source,
+      data: mergeRowContextIntoRowData(
+        applyColumnOverrides(
+          normalizeMisalignedJobBoardRow(applyLegacyJobAliases({ ...row.data })),
+          config.columnOverrides
+        ),
+        config.rowContext
+      ),
+    }));
+
+  const createdAt = new Date();
+  const canonicalRows = await finalizeRowsWithCanonicalData(rows, createdAt);
 
   await ExtractedData.deleteMany({ runId: run.runId });
 
-  if (rows.length > 0) {
-    const payload = rows.map((row) => ({
+  if (canonicalRows.length > 0) {
+    const payload = canonicalRows.map((row) => ({
       runId: run.runId,
       robotMetaId: run.robotMetaId,
       source: row.source,
@@ -395,7 +528,7 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
     }
   }
 
-  return rows;
+  return canonicalRows;
 };
 
 export const dispatchAutomationWebhook = async (

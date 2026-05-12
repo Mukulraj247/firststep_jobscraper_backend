@@ -98,6 +98,13 @@ export interface ListExtractionState {
   savedAutomation?: SavedAutomationInfo;
   /** Optional recurring schedule applied on next Send to Scout-X (and editable in settings). */
   cloudScheduleDraft: CloudScheduleDraft;
+  /** Per-automation metadata fields (not extracted from DOM). */
+  rowContext: RowContextDraft;
+}
+
+export interface RowContextDraft {
+  sectorIndustry: string;
+  f500: boolean;
 }
 
 export interface SavedAutomationInfo {
@@ -229,6 +236,7 @@ export function buildEmptyState(): ExtensionState {
       currentPage: 0,
       maxPages: 10,
       cloudScheduleDraft: defaultCloudScheduleDraft(),
+      rowContext: { sectorIndustry: '', f500: false },
     },
     table: {
       phase: 'idle',

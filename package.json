@@ -102,7 +102,8 @@
     "browser:service:dev": "npm run dev --prefix browser",
     "camoufox:server": "python server/src/services/camoufox-server.py",
     "camoufox:server:win": "py -3 server/src/services/camoufox-server.py",
-    "playwright:install": "npx playwright@1.58.0 install chromium"
+    "playwright:install": "npx playwright@1.58.0 install chromium",
+    "migrate:extracted": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/migrateExtractedCanonical.ts"
   },
   "overrides": {
     "playwright-core": "1.58.0"
