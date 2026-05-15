@@ -16,7 +16,10 @@
       "name": "Every 30 minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-200, 0]
+      "position": [
+        -200,
+        0
+      ]
     },
     {
       "parameters": {
@@ -33,7 +36,10 @@
       "name": "Find pending extracted",
       "type": "n8n-nodes-base.mongoDb",
       "typeVersion": 1.2,
-      "position": [40, 0],
+      "position": [
+        40,
+        0
+      ],
       "credentials": {
         "mongoDb": {
           "name": "MongoDB firststep_db"
@@ -44,13 +50,16 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Set CREATED_BY after import (Auth0 subject).\nconst CREATED_BY = 'auth0|REPLACE_WITH_YOUR_AUTH0_SUBJECT';\nconst now = new Date().toISOString();\n\nreturn items.map(({ json: doc }) => {\n  const d = doc.data || {};\n  const dateVal = d.date ? new Date(d.date) : new Date(doc.createdAt || now);\n  return {\n    json: {\n      _id: doc._id,\n      'data.status': 'active',\n      jobId: d.jobId,\n      jobUrl: d.jobUrl ?? '',\n      jobSourceURL: d.jobUrl ?? '',\n      jobTitle: d.jobTitle ?? '',\n      companyName: d.companyName ?? '',\n      jobDescription: d.jobDescription ?? '',\n      jobCategory: d.jobCategory ?? '',\n      date: dateVal.toISOString(),\n      createdBy: CREATED_BY,\n      job_creation_type: 'automation',\n      status: 'active',\n      isFlagged: Boolean(d.isFlagged),\n      jobExperience: typeof d.jobExperience === 'number' ? d.jobExperience : 0,\n      __v: 0,\n      createdAt: now,\n      updatedAt: now,\n    },\n  };\n});\n"
+        "jsCode": "// Set CREATED_BY after import (Auth0 subject).\n// Normalizes _id to hex for MongoDB update (see workflow sticky note).\nconst CREATED_BY = 'auth0|REPLACE_WITH_YOUR_AUTH0_SUBJECT';\nconst now = new Date().toISOString();\n\nfunction toHexId(v) {\n  if (v == null) return null;\n  if (typeof v === 'string') return v;\n  if (typeof v.toHexString === 'function') return v.toHexString();\n  if (typeof v.toString === 'function') {\n    const s = v.toString();\n    if (/^[a-f0-9]{24}$/i.test(s)) return s;\n  }\n  if (v.$oid && typeof v.$oid === 'string') return v.$oid;\n  const buf = v.buffer ?? v.id ?? v;\n  if (buf && (Array.isArray(buf) || (typeof buf.length === 'number' && typeof buf[0] === 'number') || buf.data)) {\n    const arr = buf.data || buf;\n    if (arr && typeof arr.length === 'number') {\n      const bytes = [];\n      for (let i = 0; i < arr.length; i++) bytes.push(Number(arr[i]).toString(16).padStart(2, '0'));\n      const hex = bytes.join('');\n      if (/^[a-f0-9]{24}$/i.test(hex)) return hex;\n    }\n  }\n  return String(v);\n}\n\nfunction parseExperience(v) {\n  if (typeof v === 'number' && Number.isFinite(v)) return Math.max(0, Math.floor(v));\n  if (typeof v === 'string' && v.trim()) {\n    const m = v.match(/(\\d+)\\s*\\+?\\s*(?:to|-|–)\\s*(\\d+)/i);\n    if (m) return Math.max(0, parseInt(m[1], 10));\n    const n = parseInt(v.replace(/\\D/g, ''), 10);\n    if (!Number.isNaN(n)) return Math.max(0, n);\n  }\n  return 0;\n}\n\nfunction parseSalaryToNumber(raw) {\n  if (raw == null || raw === '') return 0;\n  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, Math.round(raw));\n  const s = String(raw);\n  const nums = [];\n  const re = /\\$?\\s*([\\d,]+(?:\\.\\d+)?)\\s*k?/gi;\n  let mm;\n  while ((mm = re.exec(s)) !== null) {\n    let v = parseFloat(mm[1].replace(/,/g, ''));\n    if (/k\\b/i.test(mm[0])) v *= 1000;\n    if (!Number.isNaN(v)) nums.push(v);\n  }\n  if (nums.length === 0) return 0;\n  if (nums.length >= 2) return Math.round((nums[0] + nums[1]) / 2);\n  return Math.round(nums[0]);\n}\n\nfunction f500Str(v) {\n  if (v === true) return 'Yes';\n  if (v === false) return 'No';\n  const t = String(v ?? '').trim().toLowerCase();\n  if (t === 'yes') return 'Yes';\n  if (t === 'no') return 'No';\n  return '';\n}\n\nreturn items.map(({ json: doc }) => {\n  const d = doc.data || {};\n  const dateVal = d.date ? new Date(d.date) : new Date(doc.createdAt || now);\n  const idHex = toHexId(doc._id);\n  if (!idHex || !/^[a-f0-9]{24}$/i.test(idHex)) {\n    console.warn('Prepare: doc._id is not a valid hex ObjectId; update will likely no-op.', doc._id);\n  }\n  return {\n    json: {\n      _id: idHex,\n      'data.status': 'active',\n      jobId: d.jobId,\n      jobUrl: d.jobUrl ?? '',\n      jobSourceURL: d.jobUrl ?? '',\n      jobTitle: d.jobTitle ?? '',\n      companyName: d.companyName ?? '',\n      jobDescription: d.jobDescription ?? '',\n      jobCategory: d.jobCategory ?? '',\n      location: String(d.location ?? '').trim(),\n      salary: parseSalaryToNumber(d.salary),\n      sectorIndustry: String(d.sectorIndustry ?? '').trim(),\n      f500: f500Str(d.f500),\n      date: dateVal.toISOString(),\n      createdBy: CREATED_BY,\n      job_creation_type: 'automation',\n      status: 'active',\n      isFlagged: Boolean(d.isFlagged),\n      jobExperience: parseExperience(d.jobExperience),\n      __v: 0,\n      createdAt: now,\n      updatedAt: now,\n    },\n  };\n});\n"
       },
       "id": "d4e5f6a7-prepare",
       "name": "Prepare update + job row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [280, 0]
+      "position": [
+        280,
+        0
+      ]
     },
     {
       "parameters": {
@@ -69,7 +78,10 @@
       "name": "Mark extracted active",
       "type": "n8n-nodes-base.mongoDb",
       "typeVersion": 1.2,
-      "position": [520, 0],
+      "position": [
+        520,
+        0
+      ],
       "credentials": {
         "mongoDb": {
           "name": "MongoDB firststep_db"
@@ -80,13 +92,31 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "const prepared = $('Prepare update + job row').all();\nif (prepared.length !== items.length) {\n  throw new Error(`Shape: Prepare has ${prepared.length} items but Update passed ${items.length}`);\n}\nfunction pickJob(p) {\n  return {\n    jobId: p.jobId,\n    jobUrl: p.jobUrl,\n    jobSourceURL: p.jobSourceURL,\n    jobTitle: p.jobTitle,\n    companyName: p.companyName,\n    jobDescription: p.jobDescription,\n    jobCategory: p.jobCategory,\n    date: p.date,\n    createdBy: p.createdBy,\n    job_creation_type: p.job_creation_type,\n    status: p.status,\n    isFlagged: p.isFlagged,\n    jobExperience: p.jobExperience,\n    __v: p.__v,\n    createdAt: p.createdAt,\n    updatedAt: p.updatedAt,\n  };\n}\nreturn prepared.map(({ json: p }) => ({ json: pickJob(p) }));\n"
+        "jsCode": "const prepared = $('Prepare update + job row').all();\nif (prepared.length !== items.length) {\n  throw new Error(`Shape: Prepare has ${prepared.length} items but Update passed ${items.length}`);\n}\nfunction pickJob(p) {\n  return {\n    jobId: p.jobId,\n    jobUrl: p.jobUrl,\n    jobSourceURL: p.jobSourceURL,\n    jobTitle: p.jobTitle,\n    companyName: p.companyName,\n    jobDescription: p.jobDescription,\n    jobCategory: p.jobCategory,\n    location: p.location,\n    salary: p.salary,\n    sectorIndustry: p.sectorIndustry,\n    f500: p.f500,\n    date: p.date,\n    createdBy: p.createdBy,\n    job_creation_type: p.job_creation_type,\n    status: p.status,\n    isFlagged: p.isFlagged,\n    jobExperience: p.jobExperience,\n    __v: p.__v,\n    createdAt: p.createdAt,\n    updatedAt: p.updatedAt,\n  };\n}\nreturn prepared.map(({ json: p }) => ({ json: pickJob(p) }));\n"
       },
       "id": "f6a7b8c9-shape-job",
       "name": "Shape job for enrichment",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [760, 0]
+      "position": [
+        760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Defensive second layer: drops rows the server's shouldKeepExtractedJobRow\n// already rejects, plus any junk that slipped through (legacy docs migrated\n// before the server filter was deployed). Mirrors server/src/services/automation.ts.\n//\n// Also resets workflow static data here so a crash mid-loop in a previous run\n// doesn't cause duplicate inserts on the next scheduled run.\nconst staticData = $getWorkflowStaticData('global');\nstaticData.processedJobs = [];\n\nconst NON_JOB_URL_HOST = /^(?:legal|privacy|policy|policies|safety|cookies?|consent|imprint|impressum|sitemap|gdpr|ccpa)\\./i;\nconst NON_JOB_URL_PATH = /\\/(?:privacy(?:[-_]?policy)?|cookies?|cookie[-_]?policy|cookie[-_]?notice|cookie[-_]?settings|cookie[-_]?preferences|legal|terms(?:[-_]?of[-_]?(?:service|use))?|gdpr|ccpa|consent|safety|imprint|impressum|sitemap|accessibility|do[-_]?not[-_]?sell|opt[-_]?out)(?:\\/|$|[?#])/i;\nconst PAGINATION_TITLE = /^(?:«+\\s*)?(?:first|previous|prev|next|last)(?:\\s+page)?(?:\\s*»+)?$|^last\\s+page\\b|^page\\s+\\d+\\s*(?:of\\s*\\d+)?$|^\\d+\\s*\\/\\s*\\d+$|^«+$|^»+$/i;\nconst COOKIE_BANNER_TITLE = /^(?:learn more about (?:this|the) (?:provider|cookie|partner)|about (?:this|the) (?:provider|cookie|partner)|cookie\\s*(?:policy|preferences|settings|notice|details?)|manage\\s+(?:cookies?|preferences?|consent)|opt[-_ ]?out|accept(?:\\s+(?:all|cookies?))?|reject\\s+(?:all|cookies?)?|do not sell(?:\\s+my(?:\\s+personal)?\\s+(?:info(?:rmation)?|data))?|view\\s+(?:cookies?|preferences?)|show\\s+(?:cookies?|preferences?))$/i;\n\n// Cookie / tracker identifier patterns (snake_case, all-lowercase, all-uppercase 5+).\nconst COOKIE_IDENT_BODY = /^(?:[^\\s]*_[^\\s]*|[a-z][a-z0-9.]+|[A-Z][A-Z0-9_]{4,})$/;\nconst COOKIE_IDENT_SUFFIX = /\\s*\\[x?\\d+\\]\\s*$/i;\nfunction isCookieIdent(s) {\n  const stripped = String(s ?? '').replace(COOKIE_IDENT_SUFFIX, '').trim();\n  if (!stripped || /\\s/.test(stripped)) return false;\n  return COOKIE_IDENT_BODY.test(stripped);\n}\n\n// Cookie purpose description sentences (\"Used to ...\", \"Tracks the user ...\", etc.).\nconst COOKIE_USED_TO = /^used\\s+(?:to|by|for)\\s+\\w/i;\nconst COOKIE_VERB_DETERMINER = /^(?:registers?|maintains?|stores?|tracks?|saves?|loads?|allows?|enables?|provides?|determines?|contains?|holds?|identifies|detects?|handles?|sets?|updates?|records?|counts?|measures?|distinguishes?|collects?|preserves?)\\s+(?:to|by|the|which|user|whether|if|a|an|in|for|on|with|via|when|that|user's|user\\u2019s|browser|session|cookie|data|info|visit(?:or|ors)?)/i;\nconst COOKIE_VERB_LONG = /^(?:used|registers?|maintains?|stores?|tracks?|saves?|loads?|allows?|enables?|provides?|determines?|contains?|holds?|identifies|detects?|handles?|sets?|updates?|records?|counts?|measures?|distinguishes?|collects?|preserves?)(?:\\s+\\S+){5,}/i;\nfunction isCookieSentence(s) {\n  const t = String(s ?? '');\n  return COOKIE_USED_TO.test(t) || COOKIE_VERB_DETERMINER.test(t) || COOKIE_VERB_LONG.test(t);\n}\n\nconst COOKIE_EXPIRY_COMPANY = /^(?:pending|session|persistent|1st party|3rd party|http(?:\\s+only)?)$/i;\n\nfunction keep(d) {\n  const url = String(d.jobUrl ?? d.url ?? d.link ?? '').trim();\n  const title = String(d.jobTitle ?? d.title ?? '').trim();\n  const description = String(d.jobDescription ?? d.description ?? '').trim();\n  const company = String(d.companyName ?? d.company ?? '').trim();\n\n  if (!url && !title) return false;\n\n  if (title) {\n    if (PAGINATION_TITLE.test(title)) return false;\n    if (COOKIE_BANNER_TITLE.test(title)) return false;\n    if (isCookieIdent(title)) return false;\n    if (isCookieSentence(title)) return false;\n  }\n\n  if (description && isCookieSentence(description)) {\n    if (!url || COOKIE_EXPIRY_COMPANY.test(company)) return false;\n  }\n\n  if (company && COOKIE_EXPIRY_COMPANY.test(company) && !url) return false;\n\n  if (url) {\n    let host = '';\n    let pathAndQuery = '';\n    try {\n      const u = new URL(url, 'https://example.invalid');\n      host = u.hostname;\n      pathAndQuery = u.pathname + (u.search || '');\n    } catch (e) {\n      pathAndQuery = url;\n    }\n    if (host && NON_JOB_URL_HOST.test(host)) return false;\n    if (pathAndQuery && NON_JOB_URL_PATH.test(pathAndQuery)) return false;\n    if (/sia-partners\\.com/i.test(url) && /\\/our-capabilities\\//i.test(url)) return false;\n  }\n\n  return true;\n}\n\nconst items = $input.all();\nconst kept = items.filter(item => keep(item.json || {}));\nconst dropped = items.length - kept.length;\nif (dropped > 0) {\n  console.log(`Filter junk rows: dropped ${dropped} of ${items.length} (cookie banners / cookie idents / tracker descriptions / pagination / privacy URLs).`);\n}\nreturn kept;"
+      },
+      "id": "b0c1d2e3-filter-junk",
+      "name": "Filter junk rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "alwaysOutputData": true,
+      "notes": "Belt-and-suspenders defensive filter — server already filters at insert time, but this catches legacy migrated rows and any edge cases. Drops cookie banners (\"Learn more about this provider\"), pagination (\"Last page\", \"Next »\"), and non-job URLs (privacy/cookie/legal/terms/safety paths and subdomains)."
     },
     {
       "parameters": {
@@ -99,7 +129,10 @@
       "name": "Loop Over Items",
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
-      "position": [1000, 0],
+      "position": [
+        1120,
+        0
+      ],
       "alwaysOutputData": true,
       "retryOnFail": true,
       "notes": "Batch size 4. Output 0 = done (after loop), Output 1 = loop body."
@@ -112,7 +145,10 @@
       "name": "Delay 500ms",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1240, 0],
+      "position": [
+        1240,
+        0
+      ],
       "notes": "500ms pause between scrape.do calls to avoid rate limiting."
     },
     {
@@ -149,42 +185,75 @@
       "name": "scrape.do",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1480, 0]
+      "position": [
+        1480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "alwaysOutputData": true,
+      "notes": "Retries 3x with 5s backoff. On final failure, continues with empty data so the job still gets inserted with canonical fields."
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all();\n\nreturn items.map(item => {\n  try {\n    const rawHtml = item.json.data.replace(/<[^>]*>/g, '');\n    const match = rawHtml.match(/\"apply_url\":\"([^\"]+)\"/);\n\n    if (match && match[1]) {\n      let applyUrl = match[1];\n      applyUrl = applyUrl.replace(/\\\\u([0-9a-fA-F]{4})/g, (match, hex) => {\n        return String.fromCharCode(parseInt(hex, 16));\n      });\n      applyUrl = applyUrl\n        .replace(/\\\\n/g, '\\n')\n        .replace(/\\\\r/g, '\\r')\n        .replace(/\\\\t/g, '\\t')\n        .replace(/\\\\\\\\/g, '\\\\')\n        .replace(/\\\\\"/g, '\"')\n        .replace(/\\\\'/g, \"'\");\n\n      return { json: { apply_url: applyUrl } };\n    } else {\n      return { json: { apply_url: null } };\n    }\n  } catch (error) {\n    return { json: { ...item.json, apply_url: null, error: error.message } };\n  }\n});"
+        "jsCode": "const items = $input.all();\n\nfunction salaryFromJobPosting(bs) {\n  if (!bs || typeof bs !== 'object') return null;\n  const val = bs.value;\n  if (typeof val === 'number' && Number.isFinite(val)) return Math.round(val);\n  if (val && typeof val === 'object') {\n    const min = Number(val.minValue);\n    const max = Number(val.maxValue);\n    const unit = String(val.unitText || '').toUpperCase();\n    let mult = 1;\n    if (unit.includes('HOUR')) mult = 2080;\n    if (Number.isFinite(min) && Number.isFinite(max)) return Math.round(((min + max) / 2) * mult);\n    if (Number.isFinite(min)) return Math.round(min * mult);\n    if (Number.isFinite(max)) return Math.round(max * mult);\n  }\n  if (typeof val === 'string' && /^[\\d.]/.test(val.trim())) {\n    const n = parseFloat(val.replace(/[^\\d.]/g, ''));\n    if (Number.isFinite(n)) return Math.round(n);\n  }\n  return null;\n}\n\nfunction locationFromJobPosting(jp) {\n  const jl = jp.jobLocation;\n  if (!jl) return null;\n  if (typeof jl === 'string') return jl.trim() || null;\n  const addr = jl.address || jl;\n  if (typeof addr === 'string') return addr.trim() || null;\n  if (addr && typeof addr === 'object') {\n    const parts = [];\n    if (addr.addressLocality) parts.push(String(addr.addressLocality).trim());\n    if (addr.addressRegion) parts.push(String(addr.addressRegion).trim());\n    if (parts.length) return parts.join(', ');\n    if (addr.streetAddress) return String(addr.streetAddress).trim();\n  }\n  return null;\n}\n\nfunction experienceFromJobPosting(jp) {\n  const er = jp.experienceRequirements;\n  if (typeof er === 'string') {\n    const mm = er.match(/(\\d+)\\s*\\+?\\s*(?:to|-|–)\\s*(\\d+)\\s*years?/i);\n    if (mm) return Math.max(0, parseInt(mm[1], 10));\n    const m1 = er.match(/(\\d+)\\s*\\+?\\s*years?/i);\n    if (m1) return Math.max(0, parseInt(m1[1], 10));\n    const m2 = er.match(/(\\d+)\\s*\\+\\s*years?/i);\n    if (m2) return Math.max(0, parseInt(m2[1], 10));\n  }\n  if (er && typeof er === 'object' && er.monthsOfExperience != null) {\n    const mo = Number(er.monthsOfExperience);\n    if (Number.isFinite(mo) && mo > 0) return Math.max(0, Math.floor(mo / 12));\n  }\n  return null;\n}\n\nreturn items.map(item => {\n  const result = {\n    apply_url: null,\n    scraped_jobTitle: null,\n    scraped_companyName: null,\n    scraped_jobDescription: null,\n    scraped_location: null,\n    scraped_salary: null,\n    scraped_experienceYears: null,\n  };\n  try {\n    const html = String(item.json?.data ?? '');\n    if (!html) return { json: result };\n\n    const jsonLdBlocks = [...html.matchAll(/<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi)];\n    let jobPosting = null;\n    for (const block of jsonLdBlocks) {\n      try {\n        const parsed = JSON.parse(block[1]);\n        const candidates = Array.isArray(parsed) ? parsed : [parsed];\n        for (const c of candidates) {\n          if (c['@type'] === 'JobPosting') { jobPosting = c; break; }\n          if (c['@graph']) {\n            const found = c['@graph'].find(g => g['@type'] === 'JobPosting');\n            if (found) { jobPosting = found; break; }\n          }\n        }\n        if (jobPosting) break;\n      } catch {}\n    }\n\n    if (jobPosting) {\n      result.scraped_jobTitle = jobPosting.title || null;\n      const org = jobPosting.hiringOrganization;\n      if (org) result.scraped_companyName = typeof org === 'string' ? org : (org.name || null);\n      if (jobPosting.description) {\n        result.scraped_jobDescription = jobPosting.description.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/\\s+/g, ' ').trim().slice(0, 8000);\n      }\n      if (jobPosting.url) result.apply_url = jobPosting.url;\n      const loc = locationFromJobPosting(jobPosting);\n      if (loc) result.scraped_location = loc;\n      const sal = salaryFromJobPosting(jobPosting.baseSalary);\n      if (sal != null) result.scraped_salary = sal;\n      const ex = experienceFromJobPosting(jobPosting);\n      if (ex != null) result.scraped_experienceYears = ex;\n    }\n\n    if (!result.apply_url) {\n      const rawText = html.replace(/<[^>]*>/g, '');\n      const applyMatch = rawText.match(/\"apply_url\"\\s*:\\s*\"([^\"]+)\"/);\n      if (applyMatch && applyMatch[1]) {\n        let url = applyMatch[1];\n        url = url.replace(/\\\\u([0-9a-fA-F]{4})/g, (m, h) => String.fromCharCode(parseInt(h, 16)));\n        url = url.replace(/\\\\n/g, '\\n').replace(/\\\\r/g, '\\r').replace(/\\\\t/g, '\\t').replace(/\\\\\\\\/g, '\\\\').replace(/\\\\\"/g, '\"');\n        result.apply_url = url;\n      }\n    }\n\n    const metaVal = (prop) => {\n      const m = html.match(new RegExp('<meta[^>]+(?:property|name)=[\"\\']' + prop + '[\"\\'][^>]+content=[\"\\']([^\"\\']+)[\"\\']', 'i'))\n        || html.match(new RegExp('<meta[^>]+content=[\"\\']([^\"\\']+)[\"\\'][^>]+(?:property|name)=[\"\\']' + prop + '[\"\\']', 'i'));\n      return m ? m[1].trim() : null;\n    };\n    if (!result.scraped_jobTitle) result.scraped_jobTitle = metaVal('og:title');\n    if (!result.scraped_companyName) result.scraped_companyName = metaVal('og:site_name');\n    if (!result.scraped_jobDescription) {\n      const ogDesc = metaVal('og:description');\n      if (ogDesc && ogDesc.length > 30) result.scraped_jobDescription = ogDesc;\n    }\n\n    if (!result.scraped_jobTitle) {\n      const titleMatch = html.match(/<title[^>]*>([^<]+)<\\/title>/i);\n      if (titleMatch) {\n        let t = titleMatch[1].trim();\n        t = t.replace(/\\s*[\\|\\u2013\\u2014-]\\s*(?:Amazon\\.?jobs?|Google\\s*Careers?|Sia\\s*Partners|LinkedIn|Indeed|Glassdoor|Careers?|Jobs?)\\s*$/i, '').trim();\n        if (t) result.scraped_jobTitle = t;\n      }\n    }\n\n    if (!result.scraped_jobTitle) {\n      const h1Match = html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i);\n      if (h1Match) {\n        const h1Text = h1Match[1].replace(/<[^>]*>/g, '').trim();\n        if (h1Text && h1Text.length < 200) result.scraped_jobTitle = h1Text;\n      }\n    }\n\n    if (!result.scraped_companyName) {\n      const urlMatch = html.match(/<meta[^>]+(?:property|name)=['\"]og:url['\"][^>]+content=['\"]([^'\"]+)['\"]/i)\n        || html.match(/<link[^>]+rel=['\"]canonical['\"][^>]+href=['\"]([^'\"]+)['\"]/i);\n      if (urlMatch) {\n        try {\n          const hostname = new URL(urlMatch[1]).hostname;\n          const hostMap = {\n            'www.amazon.jobs': 'Amazon', 'amazon.jobs': 'Amazon',\n            'www.google.com': 'Google', 'careers.google.com': 'Google',\n            'www.sia-partners.com': 'Sia Partners', 'sia-partners.com': 'Sia Partners',\n            'www.linkedin.com': 'LinkedIn', 'www.microsoft.com': 'Microsoft',\n            'careers.microsoft.com': 'Microsoft', 'www.meta.com': 'Meta',\n            'www.apple.com': 'Apple', 'jobs.apple.com': 'Apple',\n          };\n          result.scraped_companyName = hostMap[hostname]\n            || hostname.replace(/^www\\./, '').replace(/\\.(com|org|net|io|jobs|careers)$/, '').replace(/[-_]/g, ' ').replace(/\\b\\w/g, c => c.toUpperCase());\n        } catch {}\n      }\n    }\n  } catch (error) {}\n  return { json: result };\n});\n"
       },
       "id": "f4a5b6c7-extract-url",
-      "name": "Extract apply_url",
+      "name": "Parse scraped job details",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1720, -120]
+      "position": [
+        1720,
+        -120
+      ],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "alwaysOutputData": true,
+      "notes": "Extracts jobTitle, companyName, jobDescription, and apply_url from the scrape.do HTML response. Priority: JSON-LD JobPosting > OG meta tags > <title>/<h1> > hostname. On failure emits nulls so Maxun data is used as fallback."
     },
     {
       "parameters": {
-        "html": "={{ $json.data }}",
+        "html": "={{ $json.data ?? '' }}",
         "options": {}
       },
       "id": "a5b6c7d8-markdown",
       "name": "Convert to Markdown",
       "type": "n8n-nodes-base.markdown",
       "typeVersion": 1,
-      "position": [1720, 120]
+      "position": [
+        1720,
+        120
+      ],
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "alwaysOutputData": true
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=Job description:\n\n{{ $json.data.split('\\n\\nJob Description\\n\\n')[1] }}",
+        "text": "=The **markdown below is the full scraped job page** (source of truth). Parser + Maxun guesses are often wrong — especially **companyName** (e.g. \"Careers\", \"Jobs\"); ignore them when they conflict with the page.\n\n**Hints (may be wrong):**\n- Parser jobTitle: {{ $('Parse scraped job details').item.json.scraped_jobTitle }}\n- Parser companyName: {{ $('Parse scraped job details').item.json.scraped_companyName }}\n- Maxun jobTitle: {{ $('Loop Over Items').item.json.jobTitle }}\n- Maxun companyName: {{ $('Loop Over Items').item.json.companyName }}\n- Listing URL: {{ $('Loop Over Items').item.json.jobUrl }}\n\n---\n\n{{ ($json.data ?? '').slice(0, 120000) }}",
         "options": {
-          "systemMessage": "You are a helpful assistant\n\nyour task is to extract the Requirements and Responsibilities only from the job description\n\ndon't modify the text just extract the section about the requirements and responsibilities only\n\nif you didn't find it say \"didn't find\""
+          "systemMessage": "You extract structured job fields for a database from the job posting markdown.\n\nReturn ONLY one JSON object (no markdown code fences, no text before or after). All keys are required. Example shape:\n{\"jobTitle\":\"Senior Software Engineer\",\"companyName\":\"Google\",\"requirements\":\"...\",\"location\":\"Seattle, WA\",\"salaryAnnualUSD\":150000,\"minYearsExperience\":5}\n\nField rules:\n- jobTitle: The official role title as shown on the posting (concise). Never use generic page chrome alone.\n- companyName: The **real hiring employer** brand or legal name (e.g. Google, Amazon, JPMorgan Chase). Never return generic portal labels alone such as: Careers, Jobs, Hiring, Job Board, Greenhouse, Lever, Workday, LinkedIn, Indeed, Glassdoor, Taleo, iCIMS, SmartRecruiters, Jobvite — unless that token is literally the employer name in context. Prefer the organization named in the posting body, header, or byline; use the listing URL host only as a weak hint.\n- requirements: Verbatim Requirements / Responsibilities / Qualifications section only. If none, use empty string.\n- location: City and state/region when possible (e.g. \"Austin, TX\" or \"Remote, US\"). Empty string if unknown.\n- salaryAnnualUSD: Integer annual base salary in USD. If a range, use midpoint rounded. If hourly only, multiply by ~2080 for full-time year. Use 0 if unknown.\n- minYearsExperience: Integer minimum years of experience explicitly required (e.g. \"5+ years\" -> 5). Use 0 if unknown."
         }
       },
       "id": "b6c7d8e9-extract-reqs",
       "name": "Extract Requirements",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3,
-      "position": [1960, 120]
+      "position": [
+        1960,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "continueOnFail": true,
+      "alwaysOutputData": true,
+      "notes": "Retries once on transient LLM errors (rate limits). On final failure, emits empty so jobDescription falls back to canonical data."
     },
     {
       "parameters": {
@@ -194,7 +263,10 @@
       "name": "Google Gemini Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [1960, 320],
+      "position": [
+        1960,
+        320
+      ],
       "credentials": {
         "googlePalmApi": {
           "id": "c5NRjKPbTLVeDQGk",
@@ -212,118 +284,26 @@
       "name": "Merge apply_url + requirements",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
-      "position": [2200, 0],
+      "position": [
+        2200,
+        0
+      ],
       "alwaysOutputData": true
     },
     {
       "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "f-jobTitle",
-              "name": "jobTitle",
-              "value": "={{ $('Loop Over Items').item.json.jobTitle }}",
-              "type": "string"
-            },
-            {
-              "id": "f-companyName",
-              "name": "companyName",
-              "value": "={{ $('Loop Over Items').item.json.companyName }}",
-              "type": "string"
-            },
-            {
-              "id": "f-jobUrl",
-              "name": "jobUrl",
-              "value": "={{ $json.apply_url ?? $('Loop Over Items').item.json.jobUrl }}",
-              "type": "string"
-            },
-            {
-              "id": "f-jobSourceURL",
-              "name": "jobSourceURL",
-              "value": "={{ $('Loop Over Items').item.json.jobSourceURL }}",
-              "type": "string"
-            },
-            {
-              "id": "f-jobDescription",
-              "name": "jobDescription",
-              "value": "={{ $json.output ?? $('Loop Over Items').item.json.jobDescription }}",
-              "type": "string"
-            },
-            {
-              "id": "f-jobCategory",
-              "name": "jobCategory",
-              "value": "={{ $('Loop Over Items').item.json.jobCategory }}",
-              "type": "string"
-            },
-            {
-              "id": "f-date",
-              "name": "date",
-              "value": "={{ $('Loop Over Items').item.json.date }}",
-              "type": "string"
-            },
-            {
-              "id": "f-jobExperience",
-              "name": "jobExperience",
-              "value": "={{ $('Loop Over Items').item.json.jobExperience }}",
-              "type": "number"
-            },
-            {
-              "id": "f-jobId",
-              "name": "jobId",
-              "value": "={{ $('Loop Over Items').item.json.jobId }}",
-              "type": "string"
-            },
-            {
-              "id": "f-createdBy",
-              "name": "createdBy",
-              "value": "={{ $('Loop Over Items').item.json.createdBy }}",
-              "type": "string"
-            },
-            {
-              "id": "f-jobCreationType",
-              "name": "job_creation_type",
-              "value": "={{ $('Loop Over Items').item.json.job_creation_type }}",
-              "type": "string"
-            },
-            {
-              "id": "f-status",
-              "name": "status",
-              "value": "={{ $('Loop Over Items').item.json.status }}",
-              "type": "string"
-            },
-            {
-              "id": "f-isFlagged",
-              "name": "isFlagged",
-              "value": "={{ $('Loop Over Items').item.json.isFlagged }}",
-              "type": "boolean"
-            },
-            {
-              "id": "f-v",
-              "name": "__v",
-              "value": 0,
-              "type": "number"
-            },
-            {
-              "id": "f-createdAt",
-              "name": "createdAt",
-              "value": "={{ $('Loop Over Items').item.json.createdAt }}",
-              "type": "string"
-            },
-            {
-              "id": "f-updatedAt",
-              "name": "updatedAt",
-              "value": "={{ $('Loop Over Items').item.json.updatedAt }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "function parseLlmJson(output) {\n  const s = String(output ?? '').trim();\n  if (!s) return null;\n  try { return JSON.parse(s); } catch (_) {}\n  const fence = s.match(/```(?:json)?\\s*(\\{[\\s\\S]*?\\})\\s*```/i);\n  if (fence) try { return JSON.parse(fence[1]); } catch (_) {}\n  const brace = s.match(/\\{[\\s\\S]*\\}/);\n  if (brace) try { return JSON.parse(brace[0]); } catch (_) {}\n  return null;\n}\n\nfunction numOrZero(v) {\n  if (v == null || v === '') return 0;\n  const x = Number(v);\n  return Number.isFinite(x) && x >= 0 ? Math.round(x) : 0;\n}\n\nconst m = $input.item.json;\nconst loop = $('Loop Over Items').item.json;\nconst llm = parseLlmJson(m.output);\n\nfunction badPortalCompany(s) {\n  const t = String(s ?? '').trim();\n  if (!t) return true;\n  return /^(careers?|jobs?|hiring|job\\s*board|greenhouse|lever|workday|icims|taleo|smartrecruiters|jobvite|bamboohr|successfactors|workable|ashby)$/i.test(t);\n}\nfunction pickJobTitle(llm, scraped, maxun) {\n  const L = llm && typeof llm.jobTitle === 'string' ? llm.jobTitle.trim() : '';\n  const S = scraped ? String(scraped).trim() : '';\n  const M = maxun ? String(maxun).trim() : '';\n  if (L.length >= 4) return L;\n  if (S.length >= 4) return S;\n  if (M.length >= 4) return M;\n  return L || S || M || '';\n}\nfunction pickCompanyName(llm, scraped, maxun) {\n  const L = llm && typeof llm.companyName === 'string' ? llm.companyName.trim() : '';\n  const S = scraped ? String(scraped).trim() : '';\n  const M = maxun ? String(maxun).trim() : '';\n  if (L && !badPortalCompany(L)) return L;\n  if (S && !badPortalCompany(S)) return S;\n  if (M && !badPortalCompany(M)) return M;\n  return L || S || M || '';\n}\n\nconst scrapedTitle = m.scraped_jobTitle && String(m.scraped_jobTitle).trim();\nconst scrapedCo = m.scraped_companyName && String(m.scraped_companyName).trim();\nconst applyUrl = m.apply_url && String(m.apply_url).trim();\n\nconst rawOut = String(m.output ?? '').trim();\nconst llmReq = llm && typeof llm.requirements === 'string' ? llm.requirements.trim() : '';\nconst useLlmReq = llmReq && !/^didn't\\s*find/i.test(llmReq);\nconst scrapedDesc = m.scraped_jobDescription && String(m.scraped_jobDescription).trim();\nconst maxDesc = String(loop.jobDescription ?? '').trim();\n\nlet jobDescription = maxDesc;\nif (useLlmReq) jobDescription = llmReq;\nelse if (scrapedDesc) jobDescription = scrapedDesc;\nelse if (!llm && rawOut && !/^didn't\\s*find/i.test(rawOut)) jobDescription = rawOut;\n\nconst llmLoc = llm && typeof llm.location === 'string' ? llm.location.trim() : '';\nconst scrapedLoc = m.scraped_location && String(m.scraped_location).trim();\nconst location = llmLoc || scrapedLoc || String(loop.location ?? '').trim();\n\nconst llmSal = llm != null && llm.salaryAnnualUSD != null && llm.salaryAnnualUSD !== \"\"\n  ? numOrZero(llm.salaryAnnualUSD)\n  : null;\nconst scrapedSal = m.scraped_salary != null && m.scraped_salary !== \"\" ? numOrZero(m.scraped_salary) : null;\nconst loopSal = numOrZero(loop.salary);\nconst salary = (llmSal != null && llmSal > 0) ? llmSal : (scrapedSal != null && scrapedSal > 0) ? scrapedSal : loopSal;\n\nlet jobExperience = 0;\nif (llm && llm.minYearsExperience != null && llm.minYearsExperience !== '') {\n  const x = Number(llm.minYearsExperience);\n  if (Number.isFinite(x) && x >= 0) jobExperience = Math.floor(x);\n} else if (m.scraped_experienceYears != null && m.scraped_experienceYears !== '') {\n  const x = Number(m.scraped_experienceYears);\n  if (Number.isFinite(x) && x >= 0) jobExperience = Math.floor(x);\n} else {\n  const x = Number(loop.jobExperience);\n  jobExperience = Number.isFinite(x) && x >= 0 ? Math.floor(x) : 0;\n}\n\nreturn {\n  json: {\n    jobId: loop.jobId,\n    jobUrl: applyUrl || loop.jobUrl,\n    jobSourceURL: loop.jobSourceURL,\n    jobTitle: pickJobTitle(llm, scrapedTitle, loop.jobTitle),\n    companyName: pickCompanyName(llm, scrapedCo, loop.companyName),\n    jobDescription,\n    jobCategory: loop.jobCategory,\n    location,\n    salary,\n    sectorIndustry: String(loop.sectorIndustry ?? '').trim(),\n    f500: loop.f500,\n    date: loop.date,\n    createdBy: loop.createdBy,\n    job_creation_type: loop.job_creation_type,\n    status: loop.status,\n    isFlagged: loop.isFlagged,\n    jobExperience,\n    __v: loop.__v ?? 0,\n    createdAt: loop.createdAt,\n    updatedAt: loop.updatedAt,\n  },\n};"
       },
       "id": "e9f0a1b2-edit-fields",
-      "name": "Edit Fields (final shape)",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
-      "position": [2440, 0]
+      "name": "Assemble enriched job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        0
+      ]
     },
     {
       "parameters": {
@@ -333,7 +313,10 @@
       "name": "Accumulate Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2680, 0],
+      "position": [
+        2680,
+        0
+      ],
       "notes": "Stores each enriched job in workflow static data. After loop completes, all are bulk-retrieved."
     },
     {
@@ -344,7 +327,10 @@
       "name": "Get All Processed Jobs",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1240, 240],
+      "position": [
+        1240,
+        240
+      ],
       "executeOnce": true,
       "alwaysOutputData": false,
       "notes": "Fires after loop completes (done output). Returns all accumulated enriched jobs for bulk insert."
@@ -354,7 +340,7 @@
         "resource": "document",
         "operation": "insert",
         "collection": "jobs",
-        "fields": "jobId,jobUrl,jobSourceURL,jobTitle,companyName,jobDescription,jobCategory,date,createdBy,job_creation_type,status,isFlagged,jobExperience,__v,createdAt,updatedAt",
+        "fields": "jobId,jobUrl,jobSourceURL,jobTitle,companyName,jobDescription,jobCategory,location,salary,sectorIndustry,f500,date,createdBy,job_creation_type,status,isFlagged,jobExperience,__v,createdAt,updatedAt",
         "options": {
           "dateFields": "date,createdAt,updatedAt",
           "useDotNotation": false
@@ -364,7 +350,10 @@
       "name": "Insert into jobs",
       "type": "n8n-nodes-base.mongoDb",
       "typeVersion": 1.2,
-      "position": [1480, 240],
+      "position": [
+        1480,
+        240
+      ],
       "credentials": {
         "mongoDb": {
           "name": "MongoDB firststep_db"
@@ -373,15 +362,18 @@
     },
     {
       "parameters": {
-        "content": "## Maxun → enriched jobs\n\n1. Attach **MongoDB** credential (`firststep_db`).\n2. Attach **Google Gemini (PaLM)** credential.\n3. **Prepare** → set `CREATED_BY` to your Auth0 subject.\n4. Each pending job is scraped via **scrape.do**, apply_url extracted, and requirements/responsibilities extracted via **Gemini LLM**.\n5. Original `jobUrl` is preserved as `jobSourceURL`; scraped `apply_url` becomes the new `jobUrl`.\n6. Enriched jobs are bulk-inserted into `jobs` collection.",
-        "height": 400,
-        "width": 420
+        "content": "## Maxun → enriched jobs\n\n1. Attach **MongoDB** credential (`firststep_db`).\n2. Attach **Google Gemini (PaLM)** credential.\n3. **Prepare** → set `CREATED_BY`. Passes **sectorIndustry**, **f500**, **location**, **salary**, **jobExperience**.\n4. **Filter junk rows** → **scrape.do** → **Parse scraped job details** (structured hints + JSON-LD).\n5. **Gemini** reads **full-page markdown** + parser/Maxun hints; returns JSON including **jobTitle** and **companyName** (real employer — rejects generic \"Careers\"/ATS names), plus requirements, location, salary, experience.\n6. **Assemble** prefers LLM title/company when good, else parser, else Maxun; **sectorIndustry** / **f500** from Maxun only.\n7. **Insert into jobs**.",
+        "height": 460,
+        "width": 460
       },
       "id": "sticky-note-enriched",
       "name": "Sticky Note",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-240, -280]
+      "position": [
+        -240,
+        -280
+      ]
     }
   ],
   "connections": {
@@ -433,6 +425,17 @@
       "main": [
         [
           {
+            "node": "Filter junk rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter junk rows": {
+      "main": [
+        [
+          {
             "node": "Loop Over Items",
             "type": "main",
             "index": 0
@@ -473,7 +476,7 @@
       "main": [
         [
           {
-            "node": "Extract apply_url",
+            "node": "Parse scraped job details",
             "type": "main",
             "index": 0
           },
@@ -485,7 +488,7 @@
         ]
       ]
     },
-    "Extract apply_url": {
+    "Parse scraped job details": {
       "main": [
         [
           {
@@ -533,18 +536,7 @@
       "main": [
         [
           {
-            "node": "Edit Fields (final shape)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Edit Fields (final shape)": {
-      "main": [
-        [
-          {
-            "node": "Accumulate Result",
+            "node": "Assemble enriched job",
             "type": "main",
             "index": 0
           }
@@ -574,7 +566,20 @@
       ]
     },
     "Insert into jobs": {
-      "main": [[]]
+      "main": [
+        []
+      ]
+    },
+    "Assemble enriched job": {
+      "main": [
+        [
+          {
+            "node": "Accumulate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "pinData": {},

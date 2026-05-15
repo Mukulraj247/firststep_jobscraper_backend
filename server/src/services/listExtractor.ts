@@ -23,6 +23,7 @@ import {
   CaptchaEncounteredError,
   CaptchaGateOptions,
 } from './scraping/captchaGate';
+import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
 
 const SMART_EXTRACTOR_SCRIPT_PATH = path.join(__dirname, '../workflow-management/scripts/smartJobExtractor.js');
 
@@ -105,7 +106,11 @@ const isMeaningful = (value: unknown): boolean => {
 const cleanRow = (row: Record<string, any>): Record<string, any> => {
   return Object.entries(row).reduce<Record<string, any>>((acc, [key, value]) => {
     if (typeof value === 'string') {
-      acc[key] = normalizeWhitespace(value);
+      let v = normalizeWhitespace(value);
+      // Google Careers SPA: path-relative `jobs/results/...` joins wrong against
+      // `/jobs/results` in the document URL → `/jobs/jobs/results/` (404). Heal server-side (cloud list runs).
+      if (/^https?:\/\//i.test(v)) v = fixGoogleCareersJobsUrl(v);
+      acc[key] = v;
     } else {
       acc[key] = value;
     }
@@ -722,7 +727,8 @@ export const runListExtraction = async (
     // SMART EXTRACTION FALLBACK: URL-only automation (no configured selector).
     if (!safeConfig.itemSelector) {
       logger.log('info', `No item selector provided for ${startUrl}. Attempting smart job extraction...`);
-      return runSmartExtraction();
+      const smart = await runSmartExtraction();
+      return smart.map(cleanRow);
     }
 
     for (let pageIndex = 0; pageIndex < pageLimit; pageIndex++) {
@@ -775,7 +781,7 @@ export const runListExtraction = async (
         const smartRows = await runSmartExtraction();
         if (smartRows.length > 0) {
           logger.log('info', `Smart extraction fallback yielded ${smartRows.length} rows.`);
-          return smartRows.slice(0, maxItemsCap);
+          return smartRows.map(cleanRow).slice(0, maxItemsCap);
         }
       } catch (err: any) {
         logger.log('warn', `Smart extraction fallback failed: ${err.message}`);

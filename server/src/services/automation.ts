@@ -12,6 +12,7 @@ import {
   finalizeRowsWithCanonicalData,
   hasCanonicalExtractedShape,
 } from './canonicalJobRecord';
+import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
 
 export interface AutomationRuntimeConfig {
   schedule?: {
@@ -453,6 +454,21 @@ export const normalizeMisalignedJobBoardRow = (data: Record<string, any>): Recor
     out.companyName = 'SIA Partners';
   }
 
+  // 6) Google Careers: RFC3986 relative join turns `jobs/results/...` + page `/.../jobs/results` into `/jobs/jobs/results/` (404).
+  for (const k of ['jobUrl', 'job_url', 'url', 'link', 'href'] as const) {
+    const v = out[k];
+    if (typeof v === 'string' && v.trim()) {
+      const fixed = fixGoogleCareersJobsUrl(v.trim());
+      if (fixed !== v) out[k] = fixed;
+    }
+  }
+
+  // 7) Google Careers list rows often capture the nav label "Careers" as company (cloud list extraction).
+  const jobUrlNorm = String(out.jobUrl ?? out.job_url ?? out.url ?? out.link ?? '').trim();
+  if (/google\.com\/about\/careers/i.test(jobUrlNorm) && /^careers?$/i.test(String(out.companyName ?? '').trim())) {
+    out.companyName = 'Google';
+  }
+
   return out;
 };
 
@@ -481,12 +497,132 @@ export const applyReadPipelineToExtractedData = (
   }) as Record<string, any>;
 };
 
-/** Removes rows that are not job postings (e.g. service pages scraped with the same item selector). */
+/**
+ * Patterns identifying URLs that are clearly not job postings — cookie banners,
+ * privacy/legal/terms pages, sitemaps, etc. List extractors sometimes match these
+ * because they live in the same repeating DOM structure as real list items
+ * (e.g. third-party cookie disclosure rows, footer link grids).
+ */
+const NON_JOB_URL_HOST_RE =
+  /^(?:legal|privacy|policy|policies|safety|cookies?|consent|imprint|impressum|sitemap|gdpr|ccpa)\./i;
+const NON_JOB_URL_PATH_RE =
+  /\/(?:privacy(?:[-_]?policy)?|cookies?|cookie[-_]?policy|cookie[-_]?notice|cookie[-_]?settings|cookie[-_]?preferences|legal|terms(?:[-_]?of[-_]?(?:service|use))?|gdpr|ccpa|consent|safety|imprint|impressum|sitemap|accessibility|do[-_]?not[-_]?sell|opt[-_]?out)(?:\/|$|[?#])/i;
+
+/** Pagination chrome captured by mistake (e.g. "Last page »", "Next", "Page 3 of 12"). */
+const PAGINATION_TITLE_RE =
+  /^(?:«+\s*)?(?:first|previous|prev|next|last)(?:\s+page)?(?:\s*»+)?$|^last\s+page\b|^page\s+\d+\s*(?:of\s*\d+)?$|^\d+\s*\/\s*\d+$|^«+$|^»+$/i;
+
+/**
+ * Cookie / consent banner labels frequently captured by list extractors when
+ * the consent UI lives near or inside the page's main listing area.
+ */
+const COOKIE_BANNER_TITLE_RE =
+  /^(?:learn more about (?:this|the) (?:provider|cookie|partner)|about (?:this|the) (?:provider|cookie|partner)|cookie\s*(?:policy|preferences|settings|notice|details?)|manage\s+(?:cookies?|preferences?|consent)|opt[-_ ]?out|accept(?:\s+(?:all|cookies?))?|reject\s+(?:all|cookies?)?|do not sell(?:\s+my(?:\s+personal)?\s+(?:info(?:rmation)?|data))?|view\s+(?:cookies?|preferences?)|show\s+(?:cookies?|preferences?))$/i;
+
+/**
+ * Cookie / localStorage / tracker identifier captured as a title — e.g.
+ * `osano_consentmanager_tattles`, `loglevel`, `_ga_X12Y3Z4`, `JSESSIONID`,
+ * `cf_clearance`, `amplitude_user_id`. These are single-token technical
+ * identifiers, never job titles. Real job titles either have spaces, or are
+ * Title Case (capital first letter + lowercase tail), or are short acronyms
+ * like CFO/CEO/VP.
+ *
+ * Heuristic shape — single token (after stripping optional "[x2]"-style
+ * suffix), AND one of:
+ *  - contains an underscore (real job titles never do)
+ *  - starts with a lowercase letter (real titles are Title Case)
+ *  - all uppercase, 5+ chars (job acronyms like CFO/CEO/VP are <= 4 chars)
+ */
+const COOKIE_IDENT_BODY_RE = /^(?:[^\s]*_[^\s]*|[a-z][a-z0-9.]+|[A-Z][A-Z0-9_]{4,})$/;
+const COOKIE_IDENT_SUFFIX_STRIP_RE = /\s*\[x?\d+\]\s*$/i;
+
+const isCookieIdentTitle = (title: string): boolean => {
+  const stripped = title.replace(COOKIE_IDENT_SUFFIX_STRIP_RE, '').trim();
+  if (!stripped || /\s/.test(stripped)) return false;
+  return COOKIE_IDENT_BODY_RE.test(stripped);
+};
+
+/**
+ * Cookie / tracker purpose description sentence captured as title or description.
+ * Three sub-patterns, each with low false-positive risk for real job titles:
+ *
+ *  1. `^used\s+(?:to|by|for)\s+\w` — "Used to/by/for X" is always a tracker description
+ *     (not "Used Equipment Sales Manager", which has "Equipment" after "Used").
+ *  2. `^verb\s+determiner` — 3rd-person-singular verb followed by a determiner /
+ *     pronoun ("Tracks the user", "Registers which...", "Stores user's...").
+ *  3. `^verb(?:\s+\S+){5,}` — 3rd-person-singular verb followed by 5+ more words
+ *     (real job titles like "Records Manager" are short; cookie descriptions like
+ *     "Maintains settings and outputs when using the Developer Tools Console" are long).
+ */
+const COOKIE_PURPOSE_USED_TO_RE = /^used\s+(?:to|by|for)\s+\w/i;
+const COOKIE_PURPOSE_VERB_DETERMINER_RE =
+  /^(?:registers?|maintains?|stores?|tracks?|saves?|loads?|allows?|enables?|provides?|determines?|contains?|holds?|identifies|detects?|handles?|sets?|updates?|records?|counts?|measures?|distinguishes?|collects?|preserves?)\s+(?:to|by|the|which|user|whether|if|a|an|in|for|on|with|via|when|that|user's|user\u2019s|browser|session|cookie|data|info|visit(?:or|ors)?)/i;
+const COOKIE_PURPOSE_VERB_LONG_DESC_RE =
+  /^(?:used|registers?|maintains?|stores?|tracks?|saves?|loads?|allows?|enables?|provides?|determines?|contains?|holds?|identifies|detects?|handles?|sets?|updates?|records?|counts?|measures?|distinguishes?|collects?|preserves?)(?:\s+\S+){5,}/i;
+
+const isCookiePurposeSentence = (s: string): boolean =>
+  COOKIE_PURPOSE_USED_TO_RE.test(s) ||
+  COOKIE_PURPOSE_VERB_DETERMINER_RE.test(s) ||
+  COOKIE_PURPOSE_VERB_LONG_DESC_RE.test(s);
+
+/**
+ * Cookie consent expiry labels captured as `companyName` (e.g. Osano's
+ * "Pending", "Session", date strings). Used in combination with other signals.
+ */
+const COOKIE_EXPIRY_COMPANY_RE = /^(?:pending|session|persistent|1st party|3rd party|http(?:\s+only)?)$/i;
+
+/** Drops rows that obviously aren't job postings (cookie banners, footer/legal links, pagination, etc.). */
 export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean => {
-  const url = String(data.jobUrl ?? data.job_url ?? data.url ?? data.link ?? '');
-  if (!url) return true;
-  if (!/sia-partners\.com/i.test(url)) return true;
-  if (/\/our-capabilities\//i.test(url)) return false;
+  const url = String(data.jobUrl ?? data.job_url ?? data.url ?? data.link ?? '').trim();
+  const title = String(data.jobTitle ?? data.title ?? data.name ?? data.job_title ?? '').trim();
+  const description = String(
+    data.jobDescription ?? data.description ?? data.summary ?? data.job_description ?? ''
+  ).trim();
+  const companyName = String(data.companyName ?? data.company ?? data.employer ?? data.company_name ?? '').trim();
+
+  // Rows with neither URL nor title are unusable downstream.
+  if (!url && !title) return false;
+
+  // Cookie banner / pagination labels.
+  if (title) {
+    if (PAGINATION_TITLE_RE.test(title)) return false;
+    if (COOKIE_BANNER_TITLE_RE.test(title)) return false;
+
+    // Cookie identifier captured as a title (e.g. `osano_consentmanager_tattles`, `loglevel`, `_ga_X12Y3Z4`).
+    if (isCookieIdentTitle(title)) return false;
+
+    // Cookie purpose description sentence captured as a title.
+    if (isCookiePurposeSentence(title)) return false;
+  }
+
+  // Description that's clearly a cookie purpose statement, combined with weak URL signal.
+  if (description && isCookiePurposeSentence(description)) {
+    // Strong signal: drop if URL is empty, or if companyName is a cookie expiry label.
+    if (!url || COOKIE_EXPIRY_COMPANY_RE.test(companyName)) return false;
+  }
+
+  // Cookie expiry label captured as company name — almost always a cookie table row.
+  if (companyName && COOKIE_EXPIRY_COMPANY_RE.test(companyName) && !url) return false;
+
+  if (url) {
+    // Parse leniently — many scraped URLs are absolute, some are protocol-relative or relative.
+    let host = '';
+    let pathAndQuery = '';
+    try {
+      const u = new URL(url, 'https://example.invalid');
+      host = u.hostname;
+      pathAndQuery = u.pathname + (u.search || '');
+    } catch {
+      pathAndQuery = url;
+    }
+
+    if (host && NON_JOB_URL_HOST_RE.test(host)) return false;
+    if (pathAndQuery && NON_JOB_URL_PATH_RE.test(pathAndQuery)) return false;
+
+    // SIA Partners-specific: /our-capabilities/ pages are service pages, not jobs.
+    if (/sia-partners\.com/i.test(url) && /\/our-capabilities\//i.test(url)) return false;
+  }
+
   return true;
 };
 

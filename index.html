@@ -16,9 +16,9 @@
     <title>Scout-X Scrapper</title>
   </head>
   <body style="font-family: 'Geologica', system-ui, sans-serif;">
-  <script type="module" src="/src/index.tsx"></script>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
-    <!-- Vite will automatically inject the necessary scripts here during the build -->
+    <!-- Vite transforms TSX; load only via `npm run client` / dev server — not file:// -->
+    <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>

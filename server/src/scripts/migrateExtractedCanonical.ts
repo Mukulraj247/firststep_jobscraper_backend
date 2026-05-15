@@ -23,6 +23,7 @@ import {
   getAutomationConfig,
   mergeRowContextIntoRowData,
   normalizeMisalignedJobBoardRow,
+  shouldKeepExtractedJobRow,
 } from '../services/automation';
 import {
   applyLegacyJobAliases,
@@ -63,6 +64,7 @@ async function main() {
 
   let migrated = 0;
   let skipped = 0;
+  let skippedJunk = 0;
   const cursor = ExtractedData.find(filter).cursor();
 
   let batch: any[] = [];
@@ -71,11 +73,21 @@ async function main() {
       skipped += 1;
       continue;
     }
+    // Skip non-job rows (cookie banners, pagination, privacy pages, etc.) — they
+    // stay as legacy documents without `data.status`, so the downstream n8n
+    // pending→jobs workflow ignores them.
+    const aliased = applyLegacyJobAliases({ ...(doc.data ?? {}) });
+    if (!shouldKeepExtractedJobRow(aliased)) {
+      skippedJunk += 1;
+      continue;
+    }
     batch.push(doc);
     if (batch.length >= BATCH) {
       await flushBatch(batch);
       migrated += batch.length;
-      console.log(`Migrated ${migrated} (skipped already-canonical: ${skipped})`);
+      console.log(
+        `Migrated ${migrated} (already-canonical: ${skipped}, junk: ${skippedJunk})`
+      );
       batch = [];
     }
   }
@@ -84,7 +96,9 @@ async function main() {
     migrated += batch.length;
   }
 
-  console.log(`Done. Migrated ${migrated} documents; skipped ${skipped} already canonical.`);
+  console.log(
+    `Done. Migrated ${migrated} documents; skipped ${skipped} already-canonical; skipped ${skippedJunk} junk rows.`
+  );
   await mongoose.disconnect();
 }
 
