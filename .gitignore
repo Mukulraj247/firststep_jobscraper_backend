@@ -23,5 +23,3 @@ chrome-extension/dist.zip
 /server/logs
 
 /build
-
-package-lock.json

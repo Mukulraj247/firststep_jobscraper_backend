@@ -21,6 +21,7 @@ flowchart LR
 ## Required inputs (before you start)
 
 - Render account and linked Git repository
+- **`package-lock.json` committed at the repo root** (Render’s default build uses `npm ci`, which requires a lockfile)
 - MongoDB Atlas connection string (`MONGODB_URI`)
 - Two public URLs:
   - frontend URL (for `PUBLIC_URL` / `VITE_PUBLIC_URL`)
