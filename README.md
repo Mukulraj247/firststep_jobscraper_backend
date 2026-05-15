@@ -1,154 +1,51 @@
-<h2 align="center">
-    <div>
-        <a href="https://www.maxun.dev/?ref=ghread">
-            <img src="/src/assets/maxunlogo.png" width="70" />
-            <br>
-            Maxun
-        </a>
-    </div>
-    Turn Any Website Into A Structured API
-<br>
-</h2>
-
-<p align="center">
-✨ The unified open-source no-code platform for real-time web scraping, crawling, and search ✨
-
-<p align="center">
-    <a href="https://app.maxun.dev/?ref=ghread"><b>Go To App</b></a> •
-    <a href="https://docs.maxun.dev/?ref=ghread"><b>Documentation</b></a> •
-    <a href="https://www.maxun.dev/?ref=ghread"><b>Website</b></a> •
-    <a href="https://discord.gg/5GbPjBUkws"><b>Discord</b></a> •
-    <a href="https://www.youtube.com/@MaxunOSS?ref=ghread"><b>Watch Tutorials</b></a>
-    <br />
-    <br />
-<a href="https://trendshift.io/repositories/12113" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12113" alt="getmaxun%2Fmaxun | Trendshift" style="width: 250px; height: 55px; margin-top: 10px;" width="250" height="55"/></a>
-</p>
-
-## What is Maxun?
-
-Maxun is an open-source no-code web data platform for turning the web into structured, reliable data.
-It supports extraction, crawling, scraping, and search — designed to scale from simple use cases to complex, automated workflows.
-
-### Ecosystem
-
-1. **[Extract](https://docs.maxun.dev/category/extract)** – Emulate real user behavior and collect structured data from any website.
-   * **[Recorder Mode](https://docs.maxun.dev/robot/extract/robot-actions)** – Record your actions as you browse; Maxun turns them into a reusable extraction robot.
-
-2. **[Scrape](https://docs.maxun.dev/robot/scrape/scrape-robots)** – Convert full webpages into clean Markdown or HTML and capture screenshots.
-3. **[Crawl](https://docs.maxun.dev/robot/crawl/crawl-introduction)** – Crawl entire websites and extract content from every relevant page, with full control over scope and discovery.
-4. **[Search](https://docs.maxun.dev/robot/search/search-introduction)** – Run automated web searches to discover or scrape results, with support for time-based filters.
-5. **[SDK](https://docs.maxun.dev/category/sdk)** – A complete developer toolkit for scraping, extraction, scheduling, and end-to-end data automation.
-6. **[CLI](https://docs.maxun.dev/category/cli)** – Command-line workflows for robots and runs (install and usage are covered in the docs; not shipped as an `npm` script in this repository).
-7. **Chrome extension** – See [`chrome-extension/README.md`](./chrome-extension/README.md) for building, loading unpacked, and connecting to your backend.
-
-
-## How Does It Work?
-
-Maxun robots are automated tools that help you collect data from websites without writing any code. Think of them as your personal web assistants that can navigate websites, extract information, and organize data just like you would manually - but faster and more efficiently.
-
-There are four types of robots, each designed for a different job.
-
-### 1. Extract
-Extract emulates real user behavior and captures structured data.
-- <a href="/robot/extract/robot-actions">Recorder Mode</a> - Record your actions as you browse; Maxun turns them into a reusable extraction robot.
-
-### Example: Extract 10 Property Listings from Airbnb
-
-[https://github.com/user-attachments/assets/recorder-mode-demo-video](https://github.com/user-attachments/assets/c6baa75f-b950-482c-8d26-8a8b6c5382c3)
-
-Learn more <a href="/category/extract">here</a>.
-
-### 2. Scrape
-Scrape converts full webpages into clean Markdown, HTML and can capture screenshots. Ideal for archiving pages and document-style pipelines.
-
-Learn more <a href="https://docs.maxun.dev/robot/scrape/scrape-robots">here</a>.
-
-### 3. Crawl
-Crawl entire websites and extract content from every relevant page, with full control over scope and discovery.
-
-Learn more <a href="https://docs.maxun.dev/robot/crawl/crawl-introduction">here</a>.
-
-### 4. Search
-Run automated web searches to discover or scrape results, with support for time-based filters.
-
-Learn more <a href="https://docs.maxun.dev/robot/search/search-introduction">here</a>.
-
-## Quick Start
-
-### Getting Started
-The simplest & fastest way to get started is to use the hosted version: https://app.maxun.dev. You can self-host if you prefer!
-
-### Installation
-
-**Local defaults:** the Vite app runs at **http://localhost:5173**, the API at **http://localhost:8080**, and HTTP routes under **`/api`** (e.g. `http://localhost:8080/api`). Set **`VITE_BACKEND_URL`** to the API **origin** (e.g. `http://localhost:8080`) — the UI appends `/api` where needed. The Chrome extension expects the API **base** including `/api` (see `chrome-extension/README.md`).
-
-1. [Local setup](https://docs.maxun.dev/installation/local) — see also [`SETUP.md`](./SETUP.md) in this repo
-2. [Environment variables](https://docs.maxun.dev/installation/environment_variables) — copy from [`ENVEXAMPLE`](./ENVEXAMPLE)
-3. [SDK](https://github.com/getmaxun/node-sdk)
-4. [Production deployment guide](./docs/production-deployment.md)
-5. [Native browser / Camoufox](./docs/native-browser-setup.md)
-
-### Upgrading & self-hosting
-1. [Self-host Maxun](https://docs.maxun.dev/self-host)
-2. [Upgrade (local install)](https://docs.maxun.dev/installation/upgrade#upgrading-with-local-setup)
-
-## Sponsors
-<table>
-  <tr>
-  <td width="229">
-      <br/>
-      <a href="https://www.testmuai.com/?utm_medium=sponsor&utm_source=maxun" target="_blank">
-        <img src="https://github.com/user-attachments/assets/6c96005b-85df-43e0-9b63-96aaca676c11" /><br/><br/>
-        <b>TestMu AI</b>
-      </a>
-      <br/>
-      <sub>The Native AI-Agentic Cloud Platform to Supercharge Quality Engineering. Test Intelligently and Ship Faster.
-      </sub>
-    </td>
-  </tr>
-</table>
-
-## Features
-
-- ✨ **Extract Data With No-Code** – Point and click interface
-- ✨ **Developer SDK** – Programmatic extraction, scheduling, and robot management
-- ✨ **Handle Pagination & Scrolling** – Automatic navigation
-- ✨ **Run Robots On Schedules** – Set it and forget it
-- ✨ **Turn Websites to APIs** – RESTful endpoints from any site
-- ✨ **Turn Websites to Spreadsheets** – Direct data export to Google Sheets & Airtable
-- ✨ **Adapt To Website Layout Changes** – Auto-recovery from site updates
-- ✨ **Extract Behind Login** – Handle authentication seamlessly
-- ✨ **Integrations** – Connect with your favorite tools
-- ✨ **MCP Support** – Model Context Protocol integration
-- ✨ **Self-Hostable** – Full control over your infrastructure
-- ✨ **Open Source** – Transparent and community-driven
-
-## Demos
-Maxun can be used for various use-cases, including lead generation, market research, content aggregation and more.
-View demos here: https://www.maxun.dev/usecases
-
-## Note
-This project is in early stages of development. Your feedback is very important for us - we're actively working on improvements. </a>
-
-## License
-<p>
-This project is licensed under <a href="./LICENSE">AGPLv3</a>. 
-</p>
-
-## Project Values
-
-We believe in fair and responsible use of open source.
-If you rely on this project commercially, please consider contributing back
-or supporting its development.
-
-## Support Us
-Star the repository, contribute if you love what we’re building, or [sponsor us](https://github.com/sponsors/amhsirak). 
-
-## Contributors
-Thank you to the combined efforts of everyone who contributes!
-
-<a href="https://github.com/getmaxun/maxun/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=getmaxun/maxun" />
-</a>
-
 # scout-x
+
+**scout-x** is the app name for this monorepo: FirstStep job ingestion and automation on top of **React + Vite** (`src/`), **Node + Express** (`server/`), plus optional **n8n** workflow exports under `docs/n8n/`.
+
+The **same codebase** is published to two GitHub repositories (naming only; there is no split subtree):
+
+- [firststep_jobscraper_ui](https://github.com/Mukulraj109/firststep_jobscraper_ui)
+- [firststep_jobscraper_backend](https://github.com/Mukulraj109/firststep_jobscraper_backend)
+
+## Requirements
+
+- Node.js (see `package.json` engines if present)
+- MongoDB and other services as described in [`ENVEXAMPLE`](./ENVEXAMPLE)
+- Playwright browser install after deps: `npm run playwright:install`
+
+## Local development
+
+1. Copy environment template: `cp ENVEXAMPLE .env` (Windows: copy manually) and fill values.
+2. Install dependencies: `npm install`
+3. Run API + UI together: `npm run start:dev`
+   - UI: **http://localhost:5173**
+   - API: **http://localhost:8080** (HTTP API under `/api`)
+4. Set **`VITE_BACKEND_URL`** to the API **origin** (e.g. `http://localhost:8080`). The UI appends `/api` where needed.
+
+Optional: run the job worker in another terminal with `npm run worker:dev` when you are not using embedded workers.
+
+More detail: [`SETUP.md`](./SETUP.md), [`ENVEXAMPLE`](./ENVEXAMPLE) for variables, [`chrome-extension/README.md`](./chrome-extension/README.md) for the extension.
+
+## Production build
+
+- Frontend: `npm run build` → output in `build/`
+- Server: `npm run build:server` → output in `server/dist/`
+
+See [`docs/production-deployment.md`](./docs/production-deployment.md) for process layout (API, worker, env).
+
+## n8n
+
+Workflow JSON and notes: [`docs/n8n/README.md`](./docs/n8n/README.md). **Do not commit secrets** (tokens, API keys) into workflow files intended for public repos.
+
+## Scripts (common)
+
+| Script            | Purpose                                      |
+|-------------------|----------------------------------------------|
+| `npm run start:dev` | Dev API (`nodemon`) + Vite client            |
+| `npm run server:dev` | API only                                   |
+| `npm run client`  | Vite dev server only                         |
+| `npm run worker:dev` | Worker only (dev)                        |
+| `npm run build`   | Production UI build                          |
+| `npm run build:server` | Compile `server/` to `server/dist/`     |
+| `npm run test`    | Vitest unit tests                            |
+| `npm run migrate:extracted` | One-off migration script (see repo) |
