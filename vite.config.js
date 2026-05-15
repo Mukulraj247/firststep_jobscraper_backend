@@ -27,6 +27,8 @@ export default defineConfig(() => {
   const parsedBackendUrl = parseUrlSafe(backendUrl, 'http://localhost:8080');
 
   return {
+    // Root-hosted SPA (e.g. https://app.onrender.com/); deep links must load JS from /assets/...
+    base: '/',
     define: {
       // Ensure the value is always a valid absolute URL at build time.
       'import.meta.env.VITE_BACKEND_URL': JSON.stringify(parsedBackendUrl.toString()),

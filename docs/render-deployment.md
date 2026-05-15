@@ -21,7 +21,8 @@ flowchart LR
 ## Required inputs (before you start)
 
 - Render account and linked Git repository
-- **`package-lock.json` committed at the repo root** (Render’s default build uses `npm ci`, which requires a lockfile)
+- **`package-lock.json` committed at the repo root** (Render builds use clean install + `npm ci`)
+- **`npm ci --include=dev`** (or `npm run install:ci`) on Render — Render sets `NODE_ENV=production` during builds, so plain `npm ci` skips `devDependencies`; the server compile needs them (`typescript`, `@types/*`, `@modelcontextprotocol/sdk`, `zod`, etc.)
 - MongoDB Atlas connection string (`MONGODB_URI`)
 - Two public URLs:
   - frontend URL (for `PUBLIC_URL` / `VITE_PUBLIC_URL`)
@@ -51,7 +52,7 @@ Create these 3 services from the same repository:
 - Build command:
 
 ```bash
-npm ci && npm run build
+npm ci --include=dev && npm run build
 ```
 
 - Publish directory:
@@ -70,7 +71,7 @@ build
 - Build command:
 
 ```bash
-npm ci && npm run build:server
+npm ci --include=dev && npm run build:server
 ```
 
 - Start command:
@@ -119,11 +120,16 @@ Optional:
 ## 3) Worker (Render Background Worker)
 
 - Root directory: repository root
+
+Worker builds compile the server with **`npm run build:server`** and install Chromium for Playwright. On Render, **`NODE_ENV=production`** during build causes plain **`npm ci`** to skip **`devDependencies`**, which breaks TypeScript (`@modelcontextprotocol/sdk`, `zod`, `@types/*`, etc.). Use **`npm ci --include=dev`** or **`npm run build:render-worker`**.
+
 - Build command:
 
 ```bash
-npm ci && npm run build:server
+npm run build:render-worker
 ```
+
+(equivalent: `npm ci --include=dev && npm run build:server && npm run playwright:install`)
 
 - Start command:
 
@@ -131,11 +137,7 @@ npm ci && npm run build:server
 npm run worker
 ```
 
-- Use the same env vars as backend for:
-  - DB connection
-  - secrets
-  - browser runtime
-  - optional storage integrations
+- Copy the **same env vars as the backend** (MongoDB URI, secrets, `RUN_EMBEDDED_WORKERS=false`, browser/proxy/storage as needed).
 
 ## Connection rules (important)
 

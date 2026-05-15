@@ -7,6 +7,13 @@ import { buildEmptyState, defaultCloudScheduleDraft, type ExtensionState } from 
 
 const STORAGE_KEY = 'maxunExtensionState';
 
+/** Previous shipped default; migrate stored state to current `buildEmptyState().backendUrl`. */
+const LEGACY_DEFAULT_BACKEND_URL = 'https://scoutx-backend.onrender.com/api';
+
+function normalizeApiBase(url: string): string {
+  return url.trim().replace(/\/+$/, '');
+}
+
 /**
  * Get current state from storage.
  */
@@ -19,15 +26,28 @@ export async function getState(): Promise<ExtensionState> {
   if (!raw.list?.cloudScheduleDraft) {
     listMerged.cloudScheduleDraft = defaultCloudScheduleDraft();
   }
-  return {
+
+  let backendUrl = raw.backendUrl?.trim() || defaults.backendUrl;
+  if (normalizeApiBase(backendUrl) === normalizeApiBase(LEGACY_DEFAULT_BACKEND_URL)) {
+    backendUrl = defaults.backendUrl;
+  }
+
+  const merged: ExtensionState = {
     ...defaults,
     ...raw,
-    backendUrl: raw.backendUrl?.trim() || defaults.backendUrl,
+    backendUrl,
     apiKey: raw.apiKey ?? defaults.apiKey,
     list: listMerged,
     table: { ...defaults.table, ...raw.table },
     text: { ...defaults.text, ...raw.text },
   };
+
+  const persistedUrl = raw.backendUrl?.trim() || '';
+  if (persistedUrl && normalizeApiBase(persistedUrl) !== normalizeApiBase(backendUrl)) {
+    await chrome.storage.local.set({ [STORAGE_KEY]: merged });
+  }
+
+  return merged;
 }
 
 /**

@@ -91,6 +91,8 @@
     "worker:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/worker.ts",
     "client": "vite",
     "build": "vite build",
+    "install:ci": "npm ci --include=dev",
+    "build:render-worker": "npm run install:ci && npm run build:server && npm run playwright:install",
     "build:server": "tsc -p server/tsconfig.json",
     "preview": "vite preview",
     "lint": "eslint src server/src chrome-extension/src e2e playwright.config.ts vitest.config.ts",

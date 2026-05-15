@@ -216,7 +216,7 @@ export function buildEmptyState(): ExtensionState {
   return {
     activeTool: 'none',
     activeTabId: null,
-    backendUrl: 'https://scoutx-backend.onrender.com/api',
+    backendUrl: 'https://firststep-jobscraper-backend.onrender.com/api',
     apiKey: '',
     list: {
       phase: 'idle',

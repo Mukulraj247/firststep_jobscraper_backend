@@ -11,7 +11,7 @@ import { AlertSnackbar } from "../components/ui/AlertSnackbar";
 import Login from './Login';
 import Register from './Register';
 import UserRoute from '../routes/userRoute';
-import { Routes, Route, useNavigate, Navigate } from 'react-router-dom';
+import { Routes, Route, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { NotFoundPage } from '../components/dashboard/NotFound';
 import RobotCreate from '../components/robot/pages/RobotCreate';
 import { Box } from '@mui/material';
@@ -25,6 +25,7 @@ export const PageWrapper = () => {
   const { t } = useTranslation();
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   const { browserId, setBrowserId, notification, notify, recordingName, setRecordingName, recordingId, setRecordingId, setRecordingUrl } = useGlobalInfoStore();
 

@@ -37,7 +37,7 @@ SCRAPER_JOB_TIMEOUT_MS=120000
 Build artifacts:
 
 ```bash
-npm ci
+npm ci --include=dev
 npm run build:server
 npm run build
 ```
