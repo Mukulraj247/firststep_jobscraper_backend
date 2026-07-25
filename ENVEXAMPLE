@@ -34,9 +34,15 @@ PUBLIC_URL=http://localhost:5174        # URL on which the frontend runs. You ca
 VITE_BACKEND_URL=http://localhost:8081  # URL used by frontend to connect to backend. It should always have the same value as BACKEND_URL
 VITE_PUBLIC_URL=http://localhost:5174   # URL used by backend to connect to frontend. It should always have the same value as PUBLIC_URL
 LOGS_PATH=server/logs                   # Directory for Winston log files (use an absolute path in production)
-RUN_EMBEDDED_WORKERS=false              # false = run `npm run worker` as a separate process
-SCRAPER_WORKER_CONCURRENCY=3            # Concurrent scraper jobs per worker process
-SCRAPER_JOB_TIMEOUT_MS=120000           # Per-run timeout for queued scraper executions
+
+# Worker & Queue Settings
+# For Render Free Tier (512 MB RAM / 750 free instance hours limit):
+# Set RUN_EMBEDDED_WORKERS=true (runs API & worker in 1 service, saving 720 instance hrs/mo)
+# Set SCRAPER_WORKER_CONCURRENCY=1 (prevents memory crashes / OOM on 512 MB RAM)
+# Set SCRAPER_JOB_TIMEOUT_MS=60000 (prevents hanging scraper tasks)
+RUN_EMBEDDED_WORKERS=false              # true = embedded in API process; false = separate `npm run worker` process
+SCRAPER_WORKER_CONCURRENCY=3            # Concurrent scraper jobs per worker process (use 1 for Render Free tier)
+SCRAPER_JOB_TIMEOUT_MS=120000           # Per-run timeout in ms (use 60000 for Render Free tier)
 
 # Optional Google OAuth settings for Google Sheet Integration
 GOOGLE_CLIENT_ID=your_google_client_id

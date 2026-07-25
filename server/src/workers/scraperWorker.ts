@@ -623,6 +623,12 @@ export async function startScraperWorker() {
         logger.log('error', `Scraper job ${job.attrs._id?.toString() || 'unknown'} failed: ${message}`);
         // Re-throw to let Agenda handle retries if configured
         throw error;
+      } finally {
+        if (typeof global.gc === 'function') {
+          try {
+            global.gc();
+          } catch {}
+        }
       }
     }
   );

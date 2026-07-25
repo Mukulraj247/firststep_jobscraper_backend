@@ -132,7 +132,17 @@ async function launchLocalBrowser(profile?: BrowserLaunchProfile): Promise<Brows
                 '--force-color-profile=srgb',
                 '--force-device-scale-factor=2',
                 '--ignore-certificate-errors',
-                '--mute-audio'
+                '--mute-audio',
+                '--js-flags=--max-old-space-size=256',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-breakpad',
+                '--disable-component-extensions-with-background-pages',
+                '--disable-component-update',
+                '--disable-default-apps',
+                '--disable-ipc-flooding-protection',
+                '--disable-renderer-backgrounding'
             ],
         };
 

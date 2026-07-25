@@ -1,0 +1,50 @@
+# Render Blueprint for Scout-X (Optimized for Render Free Tier)
+# See docs/render-deployment.md for full details.
+
+services:
+  # 1. Frontend Web App (Static Site)
+  - type: web
+    name: scout-x-frontend
+    runtime: static
+    buildCommand: npm ci --include=dev && npm run build
+    staticPublishPath: build
+    envVars:
+      - key: VITE_BACKEND_URL
+        sync: false
+      - key: VITE_PUBLIC_URL
+        sync: false
+
+  # 2. Backend Web Service (Express API + Socket.IO + Embedded Scraper Workers)
+  - type: web
+    name: scout-x-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build:server && npm run playwright:install
+    startCommand: npm run server
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: BACKEND_URL
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: VITE_BACKEND_URL
+        sync: false
+      - key: VITE_PUBLIC_URL
+        sync: false
+      - key: RUN_EMBEDDED_WORKERS
+        value: "true"
+      - key: SCRAPER_WORKER_CONCURRENCY
+        value: "1"
+      - key: SCRAPER_JOB_TIMEOUT_MS
+        value: "60000"
+      - key: LOGS_PATH
+        value: server/logs

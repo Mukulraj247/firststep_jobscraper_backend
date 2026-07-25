@@ -31,20 +31,22 @@ flowchart LR
   - `JWT_SECRET`
   - `SESSION_SECRET`
   - `ENCRYPTION_KEY` (64 hex chars recommended)
-- Decide worker model:
-  - recommended: separate worker service with `RUN_EMBEDDED_WORKERS=false`
-- Optional integrations (only if needed):
-  - Firebase service account and bucket settings
-  - Redis values (optional in this architecture)
-  - Browser runtime host/port overrides (`BROWSER_WS_*`, `CAMOUFOX_*`)
+- Decide deployment model:
+  - **Render Free Tier (Recommended for Free tier)**: Single Web Service with `RUN_EMBEDDED_WORKERS=true`, `SCRAPER_WORKER_CONCURRENCY=1`, and `SCRAPER_JOB_TIMEOUT_MS=60000`. This uses 1 service (~720 instance hrs/mo) fitting inside Render's 750 free instance hours.
+  - **Paid / Dedicated Production**: Separate Web Service + Background Worker service with `RUN_EMBEDDED_WORKERS=false` and `SCRAPER_WORKER_CONCURRENCY=3`.
 
 ## Services to create on Render
 
-Create these 3 services from the same repository:
+### Track A: Render Free Tier (2 Services Total - Saves Instance Hours & RAM)
+1. **Static Site**: Frontend UI
+2. **Web Service**: Backend API + Socket.IO + Embedded Workers (`RUN_EMBEDDED_WORKERS=true`)
 
-1. Static Site: frontend
-2. Web Service: backend API + sockets
-3. Background Worker: queue and scraper worker
+### Track B: Paid / High Performance (3 Services Total)
+1. **Static Site**: Frontend UI
+2. **Web Service**: Backend API + Sockets (`RUN_EMBEDDED_WORKERS=false`)
+3. **Background Worker**: Queue & Scraper worker
+
+---
 
 ## 1) Frontend (Render Static Site)
 
@@ -68,10 +70,10 @@ build
 ## 2) Backend (Render Web Service)
 
 - Root directory: repository root
-- Build command:
+- Build command (installs dependencies, builds server, and installs Chromium for scraping):
 
 ```bash
-npm ci --include=dev && npm run build:server
+npm ci --include=dev && npm run build:server && npm run playwright:install
 ```
 
 - Start command:
@@ -99,9 +101,9 @@ Set at least:
 - `PUBLIC_URL=https://<your-frontend-domain>`
 - `VITE_BACKEND_URL=https://<your-backend-domain>`
 - `VITE_PUBLIC_URL=https://<your-frontend-domain>`
-- `RUN_EMBEDDED_WORKERS=false`
-- `SCRAPER_WORKER_CONCURRENCY=3`
-- `SCRAPER_JOB_TIMEOUT_MS=120000`
+- `RUN_EMBEDDED_WORKERS=true` *(Use `true` on Free Tier; use `false` if running a separate worker service)*
+- `SCRAPER_WORKER_CONCURRENCY=1` *(Use `1` on 512MB RAM Free Tier; use `3` on paid instances with ≥1-2GB RAM)*
+- `SCRAPER_JOB_TIMEOUT_MS=60000`
 - `LOGS_PATH=server/logs`
 
 Optional:
@@ -258,6 +260,21 @@ Fix:
 
 - Verify Firebase credential envs and bucket config
 - If not needed, leave Firebase vars unset (app still runs)
+
+### 6) Render Free Plan Limit / Quota Exhaustion Email
+
+Symptoms:
+
+- Email from Render: "Render account reached free plan limit" after only a few scrapes.
+
+Fix & Explanation:
+
+- **Why it happens**: Render limits platform **instance hours** (750 hrs/month), not job count. Running 2 separate services (Web Service + Background Worker) consumes 2 x 720 = ~1440 instance hours per month, blowing past the free limit mid-month even with 0 scrapes.
+- **Fix**:
+  1. Switch to Single-Service Embedded Worker Mode: Delete the separate Background Worker service on Render. Set `RUN_EMBEDDED_WORKERS=true` on the Web Service.
+  2. Set `SCRAPER_WORKER_CONCURRENCY=1` to prevent Out-Of-Memory (OOM) memory crash loops on 512 MB RAM.
+  3. Set `SCRAPER_JOB_TIMEOUT_MS=60000`.
+  4. Ensure backend build command includes Chromium install: `npm ci --include=dev && npm run build:server && npm run playwright:install`.
 
 ## Rollback strategy
 
