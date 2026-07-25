@@ -45,6 +45,34 @@ services:
       - key: SCRAPER_WORKER_CONCURRENCY
         value: "1"
       - key: SCRAPER_JOB_TIMEOUT_MS
+        value: "45000"
+      # CRITICAL: Chromium is OUTSIDE the V8 heap but still counts against Render's
+      # 512MB container limit. Cap Node ~192MB so Chromium has room to launch.
+      # (A 460MB Node heap left almost no room and caused OOM restarts.)
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=192 --expose-gc"
+      - key: LOW_MEMORY_MODE
+        value: "true"
+      # One attempt only on free — a retry often means a second Chromium spike.
+      - key: SCRAPER_MAX_ATTEMPTS
+        value: "1"
+      - key: DISABLE_VISIBLE_BROWSER_RETRY
+        value: "true"
+      - key: BROWSER_POOL_MAX_PAGES
+        value: "1"
+      - key: BROWSER_POOL_IDLE_TTL_MS
+        value: "0"
+      # Trim anti-bot waits so a single challenge can't exceed the job timeout.
+      - key: CLOUDFLARE_WAIT_TIMEOUT_MS
+        value: "20000"
+      - key: AMAZON_CHALLENGE_WAIT_MS
+        value: "25000"
+      - key: MICROSOFT_CHALLENGE_WAIT_MS
+        value: "25000"
+      # Reduce idle DB traffic and cap socket payload size on the small instance.
+      - key: QUEUED_RUNS_POLL_MS
         value: "60000"
+      - key: SOCKET_MAX_HTTP_BUFFER_BYTES
+        value: "2097152"
       - key: LOGS_PATH
         value: server/logs

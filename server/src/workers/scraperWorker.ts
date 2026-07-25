@@ -13,9 +13,25 @@ import { resolveProxyPool, selectRotatedProxy } from '../services/proxyManager';
 import { selectRotatedUserAgent } from '../services/userAgentManager';
 import { getSessionStatePath, sessionStateExists } from '../storage/sessionState';
 import { acquirePooledPage, releasePooledPage, evictBrowserFromPool } from '../services/browserReusePool';
+import { getDefaultMaxPagesPerBrowser, isLowMemoryMode } from '../utils/memoryMode';
 
 const EXECUTION_TIMEOUT_MS = parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10);
-const MAX_ATTEMPTS = 3;
+/** Total attempts per run (1 = no retries). Lower on constrained/free instances to avoid retry storms. */
+const MAX_ATTEMPTS = Math.max(1, parseInt(process.env.SCRAPER_MAX_ATTEMPTS || '3', 10));
+/**
+ * When `true`, retries on known anti-bot hosts do NOT escalate to a visible
+ * (headless:false) browser. Visible mode forces a heavyweight LOCAL Chromium
+ * launch (see `requiresCustomLocalLaunch`), which OOM-kills small instances
+ * (e.g. Render free 512MB). Retries then just rotate proxy/user-agent instead.
+ */
+const DISABLE_VISIBLE_BROWSER_RETRY = process.env.DISABLE_VISIBLE_BROWSER_RETRY === 'true';
+/** Deploy-tunable anti-bot wait budgets. Defaults keep prior behaviour; shrink these on free tier so a single challenge wait can't exceed SCRAPER_JOB_TIMEOUT_MS. */
+const CLOUDFLARE_WAIT_MS = parseInt(process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || '45000', 10);
+const AMAZON_WAIT_MS = parseInt(process.env.AMAZON_CHALLENGE_WAIT_MS || '90000', 10);
+const MICROSOFT_WAIT_MS = parseInt(process.env.MICROSOFT_CHALLENGE_WAIT_MS || '60000', 10);
+/** Cap run.log size so repeated saves don't balloon mongoose docs / Atlas payloads. */
+const RUN_LOG_MAX_CHARS = parseInt(process.env.RUN_LOG_MAX_CHARS || (isLowMemoryMode() ? '8000' : '50000'), 10);
+const RUN_LOG_FLUSH_EVERY = parseInt(process.env.RUN_LOG_FLUSH_EVERY || (isLowMemoryMode() ? '4' : '1'), 10);
 const isNavigationNetworkFailure = (message: string): boolean =>
   /net::ERR_FAILED|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_CONNECTION_RESET|ERR_NAME_NOT_RESOLVED/i.test(message);
 const ANTI_BOT_HOST_PATTERNS = [
@@ -38,11 +54,25 @@ const isAntiBotTarget = (url?: string): boolean => {
   }
 };
 
-const appendRunLog = async (run: any, message: string) => {
+const appendRunLog = async (run: any, message: string, opts?: { flush?: boolean }) => {
   const timestamped = `[${new Date().toISOString()}] ${message}`;
   const currentLog = typeof run.log === 'string' && run.log.length > 0 ? `${run.log}\n${timestamped}` : timestamped;
-  run.log = currentLog;
-  await run.save();
+  run.log =
+    currentLog.length > RUN_LOG_MAX_CHARS
+      ? `…[truncated]\n${currentLog.slice(-(RUN_LOG_MAX_CHARS - 16))}`
+      : currentLog;
+
+  const pending = ((run as any)._pendingLogWrites || 0) + 1;
+  (run as any)._pendingLogWrites = pending;
+  if (opts?.flush || pending >= RUN_LOG_FLUSH_EVERY) {
+    (run as any)._pendingLogWrites = 0;
+    // Persist only the log field when possible to avoid rewriting large output blobs.
+    if (typeof run.updateOne === 'function') {
+      await run.updateOne({ $set: { log: run.log } });
+    } else {
+      await run.save();
+    }
+  }
 };
 
 const computeDuration = (startedAt: string) => {
@@ -52,11 +82,12 @@ const computeDuration = (startedAt: string) => {
 };
 
 async function markFailed(run: any, errorMessage: string, finalState: 'pending' | 'failed') {
-  await appendRunLog(run, errorMessage);
+  await appendRunLog(run, errorMessage, { flush: true });
   run.status = finalState;
   run.errorMessage = errorMessage;
   run.finishedAt = finalState === 'failed' ? new Date().toLocaleString() : '';
   run.duration = finalState === 'failed' ? computeDuration(run.startedAt) : null;
+  (run as any)._pendingLogWrites = 0;
   await run.save();
 }
 
@@ -73,7 +104,7 @@ async function processConfiguredListExtraction(
       ...identityProfile,
       poolIsolationKey: options?.isolatedBrowserKey,
     },
-    maxPagesPerBrowser: config?.performance?.maxPagesPerBrowser || 3,
+    maxPagesPerBrowser: config?.performance?.maxPagesPerBrowser || getDefaultMaxPagesPerBrowser(),
     blockResources: options?.blockResources ?? (config?.performance?.blockResources !== false),
   });
   const poolKey = lease.key;
@@ -86,7 +117,7 @@ async function processConfiguredListExtraction(
     if (await detectCloudflareChallenge(page)) {
       await appendRunLog(run, 'Cloudflare challenge detected before extraction. Waiting for verification to complete...');
       const challengeCleared = await waitForCloudflareToClear(page, {
-        timeoutMs: config?.cloudflareWaitTimeoutMs || 45_000,
+        timeoutMs: config?.cloudflareWaitTimeoutMs || CLOUDFLARE_WAIT_MS,
         pollMs: config?.cloudflarePollIntervalMs || 2_000,
       });
       if (!challengeCleared) {
@@ -96,7 +127,7 @@ async function processConfiguredListExtraction(
     }
 
     const amazonChallenge = await detectAmazonChallengeAndWait(page, {
-      timeoutMs: config?.amazonChallengeWaitTimeoutMs || 90_000,
+      timeoutMs: config?.amazonChallengeWaitTimeoutMs || AMAZON_WAIT_MS,
       pollMs: config?.amazonChallengePollIntervalMs || 5_000,
     });
     if (amazonChallenge.detected) {
@@ -108,7 +139,7 @@ async function processConfiguredListExtraction(
     }
 
     const microsoftChallenge = await detectMicrosoftChallengeAndWait(page, {
-      timeoutMs: config?.microsoftChallengeWaitTimeoutMs || 60_000,
+      timeoutMs: config?.microsoftChallengeWaitTimeoutMs || MICROSOFT_WAIT_MS,
       pollMs: config?.microsoftChallengePollIntervalMs || 5_000,
     });
     if (microsoftChallenge.detected) {
@@ -233,7 +264,12 @@ async function buildIdentityProfile(userId: string, automationId: string, config
   // Adaptive strategy: retries should not repeat the same browser profile.
   // For known anti-bot job boards, progressively switch engine/mode.
   if (antiBotTarget) {
-    if (attemptsMade === 1) {
+    if (DISABLE_VISIBLE_BROWSER_RETRY) {
+      // Memory-constrained mode: keep headless remote browser and only rotate
+      // proxy/user-agent (done above) across attempts. Avoids the heavyweight
+      // local Chromium launch that visible mode forces.
+      identityStrategy = attemptsMade === 0 ? 'baseline-antibot' : 'retry-headless-rotated';
+    } else if (attemptsMade === 1) {
       browserType = 'camoufox';
       headless = false;
       useStealth = true;
@@ -359,10 +395,27 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
               throw firstError;
             }
 
+            // A second Chromium on a 512MB host almost always OOM-kills the service.
+            // Surface the failure and let the normal attempt/retry path handle it.
+            if (isLowMemoryMode()) {
+              await appendRunLog(
+                run,
+                'Detected network-level navigation failure. Skipping isolated-browser fallback (LOW_MEMORY_MODE) to avoid OOM.',
+                { flush: true }
+              );
+              throw firstError;
+            }
+
             await appendRunLog(
               run,
-              'Detected network-level navigation failure. Retrying once with an isolated fresh browser context (no pooled reuse, resources unblocked).'
+              'Detected network-level navigation failure. Retrying once with an isolated fresh browser context (no pooled reuse, resources unblocked).',
+              { flush: true }
             );
+
+            if (extractionPoolKey) {
+              await evictBrowserFromPool(extractionPoolKey).catch(() => {});
+              extractionPoolKey = null;
+            }
 
             const isolatedKey = `net-fallback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const fallbackResult = await processConfiguredListExtraction(

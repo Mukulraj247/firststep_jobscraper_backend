@@ -2,6 +2,11 @@ import type { Browser, BrowserContext, Page } from 'playwright-core';
 import logger from '../logger';
 import { BrowserLaunchProfile, connectToRemoteBrowser } from '../browser-management/browserConnection';
 import { applyStealthOverrides } from './unblocker';
+import {
+  getBrowserPoolIdleTtlMs,
+  getDefaultMaxPagesPerBrowser,
+  isLowMemoryMode,
+} from '../utils/memoryMode';
 
 interface PooledBrowserEntry {
   key: string;
@@ -31,8 +36,8 @@ interface AcquirePooledPageOptions {
 }
 
 const pooledBrowsers = new Map<string, PooledBrowserEntry>();
-const IDLE_BROWSER_TTL_MS = parseInt(process.env.BROWSER_POOL_IDLE_TTL_MS || '90000', 10);
-const CLEANUP_INTERVAL_MS = parseInt(process.env.BROWSER_POOL_CLEANUP_INTERVAL_MS || '30000', 10);
+const IDLE_BROWSER_TTL_MS = getBrowserPoolIdleTtlMs();
+const CLEANUP_INTERVAL_MS = parseInt(process.env.BROWSER_POOL_CLEANUP_INTERVAL_MS || '15000', 10);
 
 let cleanupTimer: NodeJS.Timeout | null = null;
 
@@ -59,6 +64,11 @@ const buildPoolKey = (profile?: AcquirePooledPageOptions['profile']) =>
 
 const shouldBlockRequest = (url: string, resourceType: string) => {
   if (resourceType === 'image' || resourceType === 'font' || resourceType === 'media') {
+    return true;
+  }
+  // Extra cut on constrained hosts: stylesheets are large and rarely needed for
+  // CSS-selector list extraction (text/href still resolve without CSS).
+  if (isLowMemoryMode() && resourceType === 'stylesheet') {
     return true;
   }
   return adAndAnalyticsPatterns.some((pattern) => url.includes(pattern));
@@ -90,12 +100,16 @@ const ensureCleanupLoop = () => {
 async function getOrCreateBrowser(options: AcquirePooledPageOptions): Promise<PooledBrowserEntry> {
   ensureCleanupLoop();
   const key = buildPoolKey(options.profile);
-  const maxPages = options.maxPagesPerBrowser || 3;
+  const maxPages = options.maxPagesPerBrowser || getDefaultMaxPagesPerBrowser();
 
-  const existing = pooledBrowsers.get(key);
-  if (existing && !existing.closing && existing.activePages < existing.maxPages) {
-    existing.lastUsedAt = Date.now();
-    return existing;
+  // Low-memory: never reuse a Chromium process across jobs — reuse often leaves
+  // renderer RSS elevated and can briefly stack two browsers during fallbacks.
+  if (!isLowMemoryMode()) {
+    const existing = pooledBrowsers.get(key);
+    if (existing && !existing.closing && existing.activePages < existing.maxPages) {
+      existing.lastUsedAt = Date.now();
+      return existing;
+    }
   }
 
   const browser = await connectToRemoteBrowser(undefined, options.profile);
@@ -119,13 +133,13 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
 
   try {
     const locale = options.profile?.locale || 'en-US';
+    const viewport = isLowMemoryMode()
+      ? { width: 1280, height: 720 }
+      : { width: 1366, height: 900 };
     const context = await entry.browser.newContext({
       userAgent: options.profile?.userAgent,
       locale,
-      // Desktop viewport matches what the extension's recording session would
-      // have seen. Mobile-ish viewports break layout/selector assumptions and
-      // trigger Amazon/Microsoft mobile-specific anti-bot paths more often.
-      viewport: { width: 1366, height: 900 },
+      viewport,
       // Accept-Language aligned with locale — Amazon Jobs, LinkedIn and
       // similar bot-filters look for the mismatch between navigator.language
       // (set via stealth) and the HTTP Accept-Language header.
@@ -177,6 +191,10 @@ export async function releasePooledPage(lease: PooledPageLease | null | undefine
     if (entry) {
       entry.activePages = Math.max(0, entry.activePages - 1);
       entry.lastUsedAt = Date.now();
+      // Free Chromium immediately when idle TTL is 0 or low-memory mode is on.
+      if (entry.activePages === 0 && (isLowMemoryMode() || IDLE_BROWSER_TTL_MS === 0)) {
+        await evictBrowserFromPool(lease.key);
+      }
     }
   }
 }

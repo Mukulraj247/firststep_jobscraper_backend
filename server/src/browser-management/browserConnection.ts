@@ -1,6 +1,7 @@
 import { chromium, firefox } from 'playwright-core';
 import type { Browser } from 'playwright-core';
 import logger from '../logger';
+import { isLowMemoryMode } from '../utils/memoryMode';
 
 export type BrowserType = 'playwright' | 'camoufox';
 
@@ -112,42 +113,78 @@ async function getBrowserServiceEndpoint(): Promise<string> {
 /**
  * Launch a local browser as fallback when browser service is unavailable
  */
+function buildChromiumLaunchArgs(): string[] {
+    const lowMemory = isLowMemoryMode();
+    // Scale factor 2 doubles compositor/raster memory — never do that on 512MB hosts.
+    const scaleFactor = lowMemory ? '1' : (process.env.CHROMIUM_DEVICE_SCALE_FACTOR || '1');
+    const rendererJsHeap = lowMemory ? '96' : (process.env.CHROMIUM_JS_HEAP_MB || '192');
+
+    const args = [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process,TranslateUI,BlinkGenPropertyTrees',
+        '--disable-site-isolation-trials',
+        '--disable-extensions',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--force-color-profile=srgb',
+        `--force-device-scale-factor=${scaleFactor}`,
+        '--ignore-certificate-errors',
+        '--mute-audio',
+        `--js-flags=--max-old-space-size=${rendererJsHeap}`,
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-component-update',
+        '--disable-default-apps',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--font-render-hinting=none',
+    ];
+
+    if (lowMemory) {
+        // Keep Chromium to one renderer on tiny instances. Avoid --single-process
+        // (unstable with Playwright); renderer limit + no-zygote is the safer cut.
+        args.push(
+            '--renderer-process-limit=1',
+            '--no-zygote',
+            '--disable-hang-monitor',
+            '--disable-sync',
+            '--metrics-recording-only',
+            '--disable-domain-reliability'
+        );
+    }
+
+    return args;
+}
+
 async function launchLocalBrowser(profile?: BrowserLaunchProfile): Promise<Browser> {
     logger.warn('Attempting to launch local browser');
     logger.warn('Note: This requires Chromium binaries to be installed (npx playwright install chromium)');
 
     try {
+        const lowMemory = isLowMemoryMode();
         const launchOptions = {
             headless: profile?.headless ?? true,
             proxy: profile?.proxy || undefined,
-            args: [
-                '--disable-blink-features=AutomationControlled',
-                '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process',
-                '--disable-site-isolation-trials',
-                '--disable-extensions',
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--force-color-profile=srgb',
-                '--force-device-scale-factor=2',
-                '--ignore-certificate-errors',
-                '--mute-audio',
-                '--js-flags=--max-old-space-size=256',
-                '--disable-background-networking',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-breakpad',
-                '--disable-component-extensions-with-background-pages',
-                '--disable-component-update',
-                '--disable-default-apps',
-                '--disable-ipc-flooding-protection',
-                '--disable-renderer-backgrounding'
-            ],
+            args: buildChromiumLaunchArgs(),
         };
 
+        // playwright-extra + stealth plugin adds noticeable RSS; on low-memory hosts
+        // rely on context-level stealth overrides instead.
+        const allowStealthPlugin =
+            !!profile?.useStealth &&
+            !lowMemory &&
+            process.env.DISABLE_STEALTH_PLUGIN !== 'true';
+
         try {
-            if (profile?.useStealth) {
+            if (allowStealthPlugin) {
                 const { chromium: chromiumExtra } = require('playwright-extra');
                 const stealthPlugin = require('puppeteer-extra-plugin-stealth');
                 chromiumExtra.use(stealthPlugin());
@@ -161,7 +198,11 @@ async function launchLocalBrowser(profile?: BrowserLaunchProfile): Promise<Brows
 
         const browser = await chromium.launch(launchOptions);
 
-        logger.info('Successfully launched local browser');
+        logger.info(
+            lowMemory
+                ? 'Successfully launched local browser (low-memory Chromium flags)'
+                : 'Successfully launched local browser'
+        );
         return browser;
     } catch (error: any) {
         logger.error(`Failed to launch local browser: ${error.message}`);

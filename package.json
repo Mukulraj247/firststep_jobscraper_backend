@@ -84,8 +84,8 @@
   },
   "scripts": {
     "start": "npm run build:server && concurrently -k \"npm run server\" \"npm run client\"",
-    "server": "cross-env NODE_OPTIONS='--max-old-space-size=4096' node server/dist/server/src/server.js",
-    "worker": "cross-env NODE_OPTIONS='--max-old-space-size=4096' node server/dist/server/src/worker.js",
+    "server": "node --expose-gc server/dist/server/src/server.js",
+    "worker": "node --expose-gc server/dist/server/src/worker.js",
     "start:dev": "concurrently -k \"npm run server:dev\" \"npm run client\"",
     "server:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/server.ts",
     "worker:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/worker.ts",

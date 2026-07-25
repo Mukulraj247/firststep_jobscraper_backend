@@ -22,7 +22,16 @@ interface RecordingJobData {
   runId?: string;
 }
 
+let recordingWorkersRegistered = false;
+
 export async function startWorkers() {
+  // `server.ts` calls this directly AND imports this module for its side effect
+  // (top-level `startWorkers()`), which would otherwise re-run every `agenda.define`.
+  // Guard so processors are registered exactly once per process.
+  if (recordingWorkersRegistered) {
+    return;
+  }
+  recordingWorkersRegistered = true;
   const agenda = await getAgenda();
 
   // Worker for initializing browser recording

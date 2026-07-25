@@ -97,7 +97,9 @@ export let io = new Server(server, {
   cleanupEmptyChildNamespaces: true,
   pingTimeout: 60000,
   pingInterval: 25000,
-  maxHttpBufferSize: 1e8,
+  // 100MB default is dangerous on small instances — a single buffered message can OOM.
+  // Run-status events are tiny; keep a modest default, overridable for self-hosted heavy payloads.
+  maxHttpBufferSize: parseInt(process.env.SOCKET_MAX_HTTP_BUFFER_BYTES || String(10 * 1024 * 1024), 10),
   transports: ['websocket', 'polling'],
   cors: CORS_CONFIG
 });
@@ -158,13 +160,16 @@ app.get('/', function (req, res) {
 if (require.main === module) {
   const serverIntervals: NodeJS.Timeout[] = [];
 
+  // Legacy `queued`-status poller. The Agenda scraper path uses `pending`, so this rarely
+  // has work — poll less often by default to cut idle DB traffic (tunable for self-host).
+  const queuedRunsPollMs = parseInt(process.env.QUEUED_RUNS_POLL_MS || '15000', 10);
   const processQueuedRunsInterval = setInterval(async () => {
     try {
       await processQueuedRuns();
     } catch (error: any) {
       logger.log('error', `Error in processQueuedRuns interval: ${error.message}`);
     }
-  }, 5000);
+  }, queuedRunsPollMs);
   serverIntervals.push(processQueuedRunsInterval);
 
   const browserPoolCleanupInterval = setInterval(() => {
@@ -192,6 +197,12 @@ if (require.main === module) {
       await recoverOrphanedRuns();
 
       if (runEmbeddedWorkers) {
+        if (process.env.LOW_MEMORY_MODE === 'true') {
+          logger.log(
+            'warn',
+            'LOW_MEMORY_MODE enabled: Chromium is lean, browsers close after each job, retries/fallbacks are reduced. Suitable for Render free (512MB); disable on paid ≥2GB instances.'
+          );
+        }
         await startWorkers();
         await startScraperWorker();
         await startAutomationScheduleWorker();
