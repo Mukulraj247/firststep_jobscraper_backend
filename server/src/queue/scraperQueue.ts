@@ -52,11 +52,13 @@ let agendaInstance: Agenda | null = null;
 
 function getAgendaConfig(): AgendaConfig {
   const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/maxun';
+  const processEvery = process.env.AGENDA_PROCESS_EVERY || '10 seconds';
   return {
     db: {
       address: mongoUri,
       collection: 'agendaJobs',
     },
+    processEvery,
     defaultLockLifetime: 10 * 60 * 1000,
     disableAutoIndex: false,
   };

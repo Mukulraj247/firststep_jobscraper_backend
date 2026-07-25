@@ -63,6 +63,7 @@ RunSchema.set('toJSON', {
 
 RunSchema.index({ robotMetaId: 1, startedAt: 1 }, { name: 'run_robot_meta_started_at_idx' });
 RunSchema.index({ status: 1, startedAt: 1 }, { name: 'run_status_started_at_idx' });
+RunSchema.index({ runId: 1 }, { unique: true, name: 'run_id_uidx' });
 
 const Run = mongoose.models.Run || mongoose.model<IRun>('Run', RunSchema);
 

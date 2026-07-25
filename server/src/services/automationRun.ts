@@ -22,7 +22,7 @@ export async function reenqueueStalePendingScraperRuns(options?: ReenqueuePendin
   try {
     const minAgeMs = options?.minAgeMs ?? STALE_PENDING_MS;
     const maxRuns = options?.maxRuns ?? 40;
-    const runs = await Run.find({ status: 'pending' }).limit(maxRuns);
+    const runs = await Run.find({ status: 'pending' }).limit(maxRuns).lean();
     const now = Date.now();
     let ensured = 0;
     for (const run of runs) {
