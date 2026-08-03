@@ -11,7 +11,7 @@ import logger from './logger';
 import mongoose, { connectDB, syncDB } from './storage/db';
 import cookieParser from 'cookie-parser';
 import { SERVER_PORT } from "./constants/config";
-import { readdirSync } from "fs"
+import { existsSync, readdirSync } from "fs"
 import { fork } from 'child_process';
 import { capture } from "./utils/analytics";
 import swaggerUi from 'swagger-ui-express';
@@ -55,8 +55,12 @@ const isCrossOriginDeployment = (() => {
     return false;
   }
 })();
+/** Secure cookies require HTTPS. Never pair SameSite=None with plain HTTP. */
+const sessionCookieSecure = (process.env.PUBLIC_URL || '').trim().toLowerCase().startsWith('https:');
 const sessionCookieSameSite: 'none' | 'lax' =
-  process.env.NODE_ENV === 'production' && isCrossOriginDeployment ? 'none' : 'lax';
+  process.env.NODE_ENV === 'production' && isCrossOriginDeployment && sessionCookieSecure
+    ? 'none'
+    : 'lax';
 
 const CORS_CONFIG = {
   origin: normalizeOrigin(process.env.PUBLIC_URL),
@@ -81,7 +85,7 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === 'production',
+      secure: sessionCookieSecure,
       sameSite: sessionCookieSameSite,
       maxAge: 24 * 60 * 60 * 1000,
     }
@@ -148,14 +152,45 @@ const workerForkEnv = { ...process.env, TS_NODE_PROJECT: serverTsconfigPath };
 
 let recordingWorkerProcess: any;
 
-app.get('/', function (req, res) {
-  capture(
-    'maxun-oss-server-run', {
-    event: 'server_started',
-  }
-  );
-  return res.send('Maxun server started 🚀');
-});
+/** Vite production output (projectRoot/build). Served by API for single-Droplet HTTP deploys. */
+const frontendBuildPath = path.resolve(__dirname, '../../../../build');
+const serveFrontend =
+  process.env.SERVE_FRONTEND !== 'false' &&
+  existsSync(path.join(frontendBuildPath, 'index.html'));
+
+const isSpaAssetRequest = (reqPath: string): boolean => {
+  const apiPrefixes = [
+    '/api',
+    '/auth',
+    '/record',
+    '/workflow',
+    '/storage',
+    '/proxy',
+    '/webhook',
+    '/api-docs',
+    '/socket.io',
+  ];
+  return !apiPrefixes.some((prefix) => reqPath === prefix || reqPath.startsWith(`${prefix}/`));
+};
+
+if (serveFrontend) {
+  app.use(express.static(frontendBuildPath, { index: false }));
+  app.get('*', (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (!isSpaAssetRequest(req.path)) return next();
+    return res.sendFile(path.join(frontendBuildPath, 'index.html'));
+  });
+  logger.log('info', `Serving frontend from ${frontendBuildPath}`);
+} else {
+  app.get('/', function (req, res) {
+    capture(
+      'maxun-oss-server-run', {
+      event: 'server_started',
+    }
+    );
+    return res.send('Maxun server started 🚀');
+  });
+}
 
 if (require.main === module) {
   const serverIntervals: NodeJS.Timeout[] = [];

@@ -29,12 +29,15 @@ const isCrossOriginDeployment = (() => {
     return false;
   }
 })();
-const cookieSameSite: 'none' | 'lax' = IS_PRODUCTION && isCrossOriginDeployment ? 'none' : 'lax';
+/** Secure cookies need HTTPS. Never use SameSite=None on plain HTTP. */
+const cookieSecure = (process.env.PUBLIC_URL || '').trim().toLowerCase().startsWith('https:');
+const cookieSameSite: 'none' | 'lax' =
+  IS_PRODUCTION && isCrossOriginDeployment && cookieSecure ? 'none' : 'lax';
 
 /** JWT session cookie for the web app (`requireSignIn`). */
 const jwtCookieOptions = {
   httpOnly: true,
-  secure: IS_PRODUCTION,
+  secure: cookieSecure,
   sameSite: cookieSameSite,
   path: '/',
 };
@@ -43,7 +46,7 @@ const jwtCookieOptions = {
 const oauthStatusCookieOptions = {
   httpOnly: false,
   maxAge: 60000,
-  secure: IS_PRODUCTION,
+  secure: cookieSecure,
   sameSite: cookieSameSite,
   path: '/',
 };
