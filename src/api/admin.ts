@@ -83,6 +83,7 @@ export type DropletComputeSnapshot = {
   memoryMb: number | null;
   diskGb: number | null;
   priceMonthlyUsd: number | null;
+  publicIpv4?: string | null;
   createdAt: string | null;
   metrics: {
     window: '1h' | '6h' | '24h';
@@ -90,10 +91,17 @@ export type DropletComputeSnapshot = {
     end: number;
     cpuPercent: MetricSeriesSummary;
     memoryUsedPercent: MetricSeriesSummary;
+    memoryUsedBytes?: number | null;
     memoryTotalBytes: number | null;
     memoryAvailableBytes: number | null;
+    diskUsedPercent?: MetricSeriesSummary;
+    diskUsedBytes?: number | null;
+    diskTotalBytes?: number | null;
     bandwidthInboundMbps: MetricSeriesSummary;
     bandwidthOutboundMbps: MetricSeriesSummary;
+    diskReadMbps?: MetricSeriesSummary;
+    diskWriteMbps?: MetricSeriesSummary;
+    load1?: MetricSeriesSummary;
     empty: boolean;
     note: string | null;
   };
@@ -103,6 +111,9 @@ export type DigitalOceanDashboard = {
   configured: boolean;
   generatedAt: string;
   error?: string;
+  hint?: string;
+  resolvedIds?: number[];
+  availableDroplets?: Array<{ id: number; name: string; status: string; publicIpv4: string | null }>;
   droplets: DropletComputeSnapshot[];
 };
 

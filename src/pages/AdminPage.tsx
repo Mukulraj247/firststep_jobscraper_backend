@@ -87,41 +87,147 @@ const formatPct = (n?: number | null, digits = 1) => {
 
 const formatMbps = (n?: number | null) => {
   if (n == null || !Number.isFinite(n)) return '—';
+  if (n < 0.01) return `${(n * 1000).toFixed(1)} Kbps`;
   return `${n.toFixed(3)} Mbps`;
 };
 
-/** Tiny CSS sparkline from metric points (no chart library). */
-const Sparkline = ({
+const formatGiB = (bytes?: number | null) => {
+  if (bytes == null || !Number.isFinite(bytes)) return '—';
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+};
+
+const formatRamPlan = (memoryMb?: number | null) => {
+  if (memoryMb == null || !Number.isFinite(memoryMb)) return '—';
+  if (memoryMb >= 1024) return `${(memoryMb / 1024).toFixed(memoryMb % 1024 === 0 ? 0 : 1)} GB RAM`;
+  return `${memoryMb} MB RAM`;
+};
+
+/** Area-style chart (CPU / memory / bandwidth / disk) without a chart library. */
+const MetricChart = ({
+  title,
+  valueLabel,
   points,
-  color = '#1565c0',
+  color = '#0069ff',
+  height = 88,
+  yMax,
 }: {
+  title: string;
+  valueLabel: string;
   points: Array<{ t: number; v: number }>;
   color?: string;
+  height?: number;
+  yMax?: number;
 }) => {
+  const w = 320;
+  const h = height;
+  const pad = 4;
   if (!points?.length) {
     return (
-      <Typography variant="caption" color="text.secondary">
-        No samples
-      </Typography>
+      <Box
+        sx={{
+          flex: '1 1 280px',
+          minWidth: 240,
+          p: 1.5,
+          borderRadius: 2,
+          bgcolor: 'grey.50',
+          border: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
+        <Stack direction="row" justifyContent="space-between" mb={0.5}>
+          <Typography variant="caption" color="text.secondary">
+            {title}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            No samples
+          </Typography>
+        </Stack>
+        <Box sx={{ height: h, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography variant="body2" color="text.disabled">
+            Waiting for metrics agent…
+          </Typography>
+        </Box>
+      </Box>
     );
   }
   const vals = points.map((p) => p.v);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
+  const min = 0;
+  const max = yMax != null ? yMax : Math.max(...vals, 0.0001);
   const span = max - min || 1;
-  const w = 160;
-  const h = 36;
-  const path = points
-    .map((p, i) => {
-      const x = (i / Math.max(1, points.length - 1)) * w;
-      const y = h - ((p.v - min) / span) * (h - 4) - 2;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
+  const coords = points.map((p, i) => {
+    const x = pad + (i / Math.max(1, points.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((p.v - min) / span) * (h - pad * 2);
+    return { x, y };
+  });
+  const line = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const area = `${line} L${coords[coords.length - 1].x.toFixed(1)},${h - pad} L${coords[0].x.toFixed(1)},${h - pad} Z`;
   return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img" aria-label="metric sparkline">
-      <path d={path} fill="none" stroke={color} strokeWidth={1.5} />
-    </svg>
+    <Box
+      sx={{
+        flex: '1 1 280px',
+        minWidth: 240,
+        p: 1.5,
+        borderRadius: 2,
+        bgcolor: 'grey.50',
+        border: '1px solid',
+        borderColor: 'divider',
+      }}
+    >
+      <Stack direction="row" justifyContent="space-between" alignItems="baseline" mb={0.5}>
+        <Typography variant="caption" color="text.secondary" fontWeight={600}>
+          {title}
+        </Typography>
+        <Typography variant="body2" fontWeight={700} sx={{ color }}>
+          {valueLabel}
+        </Typography>
+      </Stack>
+      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={title}>
+        <path d={area} fill={color} opacity={0.12} />
+        <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+    </Box>
+  );
+};
+
+const UsageBar = ({
+  label,
+  percent,
+  detail,
+  color = '#0069ff',
+}: {
+  label: string;
+  percent: number | null | undefined;
+  detail?: string;
+  color?: string;
+}) => {
+  const pct = percent != null && Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+  return (
+    <Box sx={{ flex: '1 1 160px', minWidth: 140 }}>
+      <Stack direction="row" justifyContent="space-between" mb={0.5}>
+        <Typography variant="caption" color="text.secondary">
+          {label}
+        </Typography>
+        <Typography variant="caption" fontWeight={700}>
+          {pct == null ? '—' : `${pct.toFixed(1)}%`}
+        </Typography>
+      </Stack>
+      <Box sx={{ height: 8, borderRadius: 999, bgcolor: 'grey.200', overflow: 'hidden' }}>
+        <Box
+          sx={{
+            width: pct == null ? 0 : `${pct}%`,
+            height: '100%',
+            bgcolor: color,
+            borderRadius: 999,
+            transition: 'width 0.4s ease',
+          }}
+        />
+      </Box>
+      {detail ? (
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+          {detail}
+        </Typography>
+      ) : null}
+    </Box>
   );
 };
 
@@ -520,7 +626,15 @@ export const AdminPage = () => {
         ) : null}
       </Paper>
 
-      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+      <Paper
+        variant="outlined"
+        sx={{
+          p: 2.5,
+          mb: 2,
+          borderRadius: 2,
+          background: 'linear-gradient(180deg, #f7fafc 0%, #ffffff 48%)',
+        }}
+      >
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           justifyContent="space-between"
@@ -529,9 +643,11 @@ export const AdminPage = () => {
           mb={1.5}
         >
           <Box>
-            <Typography variant="subtitle2">DigitalOcean droplet · Scout-X compute</Typography>
+            <Typography variant="subtitle1" fontWeight={700}>
+              DigitalOcean Insights · Scout-X Droplet
+            </Typography>
             <Typography variant="caption" color="text.secondary">
-              CPU, memory, and bandwidth from the DO Monitoring API (no console login needed).
+              Live CPU %, memory, disk, bandwidth — same signals as the DO Insights tab.
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
@@ -582,10 +698,28 @@ export const AdminPage = () => {
             {doError}
           </Alert>
         ) : null}
+        {doDash?.hint ? (
+          <Alert severity="info" sx={{ mb: 1.5 }}>
+            {doDash.hint}
+          </Alert>
+        ) : null}
         {doDash && !doDash.configured ? (
           <Alert severity="info">
             {doDash.error ||
-              'Set DIGITALOCEAN_TOKEN and DIGITALOCEAN_DROPLET_IDS on the server to show droplet metrics here.'}
+              'Set DIGITALOCEAN_TOKEN (and DIGITALOCEAN_DROPLET_IDS=auto or the full Droplet ID) on the server.'}
+          </Alert>
+        ) : null}
+        {doDash?.error && doDash.configured ? (
+          <Alert severity="warning" sx={{ mb: 1.5 }}>
+            {doDash.error}
+            {doDash.availableDroplets?.length ? (
+              <Box component="span" display="block" sx={{ mt: 0.5 }}>
+                Available droplets:{' '}
+                {doDash.availableDroplets
+                  .map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`)
+                  .join(', ')}
+              </Box>
+            ) : null}
           </Alert>
         ) : null}
         {doLoading && !doDash ? (
@@ -595,67 +729,130 @@ export const AdminPage = () => {
         ) : null}
         {doDash?.droplets?.map((droplet) => {
           const m = droplet.metrics;
+          const blank = { latest: null, avg: null, max: null, points: [] as Array<{ t: number; v: number }> };
+          const diskPct = m.diskUsedPercent || blank;
+          const diskRead = m.diskReadMbps || blank;
+          const diskWrite = m.diskWriteMbps || blank;
+          const load1 = m.load1 || blank;
           return (
-            <Box key={droplet.id} sx={{ mb: 2, '&:last-child': { mb: 0 } }}>
-              <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center" mb={1}>
-                <Typography variant="body1" fontWeight={600}>
+            <Box
+              key={droplet.id}
+              sx={{
+                mb: 2,
+                p: 2,
+                borderRadius: 2,
+                border: '1px solid',
+                borderColor: 'divider',
+                bgcolor: '#fff',
+                '&:last-child': { mb: 0 },
+              }}
+            >
+              <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center" mb={1.5}>
+                <Typography variant="h6" fontWeight={700} sx={{ mr: 0.5 }}>
                   {droplet.name}
                 </Typography>
-                <Chip size="small" label={droplet.status} color={droplet.status === 'active' ? 'success' : 'default'} />
-                <Chip size="small" variant="outlined" label={droplet.sizeSlug || 'size ?'} />
+                <Chip
+                  size="small"
+                  label={droplet.status}
+                  color={droplet.status === 'active' ? 'success' : droplet.status === 'error' ? 'error' : 'default'}
+                />
+                <Chip size="small" variant="outlined" label={droplet.sizeSlug || 'plan ?'} />
                 <Chip size="small" variant="outlined" label={droplet.region || 'region ?'} />
-                {droplet.vcpus != null ? (
-                  <Chip size="small" variant="outlined" label={`${droplet.vcpus} vCPU`} />
+                {droplet.publicIpv4 ? (
+                  <Chip size="small" variant="outlined" label={droplet.publicIpv4} />
                 ) : null}
-                {droplet.memoryMb != null ? (
-                  <Chip size="small" variant="outlined" label={`${droplet.memoryMb} MB RAM`} />
-                ) : null}
+                <Chip size="small" variant="outlined" label={`ID ${droplet.id}`} />
                 {droplet.priceMonthlyUsd != null ? (
                   <Chip size="small" variant="outlined" label={`$${droplet.priceMonthlyUsd}/mo`} />
                 ) : null}
               </Stack>
-              <Stack direction="row" flexWrap="wrap" gap={1.5} mb={1}>
-                <StatCard
-                  label="CPU"
-                  value={formatPct(m.cpuPercent.latest)}
-                  hint={`avg ${formatPct(m.cpuPercent.avg)} · max ${formatPct(m.cpuPercent.max)}`}
+
+              <Stack direction="row" flexWrap="wrap" gap={1} mb={2}>
+                <Chip
+                  label={droplet.vcpus != null ? `${droplet.vcpus} vCPU` : 'vCPU ?'}
+                  sx={{ bgcolor: '#e3f2fd', fontWeight: 600 }}
                 />
-                <StatCard
+                <Chip
+                  label={formatRamPlan(droplet.memoryMb)}
+                  sx={{ bgcolor: '#e8f5e9', fontWeight: 600 }}
+                />
+                <Chip
+                  label={droplet.diskGb != null ? `${droplet.diskGb} GB disk` : 'disk ?'}
+                  sx={{ bgcolor: '#fff3e0', fontWeight: 600 }}
+                />
+                <Chip
+                  label={`CPU now ${formatPct(m.cpuPercent.latest)}`}
+                  color="primary"
+                  variant="outlined"
+                  sx={{ fontWeight: 700 }}
+                />
+                {load1.latest != null ? (
+                  <Chip label={`Load 1m ${load1.latest.toFixed(2)}`} variant="outlined" />
+                ) : null}
+              </Stack>
+
+              <Stack direction="row" flexWrap="wrap" gap={2} mb={2.5}>
+                <UsageBar
+                  label="CPU usage"
+                  percent={m.cpuPercent.latest}
+                  detail={`avg ${formatPct(m.cpuPercent.avg)} · max ${formatPct(m.cpuPercent.max)} · of ${droplet.vcpus ?? '—'} vCPU`}
+                  color="#0069ff"
+                />
+                <UsageBar
                   label="Memory used"
-                  value={formatPct(m.memoryUsedPercent.latest)}
-                  hint={`avg ${formatPct(m.memoryUsedPercent.avg)} · total ${formatBytes(m.memoryTotalBytes)}`}
+                  percent={m.memoryUsedPercent.latest}
+                  detail={`${formatGiB(m.memoryUsedBytes)} / ${formatGiB(m.memoryTotalBytes)} · plan ${formatRamPlan(droplet.memoryMb)}`}
+                  color="#2e7d32"
                 />
-                <StatCard
-                  label="Bandwidth in"
-                  value={formatMbps(m.bandwidthInboundMbps.latest)}
-                  hint={`avg ${formatMbps(m.bandwidthInboundMbps.avg)}`}
-                />
-                <StatCard
-                  label="Bandwidth out"
-                  value={formatMbps(m.bandwidthOutboundMbps.latest)}
-                  hint={`avg ${formatMbps(m.bandwidthOutboundMbps.avg)}`}
+                <UsageBar
+                  label="Disk used"
+                  percent={diskPct.latest}
+                  detail={`${formatGiB(m.diskUsedBytes)} / ${formatGiB(m.diskTotalBytes)} · plan ${droplet.diskGb != null ? `${droplet.diskGb} GB` : '—'}`}
+                  color="#ed6c02"
                 />
               </Stack>
-              <Stack direction="row" flexWrap="wrap" gap={3} sx={{ mt: 1 }}>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    CPU trend
-                  </Typography>
-                  <Sparkline points={m.cpuPercent.points} color="#1565c0" />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    Memory trend
-                  </Typography>
-                  <Sparkline points={m.memoryUsedPercent.points} color="#2e7d32" />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    BW out trend
-                  </Typography>
-                  <Sparkline points={m.bandwidthOutboundMbps.points} color="#6a1b9a" />
-                </Box>
+
+              <Stack direction="row" flexWrap="wrap" gap={1.5} mb={1}>
+                <MetricChart
+                  title="CPU usage"
+                  valueLabel={formatPct(m.cpuPercent.latest)}
+                  points={m.cpuPercent.points}
+                  color="#0069ff"
+                  yMax={100}
+                />
+                <MetricChart
+                  title="Memory used"
+                  valueLabel={formatPct(m.memoryUsedPercent.latest)}
+                  points={m.memoryUsedPercent.points}
+                  color="#2e7d32"
+                  yMax={100}
+                />
+                <MetricChart
+                  title="Bandwidth out"
+                  valueLabel={formatMbps(m.bandwidthOutboundMbps.latest)}
+                  points={m.bandwidthOutboundMbps.points}
+                  color="#6a1b9a"
+                />
+                <MetricChart
+                  title="Bandwidth in"
+                  valueLabel={formatMbps(m.bandwidthInboundMbps.latest)}
+                  points={m.bandwidthInboundMbps.points}
+                  color="#00838f"
+                />
+                <MetricChart
+                  title="Disk write"
+                  valueLabel={formatMbps(diskWrite.latest)}
+                  points={diskWrite.points}
+                  color="#ef6c00"
+                />
+                <MetricChart
+                  title="Disk read"
+                  valueLabel={formatMbps(diskRead.latest)}
+                  points={diskRead.points}
+                  color="#5d4037"
+                />
               </Stack>
+
               {m.note ? (
                 <Alert severity="warning" sx={{ mt: 1.5 }}>
                   {m.note}

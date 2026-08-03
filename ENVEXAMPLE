@@ -7,12 +7,14 @@ SESSION_SECRET=maxun_session # A strong, random string used to sign session cook
 # Keep this secret; it is independent of normal scout login.
 ADMIN_PASSWORD=change-me-admin-password
 
-# Optional: DigitalOcean Monitoring API for the /admin compute panel (CPU / memory / bandwidth).
+# Optional: DigitalOcean Monitoring API for the /admin compute panel (CPU / memory / disk / bandwidth).
 # Create a Personal Access Token with read scope: https://cloud.digitalocean.com/account/api/tokens
-# Droplet ID is in the Droplet URL or `doctl compute droplet list`.
-# Metrics require the DO metrics agent on the Droplet (enabled at create time, or install later).
+# Droplet ID = full number from the Droplet URL (…/droplets/512345678), NOT the public IP.
+# Or set DIGITALOCEAN_DROPLET_IDS=auto to match PUBLIC_URL / BACKEND_URL IP.
+# Metrics require do-agent on the Droplet:
+#   curl -sSL https://repos.insights.digitalocean.com/install.sh | bash
 # DIGITALOCEAN_TOKEN=
-# DIGITALOCEAN_DROPLET_IDS=123456789
+# DIGITALOCEAN_DROPLET_IDS=auto
 
 # Optional: ZeptoMail ops digest every 6 hours (runs passed/failed + compute summary).
 # Token = Send Mail Token from your ZeptoMail Agent (SMTP/API tab).

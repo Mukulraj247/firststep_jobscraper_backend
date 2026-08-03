@@ -1,7 +1,12 @@
 /**
  * DigitalOcean Droplet metadata + Monitoring API client for Scout-X admin / ops digest.
- * Requires DIGITALOCEAN_TOKEN and DIGITALOCEAN_DROPLET_IDS (comma-separated).
- * Metrics need the DO metrics agent installed on the droplet.
+ *
+ * Env:
+ *   DIGITALOCEAN_TOKEN          — Personal Access Token (read)
+ *   DIGITALOCEAN_DROPLET_IDS    — Comma-separated droplet IDs, or `auto` / empty to
+ *                                 resolve from account (prefer PUBLIC_URL / BACKEND_URL IP)
+ *
+ * Metrics require the DO metrics agent (`do-agent`) on the Droplet.
  */
 import axios, { AxiosInstance } from 'axios';
 import logger from '../logger';
@@ -27,6 +32,7 @@ export type DropletComputeSnapshot = {
   memoryMb: number | null;
   diskGb: number | null;
   priceMonthlyUsd: number | null;
+  publicIpv4: string | null;
   createdAt: string | null;
   metrics: {
     window: MetricsWindow;
@@ -34,10 +40,17 @@ export type DropletComputeSnapshot = {
     end: number;
     cpuPercent: MetricSeriesSummary;
     memoryUsedPercent: MetricSeriesSummary;
+    memoryUsedBytes: number | null;
     memoryTotalBytes: number | null;
     memoryAvailableBytes: number | null;
+    diskUsedPercent: MetricSeriesSummary;
+    diskUsedBytes: number | null;
+    diskTotalBytes: number | null;
     bandwidthInboundMbps: MetricSeriesSummary;
     bandwidthOutboundMbps: MetricSeriesSummary;
+    diskReadMbps: MetricSeriesSummary;
+    diskWriteMbps: MetricSeriesSummary;
+    load1: MetricSeriesSummary;
     empty: boolean;
     note: string | null;
   };
@@ -47,6 +60,9 @@ export type DigitalOceanDashboard = {
   configured: boolean;
   generatedAt: string;
   error?: string;
+  hint?: string;
+  resolvedIds?: number[];
+  availableDroplets?: Array<{ id: number; name: string; status: string; publicIpv4: string | null }>;
   droplets: DropletComputeSnapshot[];
 };
 
@@ -57,15 +73,12 @@ const WINDOW_SECONDS: Record<MetricsWindow, number> = {
 };
 
 export function isDigitalOceanConfigured(): boolean {
-  return !!(
-    String(process.env.DIGITALOCEAN_TOKEN || '').trim() &&
-    parseDropletIds().length > 0
-  );
+  return !!String(process.env.DIGITALOCEAN_TOKEN || '').trim();
 }
 
 export function parseDropletIds(): number[] {
   const raw = String(process.env.DIGITALOCEAN_DROPLET_IDS || '').trim();
-  if (!raw) return [];
+  if (!raw || raw.toLowerCase() === 'auto') return [];
   return raw
     .split(/[,;\s]+/)
     .map((s) => parseInt(s.trim(), 10))
@@ -83,12 +96,26 @@ function getClient(): AxiosInstance | null {
   if (!token) return null;
   return axios.create({
     baseURL: DO_API,
-    timeout: 20_000,
+    timeout: 25_000,
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
   });
+}
+
+function publicIpFromEnv(): string | null {
+  for (const key of ['PUBLIC_URL', 'BACKEND_URL', 'VITE_PUBLIC_URL']) {
+    const raw = String(process.env[key] || '').trim();
+    if (!raw) continue;
+    try {
+      const host = new URL(raw).hostname;
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
 }
 
 type PromResult = {
@@ -104,8 +131,7 @@ function extractValues(payload: any): PromResult[] {
 function flattenPoints(series: PromResult[]): Array<{ t: number; v: number }> {
   const points: Array<{ t: number; v: number }> = [];
   for (const s of series) {
-    const values = s.values || [];
-    for (const pair of values) {
+    for (const pair of s.values || []) {
       const t = Number(pair[0]);
       const v = Number(pair[1]);
       if (Number.isFinite(t) && Number.isFinite(v)) points.push({ t, v });
@@ -115,7 +141,7 @@ function flattenPoints(series: PromResult[]): Array<{ t: number; v: number }> {
   return points;
 }
 
-function summarize(points: Array<{ t: number; v: number }>, maxPoints = 48): MetricSeriesSummary {
+function summarize(points: Array<{ t: number; v: number }>, maxPoints = 64): MetricSeriesSummary {
   if (!points.length) {
     return { latest: null, avg: null, max: null, points: [] };
   }
@@ -131,7 +157,7 @@ function summarize(points: Array<{ t: number; v: number }>, maxPoints = 48): Met
   };
 }
 
-/** Align timestamps across CPU modes and compute busy % = 100 * (1 - idle/total). */
+/** Busy % = 100 * (1 - idle/total) across CPU modes. */
 function cpuPercentFromModes(series: PromResult[]): Array<{ t: number; v: number }> {
   const byTime = new Map<number, Record<string, number>>();
   for (const s of series) {
@@ -141,7 +167,7 @@ function cpuPercentFromModes(series: PromResult[]): Array<{ t: number; v: number
       const v = Number(pair[1]);
       if (!Number.isFinite(t) || !Number.isFinite(v)) continue;
       const row = byTime.get(t) || {};
-      row[mode] = v;
+      row[mode] = (row[mode] || 0) + v;
       byTime.set(t, row);
     }
   }
@@ -156,64 +182,173 @@ function cpuPercentFromModes(series: PromResult[]): Array<{ t: number; v: number
   return points;
 }
 
-function alignRatio(
-  numerators: Array<{ t: number; v: number }>,
-  denominators: Array<{ t: number; v: number }>
-): Array<{ t: number; v: number }> {
-  if (!numerators.length || !denominators.length) return [];
-  const denByT = new Map(denominators.map((p) => [p.t, p.v]));
-  const points: Array<{ t: number; v: number }> = [];
-  for (const n of numerators) {
-    let den = denByT.get(n.t);
-    if (den == null || den <= 0) {
-      // nearest timestamp within 90s
-      let best: number | null = null;
-      let bestDelta = Infinity;
-      for (const d of denominators) {
-        const delta = Math.abs(d.t - n.t);
-        if (delta < bestDelta) {
-          bestDelta = delta;
-          best = d.v;
-        }
-      }
-      if (best == null || bestDelta > 90 || best <= 0) continue;
-      den = best;
+function nearestValue(
+  targetT: number,
+  series: Array<{ t: number; v: number }>,
+  maxDeltaSec = 120
+): number | null {
+  let best: number | null = null;
+  let bestDelta = Infinity;
+  for (const p of series) {
+    const delta = Math.abs(p.t - targetT);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = p.v;
     }
-    points.push({ t: n.t, v: Math.max(0, Math.min(100, (1 - n.v / den) * 100)) });
+  }
+  if (best == null || bestDelta > maxDeltaSec) return null;
+  return best;
+}
+
+function usedPercentFromAvailable(
+  available: Array<{ t: number; v: number }>,
+  total: Array<{ t: number; v: number }>
+): Array<{ t: number; v: number }> {
+  if (!available.length || !total.length) return [];
+  const points: Array<{ t: number; v: number }> = [];
+  for (const a of available) {
+    const tot = nearestValue(a.t, total);
+    if (tot == null || tot <= 0) continue;
+    points.push({ t: a.t, v: Math.max(0, Math.min(100, (1 - a.v / tot) * 100)) });
   }
   return points;
 }
 
-async function fetchMetric(
+function usedPercentFromFree(
+  free: Array<{ t: number; v: number }>,
+  size: Array<{ t: number; v: number }>
+): Array<{ t: number; v: number }> {
+  return usedPercentFromAvailable(free, size);
+}
+
+async function fetchMetricSafe(
   client: AxiosInstance,
   path: string,
   params: Record<string, string | number>
 ): Promise<PromResult[]> {
-  const res = await client.get(path, { params });
-  return extractValues(res.data);
+  try {
+    const res = await client.get(path, { params });
+    return extractValues(res.data);
+  } catch (error: any) {
+    const status = error?.response?.status;
+    const msg = error?.response?.data?.message || error?.message;
+    logger.log('warn', `DO metric ${path} failed (${status || '?'}): ${msg}`);
+    return [];
+  }
 }
 
-async function fetchDropletMeta(client: AxiosInstance, id: number) {
-  const res = await client.get(`/droplets/${id}`);
-  const d = res.data?.droplet;
-  if (!d) throw new Error(`Droplet ${id} not found`);
+function dropletPublicIpv4(d: any): string | null {
+  const nets = d?.networks?.v4;
+  if (!Array.isArray(nets)) return null;
+  const pub = nets.find((n: any) => n.type === 'public');
+  return pub?.ip_address ? String(pub.ip_address) : null;
+}
+
+async function listAccountDroplets(client: AxiosInstance): Promise<
+  Array<{ id: number; name: string; status: string; publicIpv4: string | null; raw: any }>
+> {
+  const res = await client.get('/droplets', { params: { per_page: 200 } });
+  const list: any[] = Array.isArray(res.data?.droplets) ? res.data.droplets : [];
+  return list.map((d: any) => ({
+    id: Number(d.id),
+    name: String(d.name || `droplet-${d.id}`),
+    status: String(d.status || 'unknown'),
+    publicIpv4: dropletPublicIpv4(d),
+    raw: d,
+  }));
+}
+
+async function resolveDropletIds(
+  client: AxiosInstance
+): Promise<{
+  ids: number[];
+  available: Array<{ id: number; name: string; status: string; publicIpv4: string | null }>;
+  hint?: string;
+}> {
+  const listed = await listAccountDroplets(client);
+  const available = listed.map(({ id, name, status, publicIpv4 }) => ({
+    id,
+    name,
+    status,
+    publicIpv4,
+  }));
+  const configured = parseDropletIds();
+  const preferredIp = publicIpFromEnv();
+
+  if (configured.length) {
+    const known = new Set(available.map((d) => d.id));
+    const missing = configured.filter((id) => !known.has(id));
+    if (missing.length) {
+      const hint =
+        `DIGITALOCEAN_DROPLET_IDS has unknown id(s): ${missing.join(', ')}. ` +
+        `Use the full Droplet ID from the DigitalOcean URL (e.g. …/droplets/512345678), ` +
+        `not the public IP prefix. Available: ${available
+          .map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`)
+          .join(', ') || 'none'}. ` +
+        `Or set DIGITALOCEAN_DROPLET_IDS=auto`;
+      return { ids: configured, available, hint };
+    }
+    return { ids: configured, available };
+  }
+
+  if (preferredIp) {
+    const match = available.find((d) => d.publicIpv4 === preferredIp);
+    if (match) {
+      return {
+        ids: [match.id],
+        available,
+        hint: `Auto-selected droplet ${match.name} (${match.id}) from PUBLIC_URL/BACKEND_URL IP ${preferredIp}.`,
+      };
+    }
+  }
+
+  if (available.length === 1) {
+    return {
+      ids: [available[0].id],
+      available,
+      hint: `Auto-selected the only droplet in this account: ${available[0].name} (${available[0].id}).`,
+    };
+  }
+
+  const scout = available.filter((d) => /scout/i.test(d.name));
+  if (scout.length === 1) {
+    return {
+      ids: [scout[0].id],
+      available,
+      hint: `Auto-selected droplet by name: ${scout[0].name} (${scout[0].id}).`,
+    };
+  }
+
+  return {
+    ids: [],
+    available,
+    hint:
+      'Set DIGITALOCEAN_DROPLET_IDS to a full Droplet ID (from the Droplet URL), or ensure PUBLIC_URL uses this Droplet IP. ' +
+      `Available: ${available.map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`).join(', ') || 'none'}`,
+  };
+}
+
+function mapDropletMeta(d: any) {
   return {
     id: Number(d.id),
-    name: String(d.name || `droplet-${id}`),
+    name: String(d.name || `droplet-${d.id}`),
     status: String(d.status || 'unknown'),
     region: d.region?.slug || d.region?.name || null,
     sizeSlug: d.size_slug || d.size?.slug || null,
     vcpus: d.vcpus != null ? Number(d.vcpus) : d.size?.vcpus != null ? Number(d.size.vcpus) : null,
     memoryMb: d.memory != null ? Number(d.memory) : d.size?.memory != null ? Number(d.size.memory) : null,
     diskGb: d.disk != null ? Number(d.disk) : d.size?.disk != null ? Number(d.size.disk) : null,
-    priceMonthlyUsd:
-      d.size?.price_monthly != null
-        ? Number(d.size.price_monthly)
-        : d.size?.price_monthly === 0
-          ? 0
-          : null,
+    priceMonthlyUsd: d.size?.price_monthly != null ? Number(d.size.price_monthly) : null,
+    publicIpv4: dropletPublicIpv4(d),
     createdAt: d.created_at || null,
   };
+}
+
+async function fetchDropletMeta(client: AxiosInstance, id: number) {
+  const res = await client.get(`/droplets/${id}`);
+  const d = res.data?.droplet;
+  if (!d) throw new Error(`Droplet ${id} not found`);
+  return mapDropletMeta(d);
 }
 
 async function fetchDropletMetrics(
@@ -225,38 +360,68 @@ async function fetchDropletMetrics(
   const start = end - WINDOW_SECONDS[window];
   const common = { host_id: hostId, start, end };
 
-  const [cpuSeries, memAvail, memTotal, bwIn, bwOut] = await Promise.all([
-    fetchMetric(client, '/monitoring/metrics/droplet/cpu', common),
-    fetchMetric(client, '/monitoring/metrics/droplet/memory_available', common),
-    fetchMetric(client, '/monitoring/metrics/droplet/memory_total', common),
-    fetchMetric(client, '/monitoring/metrics/droplet/bandwidth', {
+  const [
+    cpuSeries,
+    memAvail,
+    memTotal,
+    fsFree,
+    fsSize,
+    bwIn,
+    bwOut,
+    diskRead,
+    diskWrite,
+    load1,
+  ] = await Promise.all([
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/cpu', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/memory_available', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/memory_total', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/filesystem_free', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/filesystem_size', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/bandwidth', {
       ...common,
       interface: 'public',
       direction: 'inbound',
     }),
-    fetchMetric(client, '/monitoring/metrics/droplet/bandwidth', {
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/bandwidth', {
       ...common,
       interface: 'public',
       direction: 'outbound',
     }),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/disk_read', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/disk_write', common),
+    fetchMetricSafe(client, '/monitoring/metrics/droplet/load_1', common),
   ]);
 
   const cpuPoints = cpuPercentFromModes(cpuSeries);
   const availPts = flattenPoints(memAvail);
   const totalPts = flattenPoints(memTotal);
-  const memUsedPts = alignRatio(availPts, totalPts);
-  const inPts = flattenPoints(bwIn).map((p) => ({
-    t: p.t,
-    // DO bandwidth is typically bits/s; present as Mbps
-    v: p.v / 1_000_000,
-  }));
-  const outPts = flattenPoints(bwOut).map((p) => ({
-    t: p.t,
-    v: p.v / 1_000_000,
-  }));
+  const memUsedPts = usedPercentFromAvailable(availPts, totalPts);
+
+  const freePts = flattenPoints(fsFree);
+  const sizePts = flattenPoints(fsSize);
+  const diskUsedPts = usedPercentFromFree(freePts, sizePts);
+
+  const toMbps = (pts: Array<{ t: number; v: number }>) =>
+    pts.map((p) => ({ t: p.t, v: p.v / 1_000_000 }));
+
+  const inPts = toMbps(flattenPoints(bwIn));
+  const outPts = toMbps(flattenPoints(bwOut));
+  // disk_read / disk_write are typically bytes/s
+  const readPts = flattenPoints(diskRead).map((p) => ({ t: p.t, v: (p.v * 8) / 1_000_000 }));
+  const writePts = flattenPoints(diskWrite).map((p) => ({ t: p.t, v: (p.v * 8) / 1_000_000 }));
+  const loadPts = flattenPoints(load1);
 
   const empty =
-    !cpuPoints.length && !memUsedPts.length && !inPts.length && !outPts.length;
+    !cpuPoints.length &&
+    !memUsedPts.length &&
+    !diskUsedPts.length &&
+    !inPts.length &&
+    !outPts.length;
+
+  const memTotalLatest = totalPts.length ? totalPts[totalPts.length - 1].v : null;
+  const memAvailLatest = availPts.length ? availPts[availPts.length - 1].v : null;
+  const diskTotalLatest = sizePts.length ? sizePts[sizePts.length - 1].v : null;
+  const diskFreeLatest = freePts.length ? freePts[freePts.length - 1].v : null;
 
   return {
     window,
@@ -264,14 +429,48 @@ async function fetchDropletMetrics(
     end,
     cpuPercent: summarize(cpuPoints),
     memoryUsedPercent: summarize(memUsedPts),
-    memoryTotalBytes: totalPts.length ? totalPts[totalPts.length - 1].v : null,
-    memoryAvailableBytes: availPts.length ? availPts[availPts.length - 1].v : null,
+    memoryUsedBytes:
+      memTotalLatest != null && memAvailLatest != null ? Math.max(0, memTotalLatest - memAvailLatest) : null,
+    memoryTotalBytes: memTotalLatest,
+    memoryAvailableBytes: memAvailLatest,
+    diskUsedPercent: summarize(diskUsedPts),
+    diskUsedBytes:
+      diskTotalLatest != null && diskFreeLatest != null ? Math.max(0, diskTotalLatest - diskFreeLatest) : null,
+    diskTotalBytes: diskTotalLatest,
     bandwidthInboundMbps: summarize(inPts),
     bandwidthOutboundMbps: summarize(outPts),
+    diskReadMbps: summarize(readPts),
+    diskWriteMbps: summarize(writePts),
+    load1: summarize(loadPts),
     empty,
     note: empty
-      ? 'No monitoring samples returned. Confirm the DigitalOcean metrics agent is installed on the droplet and the PAT can read Monitoring.'
+      ? 'No monitoring samples yet. Install the DigitalOcean metrics agent on the Droplet (`curl -sSL https://repos.insights.digitalocean.com/install.sh | bash`), wait 2–5 minutes, then Refresh DO.'
       : null,
+  };
+}
+
+function emptyMetrics(window: MetricsWindow, note: string): DropletComputeSnapshot['metrics'] {
+  const end = Math.floor(Date.now() / 1000);
+  const blank = { latest: null, avg: null, max: null, points: [] as Array<{ t: number; v: number }> };
+  return {
+    window,
+    start: end - WINDOW_SECONDS[window],
+    end,
+    cpuPercent: blank,
+    memoryUsedPercent: blank,
+    memoryUsedBytes: null,
+    memoryTotalBytes: null,
+    memoryAvailableBytes: null,
+    diskUsedPercent: blank,
+    diskUsedBytes: null,
+    diskTotalBytes: null,
+    bandwidthInboundMbps: blank,
+    bandwidthOutboundMbps: blank,
+    diskReadMbps: blank,
+    diskWriteMbps: blank,
+    load1: blank,
+    empty: true,
+    note,
   };
 }
 
@@ -283,8 +482,9 @@ export async function getDigitalOceanDashboard(
     return {
       configured: false,
       generatedAt,
-      error:
-        'DigitalOcean is not configured. Set DIGITALOCEAN_TOKEN and DIGITALOCEAN_DROPLET_IDS.',
+      error: 'DigitalOcean is not configured. Set DIGITALOCEAN_TOKEN (and optionally DIGITALOCEAN_DROPLET_IDS).',
+      hint:
+        'Create a read Personal Access Token, install do-agent on the Droplet, then set DIGITALOCEAN_DROPLET_IDS to the full numeric Droplet ID (or `auto`).',
       droplets: [],
     };
   }
@@ -299,17 +499,56 @@ export async function getDigitalOceanDashboard(
     };
   }
 
-  const ids = parseDropletIds();
+  let resolved;
+  try {
+    resolved = await resolveDropletIds(client);
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || String(error);
+    return {
+      configured: true,
+      generatedAt,
+      error: `Failed to list Droplets: ${msg}`,
+      hint: 'Check that DIGITALOCEAN_TOKEN is valid and has read scope.',
+      droplets: [],
+    };
+  }
+
+  if (!resolved.ids.length) {
+    return {
+      configured: true,
+      generatedAt,
+      error: 'No Droplet ID resolved.',
+      hint: resolved.hint,
+      availableDroplets: resolved.available,
+      resolvedIds: [],
+      droplets: [],
+    };
+  }
+
   const droplets: DropletComputeSnapshot[] = [];
 
-  for (const id of ids) {
+  for (const id of resolved.ids) {
     try {
       const meta = await fetchDropletMeta(client, id);
       const metrics = await fetchDropletMetrics(client, id, window);
       droplets.push({ ...meta, metrics });
     } catch (error: any) {
+      const status = error?.response?.status;
       const msg = error?.response?.data?.message || error?.message || String(error);
       logger.log('error', `DigitalOcean metrics failed for droplet ${id}: ${msg}`);
+
+      let note = msg;
+      if (status === 404 || /not found/i.test(msg)) {
+        note =
+          `Droplet ${id} was not found. ` +
+          `DIGITALOCEAN_DROPLET_IDS must be the full Droplet ID from the DigitalOcean URL ` +
+          `(e.g. https://cloud.digitalocean.com/droplets/512345678), not part of the public IP. ` +
+          `Available: ${resolved.available
+            .map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`)
+            .join(', ') || 'none'}. ` +
+          `Or set DIGITALOCEAN_DROPLET_IDS=auto`;
+      }
+
       droplets.push({
         id,
         name: `droplet-${id}`,
@@ -320,23 +559,19 @@ export async function getDigitalOceanDashboard(
         memoryMb: null,
         diskGb: null,
         priceMonthlyUsd: null,
+        publicIpv4: null,
         createdAt: null,
-        metrics: {
-          window,
-          start: Math.floor(Date.now() / 1000) - WINDOW_SECONDS[window],
-          end: Math.floor(Date.now() / 1000),
-          cpuPercent: { latest: null, avg: null, max: null, points: [] },
-          memoryUsedPercent: { latest: null, avg: null, max: null, points: [] },
-          memoryTotalBytes: null,
-          memoryAvailableBytes: null,
-          bandwidthInboundMbps: { latest: null, avg: null, max: null, points: [] },
-          bandwidthOutboundMbps: { latest: null, avg: null, max: null, points: [] },
-          empty: true,
-          note: msg,
-        },
+        metrics: emptyMetrics(window, note),
       });
     }
   }
 
-  return { configured: true, generatedAt, droplets };
+  return {
+    configured: true,
+    generatedAt,
+    hint: resolved.hint,
+    resolvedIds: resolved.ids,
+    availableDroplets: resolved.available,
+    droplets,
+  };
 }

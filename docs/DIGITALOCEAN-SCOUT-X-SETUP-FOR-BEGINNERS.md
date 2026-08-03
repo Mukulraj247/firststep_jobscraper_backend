@@ -740,10 +740,21 @@ Scout-X can show Droplet CPU / memory / bandwidth on **`/admin`** and email an o
 
 ```env
 DIGITALOCEAN_TOKEN=dop_v1_...
-DIGITALOCEAN_DROPLET_IDS=123456789
+# Prefer auto (matches PUBLIC_URL / BACKEND_URL IP). Or paste the FULL Droplet ID from the URL.
+DIGITALOCEAN_DROPLET_IDS=auto
 ```
 
-5. Restart Scout-X (`pm2 restart scout-x`), open `/admin`, and check the **DigitalOcean droplet** section.
+**Important:** `DIGITALOCEAN_DROPLET_IDS` must be the full numeric ID from  
+`https://cloud.digitalocean.com/droplets/512345678` — **not** `174` from the public IP `174.x.x.x`.
+
+5. Install the metrics agent on the Droplet (needed for CPU/memory graphs):
+
+```bash
+curl -sSL https://repos.insights.digitalocean.com/install.sh | bash
+systemctl status do-agent
+```
+
+Wait 2–5 minutes after install, then restart Scout-X (`pm2 restart scout-x`) and open `/admin` → **DigitalOcean Insights**.
 
 ### ZeptoMail digest
 
