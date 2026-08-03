@@ -25,6 +25,7 @@ import Run from './models/Run';
 import { closeAgenda } from './queue/scraperQueue';
 import { startScraperWorker, stopScraperWorker } from './workers/scraperWorker';
 import { rehydrateAutomationSchedules, startAutomationScheduleWorker, stopAutomationScheduleWorker } from './services/automationScheduler';
+import { registerOpsDigestJob } from './services/opsDigest';
 import { closeBrowserReusePool } from './services/browserReusePool';
 import rateLimit from 'express-rate-limit';
 
@@ -242,6 +243,11 @@ if (require.main === module) {
         await startScraperWorker();
         await startAutomationScheduleWorker();
         await rehydrateAutomationSchedules();
+        try {
+          await registerOpsDigestJob();
+        } catch (digestError: any) {
+          logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+        }
       } else {
         logger.log('info', 'Embedded workers disabled for this API process');
       }

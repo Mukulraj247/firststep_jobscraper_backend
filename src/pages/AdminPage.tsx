@@ -31,12 +31,17 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import {
   adminLogin,
   adminLogout,
+  getAdminDigitalOcean,
+  getAdminDigestStatus,
   getAdminOverview,
   getAdminRun,
   getAdminSession,
   listAdminRuns,
+  sendAdminDigestTest,
   type AdminOverview,
   type AdminRunSummary,
+  type DigitalOceanDashboard,
+  type OpsDigestStatus,
 } from '../api/admin';
 
 const STATUS_COLORS: Record<string, 'default' | 'success' | 'error' | 'warning' | 'info'> = {
@@ -73,6 +78,51 @@ const formatWhen = (iso?: string | null) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
+};
+
+const formatPct = (n?: number | null, digits = 1) => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${n.toFixed(digits)}%`;
+};
+
+const formatMbps = (n?: number | null) => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${n.toFixed(3)} Mbps`;
+};
+
+/** Tiny CSS sparkline from metric points (no chart library). */
+const Sparkline = ({
+  points,
+  color = '#1565c0',
+}: {
+  points: Array<{ t: number; v: number }>;
+  color?: string;
+}) => {
+  if (!points?.length) {
+    return (
+      <Typography variant="caption" color="text.secondary">
+        No samples
+      </Typography>
+    );
+  }
+  const vals = points.map((p) => p.v);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const w = 160;
+  const h = 36;
+  const path = points
+    .map((p, i) => {
+      const x = (i / Math.max(1, points.length - 1)) * w;
+      const y = h - ((p.v - min) / span) * (h - 4) - 2;
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img" aria-label="metric sparkline">
+      <path d={path} fill="none" stroke={color} strokeWidth={1.5} />
+    </svg>
+  );
 };
 
 const StatCard = ({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) => (
@@ -120,6 +170,14 @@ export const AdminPage = () => {
   const [detailByRunId, setDetailByRunId] = useState<Record<string, any>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
 
+  const [doWindow, setDoWindow] = useState<'1h' | '6h' | '24h'>('6h');
+  const [doDash, setDoDash] = useState<DigitalOceanDashboard | null>(null);
+  const [doLoading, setDoLoading] = useState(false);
+  const [doError, setDoError] = useState<string | null>(null);
+  const [digestStatus, setDigestStatus] = useState<OpsDigestStatus | null>(null);
+  const [digestSending, setDigestSending] = useState(false);
+  const [digestMessage, setDigestMessage] = useState<string | null>(null);
+
   const bootstrap = useCallback(async () => {
     setChecking(true);
     try {
@@ -151,6 +209,29 @@ export const AdminPage = () => {
       setOverviewLoading(false);
     }
   }, []);
+
+  const loadDigitalOcean = useCallback(async () => {
+    setDoLoading(true);
+    setDoError(null);
+    try {
+      const [dash, digest] = await Promise.all([
+        getAdminDigitalOcean(doWindow),
+        getAdminDigestStatus().catch(() => null),
+      ]);
+      setDoDash(dash);
+      if (digest) setDigestStatus(digest);
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        setAuthenticated(false);
+        setLoginError('Admin session expired. Sign in again.');
+      } else {
+        setDoError(error?.response?.data?.error || 'Failed to load DigitalOcean metrics');
+      }
+    } finally {
+      setDoLoading(false);
+    }
+  }, [doWindow]);
 
   const loadRuns = useCallback(async () => {
     setListLoading(true);
@@ -191,6 +272,11 @@ export const AdminPage = () => {
 
   useEffect(() => {
     if (!authenticated) return;
+    loadDigitalOcean();
+  }, [authenticated, loadDigitalOcean]);
+
+  useEffect(() => {
+    if (!authenticated) return;
     loadRuns();
   }, [authenticated, loadRuns]);
 
@@ -227,6 +313,30 @@ export const AdminPage = () => {
       setRuns([]);
       setDetailByRunId({});
       setExpandedRunId(null);
+      setDoDash(null);
+      setDigestStatus(null);
+      setDigestMessage(null);
+    }
+  };
+
+  const handleSendDigest = async () => {
+    setDigestSending(true);
+    setDigestMessage(null);
+    try {
+      const result = await sendAdminDigestTest();
+      const s = result.summary?.last6h;
+      setDigestMessage(
+        s
+          ? `Digest sent. Last 6h: ${s.total} runs, ${s.passed} passed, ${s.failed} failed.`
+          : 'Digest sent.'
+      );
+      const status = await getAdminDigestStatus().catch(() => null);
+      if (status) setDigestStatus(status);
+    } catch (error: any) {
+      const data = error?.response?.data;
+      setDigestMessage(data?.reason || data?.error || 'Failed to send digest');
+    } finally {
+      setDigestSending(false);
     }
   };
 
@@ -281,7 +391,8 @@ export const AdminPage = () => {
             Scout-X Admin
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Enter the admin password to view all runs, timing, and compute usage across every account.
+            Enter the ops admin password (ADMIN_PASSWORD). This is separate from normal scout
+            login — your user session is not required here.
           </Typography>
           <form onSubmit={handleLogin}>
             <Stack spacing={2}>
@@ -324,8 +435,9 @@ export const AdminPage = () => {
             onClick={() => {
               loadOverview();
               loadRuns();
+              loadDigitalOcean();
             }}
-            disabled={listLoading || overviewLoading}
+            disabled={listLoading || overviewLoading || doLoading}
           >
             Refresh
           </Button>
@@ -404,6 +516,157 @@ export const AdminPage = () => {
         {overview?.generatedAt ? (
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
             Overview as of {formatWhen(overview.generatedAt)}
+          </Typography>
+        ) : null}
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          justifyContent="space-between"
+          alignItems={{ sm: 'center' }}
+          spacing={1}
+          mb={1.5}
+        >
+          <Box>
+            <Typography variant="subtitle2">DigitalOcean droplet · Scout-X compute</Typography>
+            <Typography variant="caption" color="text.secondary">
+              CPU, memory, and bandwidth from the DO Monitoring API (no console login needed).
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <FormControl size="small" sx={{ minWidth: 100 }}>
+              <InputLabel>Window</InputLabel>
+              <Select
+                label="Window"
+                value={doWindow}
+                onChange={(e) => setDoWindow(e.target.value as '1h' | '6h' | '24h')}
+              >
+                <MenuItem value="1h">1h</MenuItem>
+                <MenuItem value="6h">6h</MenuItem>
+                <MenuItem value="24h">24h</MenuItem>
+              </Select>
+            </FormControl>
+            <Button size="small" startIcon={<RefreshIcon />} onClick={() => loadDigitalOcean()} disabled={doLoading}>
+              {doLoading ? 'Loading…' : 'Refresh DO'}
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleSendDigest}
+              disabled={digestSending || digestStatus?.canSend === false}
+            >
+              {digestSending ? 'Sending…' : 'Send test digest'}
+            </Button>
+          </Stack>
+        </Stack>
+
+        {digestStatus ? (
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            Ops digest: {digestStatus.enabled ? 'enabled' : 'disabled'} · every{' '}
+            {digestStatus.interval || '6 hours'} · ZeptoMail{' '}
+            {digestStatus.zeptoConfigured ? 'configured' : 'not configured'}
+            {digestStatus.recipients?.length
+              ? ` · to ${digestStatus.recipients.join(', ')}`
+              : ' · no recipients'}
+            {!digestStatus.canSend && digestStatus.reason ? ` — ${digestStatus.reason}` : ''}
+          </Typography>
+        ) : null}
+        {digestMessage ? (
+          <Alert severity={digestMessage.startsWith('Digest sent') ? 'success' : 'warning'} sx={{ mb: 1.5 }}>
+            {digestMessage}
+          </Alert>
+        ) : null}
+        {doError ? (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            {doError}
+          </Alert>
+        ) : null}
+        {doDash && !doDash.configured ? (
+          <Alert severity="info">
+            {doDash.error ||
+              'Set DIGITALOCEAN_TOKEN and DIGITALOCEAN_DROPLET_IDS on the server to show droplet metrics here.'}
+          </Alert>
+        ) : null}
+        {doLoading && !doDash ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+            <CircularProgress size={28} />
+          </Box>
+        ) : null}
+        {doDash?.droplets?.map((droplet) => {
+          const m = droplet.metrics;
+          return (
+            <Box key={droplet.id} sx={{ mb: 2, '&:last-child': { mb: 0 } }}>
+              <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center" mb={1}>
+                <Typography variant="body1" fontWeight={600}>
+                  {droplet.name}
+                </Typography>
+                <Chip size="small" label={droplet.status} color={droplet.status === 'active' ? 'success' : 'default'} />
+                <Chip size="small" variant="outlined" label={droplet.sizeSlug || 'size ?'} />
+                <Chip size="small" variant="outlined" label={droplet.region || 'region ?'} />
+                {droplet.vcpus != null ? (
+                  <Chip size="small" variant="outlined" label={`${droplet.vcpus} vCPU`} />
+                ) : null}
+                {droplet.memoryMb != null ? (
+                  <Chip size="small" variant="outlined" label={`${droplet.memoryMb} MB RAM`} />
+                ) : null}
+                {droplet.priceMonthlyUsd != null ? (
+                  <Chip size="small" variant="outlined" label={`$${droplet.priceMonthlyUsd}/mo`} />
+                ) : null}
+              </Stack>
+              <Stack direction="row" flexWrap="wrap" gap={1.5} mb={1}>
+                <StatCard
+                  label="CPU"
+                  value={formatPct(m.cpuPercent.latest)}
+                  hint={`avg ${formatPct(m.cpuPercent.avg)} · max ${formatPct(m.cpuPercent.max)}`}
+                />
+                <StatCard
+                  label="Memory used"
+                  value={formatPct(m.memoryUsedPercent.latest)}
+                  hint={`avg ${formatPct(m.memoryUsedPercent.avg)} · total ${formatBytes(m.memoryTotalBytes)}`}
+                />
+                <StatCard
+                  label="Bandwidth in"
+                  value={formatMbps(m.bandwidthInboundMbps.latest)}
+                  hint={`avg ${formatMbps(m.bandwidthInboundMbps.avg)}`}
+                />
+                <StatCard
+                  label="Bandwidth out"
+                  value={formatMbps(m.bandwidthOutboundMbps.latest)}
+                  hint={`avg ${formatMbps(m.bandwidthOutboundMbps.avg)}`}
+                />
+              </Stack>
+              <Stack direction="row" flexWrap="wrap" gap={3} sx={{ mt: 1 }}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    CPU trend
+                  </Typography>
+                  <Sparkline points={m.cpuPercent.points} color="#1565c0" />
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Memory trend
+                  </Typography>
+                  <Sparkline points={m.memoryUsedPercent.points} color="#2e7d32" />
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    BW out trend
+                  </Typography>
+                  <Sparkline points={m.bandwidthOutboundMbps.points} color="#6a1b9a" />
+                </Box>
+              </Stack>
+              {m.note ? (
+                <Alert severity="warning" sx={{ mt: 1.5 }}>
+                  {m.note}
+                </Alert>
+              ) : null}
+            </Box>
+          );
+        })}
+        {doDash?.generatedAt ? (
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+            DO metrics as of {formatWhen(doDash.generatedAt)} (window {doWindow})
           </Typography>
         ) : null}
       </Paper>

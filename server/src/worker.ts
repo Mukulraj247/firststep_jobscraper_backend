@@ -6,6 +6,7 @@ import mongoose, { connectDB, syncDB } from './storage/db';
 import { startWorkers } from './pgboss-worker';
 import { startScraperWorker, stopScraperWorker } from './workers/scraperWorker';
 import { rehydrateAutomationSchedules, startAutomationScheduleWorker, stopAutomationScheduleWorker } from './services/automationScheduler';
+import { registerOpsDigestJob } from './services/opsDigest';
 import { closeAgenda } from './queue/scraperQueue';
 import { closeBrowserReusePool } from './services/browserReusePool';
 
@@ -19,6 +20,11 @@ async function startWorkerRuntime() {
   await startScraperWorker();
   await startAutomationScheduleWorker();
   await rehydrateAutomationSchedules();
+  try {
+    await registerOpsDigestJob();
+  } catch (digestError: any) {
+    logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+  }
 
   logger.log('info', 'Worker runtime started');
 }

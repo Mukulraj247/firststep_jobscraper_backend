@@ -61,7 +61,11 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
             await axios.get(`${apiUrl}/auth/logout`);
             dispatch({ type: 'LOGOUT' });
             window.localStorage.removeItem('user');
-            navigate('/login');
+            // Keep ops admins on /admin — that page has its own password gate and
+            // must not bounce into the normal scout /login flow.
+            if (!window.location.pathname.startsWith('/admin')) {
+                navigate('/login');
+            }
         } catch (err) {
             console.error('Logout error:', err);
         }
@@ -138,7 +142,19 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
         },
         function (error) {
             const res = error.response;
-            if (res?.status === 401 && res.config && !res.config.__isRetryRequest) {
+            const requestUrl = String(res?.config?.url || error?.config?.url || '');
+            // Admin gate uses its own cookie (`admin_token`). A 401 there must NOT
+            // clear the normal scout user session or bounce the browser to /login.
+            const isAdminApi =
+                requestUrl.includes('/api/admin') ||
+                requestUrl.includes('/admin/');
+
+            if (
+                res?.status === 401 &&
+                res.config &&
+                !res.config.__isRetryRequest &&
+                !isAdminApi
+            ) {
                 return new Promise((_, reject) => {
                     handleLogout()
                         .then(() => {

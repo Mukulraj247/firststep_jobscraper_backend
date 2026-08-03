@@ -399,6 +399,18 @@ LOW_MEMORY_MODE=false
 # Logs
 LOGS_PATH=/opt/scout-x/server/logs
 
+# Optional — DigitalOcean compute panel on /admin (CPU / memory / bandwidth)
+# Create a read Personal Access Token, copy Droplet ID, keep metrics agent installed
+DIGITALOCEAN_TOKEN=
+DIGITALOCEAN_DROPLET_IDS=
+
+# Optional — ZeptoMail ops digest every 6 hours (runs + compute email)
+ZEPTOMAIL_TOKEN=
+ZEPTOMAIL_FROM_ADDRESS=noreply@yourdomain.com
+ZEPTOMAIL_FROM_NAME=Scout-X Ops
+OPS_DIGEST_EMAIL_TO=you@example.com
+OPS_DIGEST_ENABLED=true
+
 # Optional — leave empty until sites block you
 DEFAULT_PROXY_URL=
 PROXY_POOL=
@@ -695,6 +707,8 @@ If you already decided on DigitalOcean, use this guide. If you want lower cost f
 - [ ] Browser opens `http://IP:8080`  
 - [ ] One manual scrape succeeds  
 - [ ] One schedule tested  
+- [ ] (Optional) `/admin` DigitalOcean panel shows CPU/memory after `DIGITALOCEAN_*` env  
+- [ ] (Optional) ZeptoMail test digest from `/admin` succeeds  
 
 ---
 
@@ -708,11 +722,48 @@ If you already decided on DigitalOcean, use this guide. If you want lower cost f
 6. Upload/clone Scout-X; install; build.  
 7. Start with PM2 and `RUN_EMBEDDED_WORKERS=true`.  
 8. Open firewall; test one scrape; then one schedule.  
-9. Add domain/HTTPS/proxy/Spaces only after the basics work.
+9. Add domain/HTTPS/proxy/Spaces only after the basics work.  
+10. (Optional) Wire DigitalOcean API + ZeptoMail for `/admin` compute panel and 6-hour digests.
 
 ---
 
-## 17. If you get stuck — what to send a teammate
+## 17. Optional — Admin compute panel + ZeptoMail digest
+
+Scout-X can show Droplet CPU / memory / bandwidth on **`/admin`** and email an ops digest every **6 hours** via ZeptoMail.
+
+### DigitalOcean API
+
+1. Open [API → Tokens](https://cloud.digitalocean.com/account/api/tokens) and create a **Personal Access Token** with **read** scope.  
+2. Find your Droplet ID (Droplet page URL, or `doctl compute droplet list`).  
+3. Confirm **metrics monitoring** is enabled (agent installed when the Droplet was created, or install from DO docs). Without the agent, the API returns empty series.  
+4. Put in `.env`:
+
+```env
+DIGITALOCEAN_TOKEN=dop_v1_...
+DIGITALOCEAN_DROPLET_IDS=123456789
+```
+
+5. Restart Scout-X (`pm2 restart scout-x`), open `/admin`, and check the **DigitalOcean droplet** section.
+
+### ZeptoMail digest
+
+1. In ZeptoMail, open your Agent → **SMTP/API** → copy the **Send Mail Token**.  
+2. Use a verified from-address on that Agent.  
+3. Put in `.env`:
+
+```env
+ZEPTOMAIL_TOKEN=...
+ZEPTOMAIL_FROM_ADDRESS=noreply@yourdomain.com
+ZEPTOMAIL_FROM_NAME=Scout-X Ops
+OPS_DIGEST_EMAIL_TO=you@example.com
+OPS_DIGEST_ENABLED=true
+```
+
+4. Restart Scout-X. On `/admin`, use **Send test digest**. Agenda also sends automatically every 6 hours when enabled and configured.
+
+---
+
+## 18. If you get stuck — what to send a teammate
 
 Copy this info:
 

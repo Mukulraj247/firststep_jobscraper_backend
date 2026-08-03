@@ -17,6 +17,14 @@ import {
 } from '../middlewares/auth';
 import { batchExtractedRowCounts, computeRunDurationMs, getAutomationConfig } from '../services/automation';
 import { SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
+import {
+  getDigitalOceanDashboard,
+  parseMetricsWindow,
+} from '../services/digitalOceanMetrics';
+import {
+  getOpsDigestConfigStatus,
+  sendOpsDigest,
+} from '../services/opsDigest';
 
 const router = Router();
 
@@ -449,6 +457,78 @@ router.get('/admin/runs/:runId', requireAdmin, async (req: Request, res: Respons
   } catch (error: any) {
     logger.log('error', `Admin run detail failed: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch admin run detail' });
+  }
+});
+
+/**
+ * DigitalOcean droplet compute metrics for the /admin panel.
+ * Query: window=1h|6h|24h
+ */
+router.get('/admin/digitalocean', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const window = parseMetricsWindow(
+      req.query.window != null ? String(req.query.window) : '6h'
+    );
+    const dashboard = await getDigitalOceanDashboard(window);
+    return res.json(dashboard);
+  } catch (error: any) {
+    logger.log('error', `Admin DigitalOcean metrics failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to load DigitalOcean metrics' });
+  }
+});
+
+/**
+ * Digest / ZeptoMail configuration status (no secrets).
+ */
+router.get('/admin/digest/status', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const status = getOpsDigestConfigStatus();
+    return res.json({
+      ...status,
+      interval: '6 hours',
+    });
+  } catch (error: any) {
+    logger.log('error', `Admin digest status failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to load digest status' });
+  }
+});
+
+/**
+ * Send ops digest immediately (test / manual).
+ */
+router.post('/admin/digest/test', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const result = await sendOpsDigest({ force: true });
+    if (result.skipped) {
+      return res.status(400).json({
+        success: false,
+        skipped: true,
+        reason: result.reason,
+      });
+    }
+    if (!result.ok) {
+      return res.status(502).json({
+        success: false,
+        error: result.error || 'Failed to send digest',
+      });
+    }
+    return res.json({
+      success: true,
+      requestId: result.requestId || null,
+      summary: result.payload
+        ? {
+            generatedAt: result.payload.generatedAt,
+            last6h: {
+              total: result.payload.windows.last6h.total,
+              passed: result.payload.windows.last6h.passed,
+              failed: result.payload.windows.last6h.failed,
+            },
+          }
+        : null,
+    });
+  } catch (error: any) {
+    logger.log('error', `Admin digest test failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to send ops digest' });
   }
 });
 

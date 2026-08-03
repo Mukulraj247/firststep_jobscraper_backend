@@ -7,6 +7,21 @@ SESSION_SECRET=maxun_session # A strong, random string used to sign session cook
 # Keep this secret; it is independent of normal scout login.
 ADMIN_PASSWORD=change-me-admin-password
 
+# Optional: DigitalOcean Monitoring API for the /admin compute panel (CPU / memory / bandwidth).
+# Create a Personal Access Token with read scope: https://cloud.digitalocean.com/account/api/tokens
+# Droplet ID is in the Droplet URL or `doctl compute droplet list`.
+# Metrics require the DO metrics agent on the Droplet (enabled at create time, or install later).
+# DIGITALOCEAN_TOKEN=
+# DIGITALOCEAN_DROPLET_IDS=123456789
+
+# Optional: ZeptoMail ops digest every 6 hours (runs passed/failed + compute summary).
+# Token = Send Mail Token from your ZeptoMail Agent (SMTP/API tab).
+# ZEPTOMAIL_TOKEN=
+# ZEPTOMAIL_FROM_ADDRESS=noreply@yourdomain.com
+# ZEPTOMAIL_FROM_NAME=Scout-X Ops
+# OPS_DIGEST_EMAIL_TO=you@example.com
+# OPS_DIGEST_ENABLED=true
+
 # MongoDB (required): Mongoose models, Agenda job queue (agendaJobs collection), express-session store, Socket.IO session data.
 # Use MongoDB Atlas in production: create a cluster → Connect → Drivers → copy URI.
 # Whitelist your server IP (or 0.0.0.0/0 for testing) under Network Access.
