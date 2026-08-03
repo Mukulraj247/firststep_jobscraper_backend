@@ -1,24 +1,20 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import type { CloudScheduleDraft } from '../../shared/types';
+import { SCHEDULE_OPTIONS } from '../../../../src/constants/scheduleOptions';
 
 type PresetCron = string | null | 'custom';
 
+/** Extension UI options = shared presets + custom cron entry. */
 export const EXTENSION_SCHEDULE_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
   cron: PresetCron;
 }> = [
-  { label: 'Off', description: 'No recurring schedule', cron: null },
-  { label: 'Every 15 min', description: 'Runs every 15 minutes', cron: '*/15 * * * *' },
-  { label: 'Every 30 min', description: 'Runs every 30 minutes', cron: '*/30 * * * *' },
-  { label: 'Every hour', description: 'Runs at the top of every hour', cron: '0 * * * *' },
-  { label: 'Every 6 hours', description: 'Runs 4 times a day', cron: '0 */6 * * *' },
-  { label: 'Every 12 hours', description: 'Runs twice a day', cron: '0 */12 * * *' },
-  { label: 'Every day', description: 'Runs once daily at midnight', cron: '0 0 * * *' },
-  { label: 'Every 2 days', description: 'Runs every other day', cron: '0 0 */2 * *' },
-  { label: 'Every 3 days', description: 'Runs every 3 days', cron: '0 0 */3 * *' },
-  { label: 'Every week', description: 'Runs every Monday at midnight', cron: '0 0 * * 1' },
-  { label: 'Every month', description: 'Runs on the 1st of each month', cron: '0 0 1 * *' },
+  ...SCHEDULE_OPTIONS.map((opt) => ({
+    label: opt.label,
+    description: opt.description,
+    cron: opt.cron as PresetCron,
+  })),
   { label: 'Custom cron', description: 'Use a custom 5-field cron expression', cron: 'custom' },
 ];
 

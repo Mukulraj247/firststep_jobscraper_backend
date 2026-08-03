@@ -212,8 +212,19 @@ export async function scheduleRecurringTrigger(
   userId: string,
   cronExpression: string,
   timezone: string,
-  scheduleJobId: string
-): Promise<void> {
+  scheduleJobId: string,
+  options?: {
+    /** When set, schedule as a true interval from now (staggered), not wall-clock cron. */
+    everyMs?: number;
+    /** Agenda human-interval string, e.g. "15 minutes". Required with everyMs. */
+    humanInterval?: string;
+    /**
+     * On server rehydrate: keep an existing future nextRunAt so restart does not
+     * realign every interval job to "now + interval".
+     */
+    preserveNextRunAt?: boolean;
+  }
+): Promise<Date | null> {
   const agenda = await getAgenda();
 
   // NOTE: We deliberately do NOT call `agenda.every()` here. In agenda@5 `every()` marks the job
@@ -230,16 +241,67 @@ export async function scheduleRecurringTrigger(
   // job TZ, this pushes `nextRunAt` forward by the TZ offset (e.g. a server in IST scheduling a
   // UTC cron ends up ~5.5h in the future). Omitting `startDate` lets cron-parser compute the
   // correct next occurrence from `now`.
+  //
+  // Short presets (15m/30m/1h/…) use human-interval + skipImmediate so the first fire is
+  // "interval after save", then "interval after each run" — not shared */15 clock ticks.
+
+  let previousNextRunAt: Date | null = null;
+  if (options?.preserveNextRunAt) {
+    try {
+      const existing = await agenda.jobs({
+        name: 'schedule-triggers',
+        'data.automationId': automationId,
+      });
+      const prevJob = existing?.[0];
+      const prev = prevJob?.attrs?.nextRunAt;
+      const prevInterval = prevJob?.attrs?.repeatInterval;
+      // Only keep nextRunAt when the job was already an interval schedule.
+      // Cron-aligned nextRunAt values (e.g. shared */15 ticks) must be rebuilt
+      // so existing automations stagger after deploy.
+      const wasAlreadyInterval =
+        typeof prevInterval === 'string' &&
+        /(minute|hour|day)s?/i.test(prevInterval) &&
+        !prevInterval.includes('*');
+      if (wasAlreadyInterval && prev && new Date(prev).getTime() > Date.now()) {
+        previousNextRunAt = new Date(prev);
+      }
+    } catch {
+      /* ignore — fall through to fresh schedule */
+    }
+  }
+
   const job = (agenda as any).create('schedule-triggers', { automationId, userId });
   job.attrs.type = 'normal';
-  job.repeatEvery(cronExpression, { timezone });
+
+  const human = options?.humanInterval;
+  const everyMs = options?.everyMs;
+  if (human && everyMs && everyMs > 0) {
+    job.repeatEvery(human, { skipImmediate: true });
+    if (previousNextRunAt) {
+      job.attrs.nextRunAt = previousNextRunAt;
+    } else if (options?.preserveNextRunAt) {
+      // Migrating old wall-clock cron jobs on rehydrate: spread first fires across
+      // the interval so a server restart does not pile every automation at now+15m.
+      let hash = 0;
+      for (let i = 0; i < automationId.length; i++) {
+        hash = (hash + automationId.charCodeAt(i) * (i + 1)) % everyMs;
+      }
+      job.attrs.nextRunAt = new Date(Date.now() + 60_000 + hash);
+    }
+  } else {
+    job.repeatEvery(cronExpression, { timezone });
+  }
+
   job.unique({ 'data.automationId': automationId });
   await job.save();
 
-  logger.log(
-    'info',
-    `Scheduled recurring trigger for automation ${automationId} with cron ${cronExpression} in ${timezone}`
-  );
+  const nextRunAt: Date | null = job.attrs.nextRunAt ? new Date(job.attrs.nextRunAt) : null;
+  const desc =
+    human && everyMs
+      ? `interval ${human} (everyMs=${everyMs}, skipImmediate${previousNextRunAt ? ', preserved nextRunAt' : ''})`
+      : `cron ${cronExpression} in ${timezone}`;
+  logger.log('info', `Scheduled recurring trigger for automation ${automationId} with ${desc}`);
+  return nextRunAt;
 }
 
 export async function cancelScheduledTrigger(automationId: string): Promise<void> {

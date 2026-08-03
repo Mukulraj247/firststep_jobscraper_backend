@@ -164,7 +164,11 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
       const { browserId, runId, robotMetaId, queued } = response;
 
       setIds({ browserId, runId, robotMetaId });
-      navigate(`/runs/${robotMetaId}/run/${runId}`);
+      if (robotMetaId && runId) {
+        navigate(`/runs/${robotMetaId}/run/${runId}`);
+      } else {
+        navigate('/runs');
+      }
             
       if (queued) {
         setQueuedRuns(prev => new Set([...prev, runId]));

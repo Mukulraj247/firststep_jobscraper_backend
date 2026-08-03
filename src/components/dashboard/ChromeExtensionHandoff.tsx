@@ -4,7 +4,6 @@ import {
   Button,
   IconButton,
   InputAdornment,
-  Link,
   Paper,
   Stack,
   TextField,
@@ -85,29 +84,12 @@ export const ChromeExtensionHandoff = forwardRef<HTMLDivElement>((_, ref) => {
         <Button variant="outlined" onClick={handlePushToExtension}>
           {t('chrome_extension.push_to_extension')}
         </Button>
-        <Link
-          href="https://docs.maxun.dev"
-          target="_blank"
-          rel="noopener noreferrer"
-          underline="hover"
-          sx={{ alignSelf: 'center' }}
-        >
-          {t('chrome_extension.docs_link')}
-        </Link>
-        <Link
-          href="https://github.com/getmaxun/maxun/tree/develop/chrome-extension"
-          target="_blank"
-          rel="noopener noreferrer"
-          underline="hover"
-          sx={{ alignSelf: 'center' }}
-        >
-          {t('chrome_extension.source_link')}
-        </Link>
       </Stack>
 
       <Box sx={{ mt: 2 }}>
         <Typography variant="caption" color="text.secondary" component="p">
-          {t('chrome_extension.docs_hint')}
+          Install the Scout-X Chrome extension from this project&apos;s <code>chrome-extension/</code> folder,
+          paste the API base URL above (or push it), then pick a list and Send to Scout-X.
         </Typography>
       </Box>
     </Paper>

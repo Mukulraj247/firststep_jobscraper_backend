@@ -1,6 +1,9 @@
 # dependencies
 node_modules/
 
+# brainstorm / local agent sessions
+.superpowers/
+
 # misc
 .DS_Store
 .env.local

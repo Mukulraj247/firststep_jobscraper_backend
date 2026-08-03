@@ -194,6 +194,7 @@ interface ExtractedRow {
 const isPlainObject = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 
+/** Deep key-sorted clone for stable duplicate fingerprints (order-independent). */
 const sortObject = (value: any): any => {
   if (Array.isArray(value)) {
     return value.map(sortObject);
@@ -210,6 +211,10 @@ const sortObject = (value: any): any => {
 
   return value;
 };
+
+/** Stable row fingerprint for SaaS removeDuplicates — preserves prior sortObject semantics. */
+const fingerprintExtractedRow = (row: Record<string, any>): string =>
+  JSON.stringify(sortObject(row));
 
 const isMeaningfulValue = (value: any): boolean => {
   if (value === null || value === undefined) return false;
@@ -298,7 +303,7 @@ export const extractRowsFromOutput = (
   if (config?.dataCleanup?.removeDuplicates) {
     const seen = new Set<string>();
     cleanedRows = cleanedRows.filter((row) => {
-      const fingerprint = JSON.stringify(sortObject(row.data));
+      const fingerprint = fingerprintExtractedRow(row.data);
       if (seen.has(fingerprint)) return false;
       seen.add(fingerprint);
       return true;
@@ -745,4 +750,48 @@ export const enrichRunForSaas = async (run: any, robot?: any) => {
     rowsExtracted: extractedRowsCount || countRowsFromOutput(run.serializableOutput, config),
     screenshots: run.binaryOutput ? Object.entries(run.binaryOutput).map(([key, value]) => ({ key, value })) : [],
   };
+};
+
+/**
+ * Lightweight list enrichment — no per-run DB count, no screenshots, strips bulky fields.
+ * Pass `extractedCount` from a batched aggregation when available.
+ */
+export const enrichRunForList = (
+  run: any,
+  robot?: any,
+  extractedCount: number = 0
+) => {
+  const {
+    serializableOutput: _so,
+    binaryOutput: _bo,
+    log: _log,
+    ...rest
+  } = run || {};
+  const durationMs = computeRunDurationMs(run?.startedAt, run?.finishedAt);
+  return {
+    ...rest,
+    status: buildDashboardStatus(run),
+    durationMs,
+    duration: durationMs,
+    rowsExtracted: extractedCount,
+    // Keep empty shells so older UI code that reads these keys does not crash.
+    serializableOutput: {},
+    binaryOutput: {},
+    log: '',
+    name: run?.name || robot?.recording_meta?.name || 'Run',
+  };
+};
+
+/** Batch ExtractedData counts for a page of runs (one aggregation). */
+export async function batchExtractedRowCounts(runIds: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (!runIds.length) return map;
+  const rows = await ExtractedData.aggregate([
+    { $match: { runId: { $in: runIds } } },
+    { $group: { _id: '$runId', count: { $sum: 1 } } },
+  ]);
+  for (const row of rows) {
+    if (row?._id) map.set(String(row._id), Number(row.count) || 0);
+  }
+  return map;
 };

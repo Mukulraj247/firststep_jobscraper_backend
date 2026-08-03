@@ -11,9 +11,11 @@ import { syncAutomationSchedule, resolveEffectiveScheduleState } from '../servic
 import {
   applyColumnOverrides,
   applyReadPipelineToExtractedData,
+  batchExtractedRowCounts,
   buildDashboardStatus,
   ColumnOverride,
   computeRunDurationMs,
+  enrichRunForList,
   enrichRunForSaas,
   extractRowsFromOutput,
   getAutomationConfig,
@@ -22,9 +24,10 @@ import {
   sanitizeRowContextFields,
 } from '../services/automation';
 import { CANONICAL_JOB_FIELD_ORDER } from '../services/canonicalJobRecord';
-import { validateAutomationScheduleCron } from '../utils/schedule';
+import { intervalMsFromCron, validateAutomationScheduleCron } from '../utils/schedule';
 import { deleteAutomationCascade } from '../services/deleteAutomation';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
+import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
 
 const router = Router();
 
@@ -86,47 +89,6 @@ const normalizeAutomationUrl = (value: string) => {
   return parsedUrl.toString();
 };
 
-const parseStoredRunDate = (value?: string | null): number => {
-  if (!value || typeof value !== 'string') return 0;
-
-  const native = new Date(value).getTime();
-  if (!Number.isNaN(native)) {
-    return native;
-  }
-
-  const match = value.trim().match(
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4}),\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i
-  );
-
-  if (!match) return 0;
-
-  const [, first, second, year, hourText, minuteText, secondText, meridiemRaw] = match;
-  let day = parseInt(first, 10);
-  let month = parseInt(second, 10);
-
-  // Stored values in this app are commonly emitted as DD/MM/YYYY on some environments.
-  // If the second token is clearly a day, swap to MM/DD parsing; otherwise default to DD/MM.
-  if (day <= 12 && month > 12) {
-    day = parseInt(second, 10);
-    month = parseInt(first, 10);
-  }
-
-  let hour = parseInt(hourText, 10);
-  const minute = parseInt(minuteText, 10);
-  const secondValue = parseInt(secondText || '0', 10);
-  const meridiem = (meridiemRaw || '').toLowerCase();
-
-  if (meridiem === 'pm' && hour < 12) hour += 12;
-  if (meridiem === 'am' && hour === 12) hour = 0;
-
-  return new Date(parseInt(year, 10), month - 1, day, hour, minute, secondValue).getTime();
-};
-
-const getRunSortTime = (run?: any): number => {
-  if (!run) return 0;
-  return Math.max(parseStoredRunDate(run.finishedAt), parseStoredRunDate(run.startedAt));
-};
-
 const DEFAULT_LIST_LIMIT = 10;
 const MAX_LIST_LIMIT = 100;
 
@@ -157,7 +119,11 @@ const robotScheduleSummaryFlags = (robot: any): { active: boolean; paused: boole
 async function computeAccountRobotSummary(userId: any) {
   let activeScheduledCount = 0;
   let pausedScheduleCount = 0;
-  const cursor = Robot.find({ userId }).select('schedule recording_meta').lean().cursor();
+  // Only schedule fields — never pull recording workflows for summary chips.
+  const cursor = Robot.find(ownerIdFilter(userId))
+    .select('schedule recording_meta.saasConfig.schedule')
+    .lean()
+    .cursor();
   for await (const robot of cursor) {
     const { active, paused } = robotScheduleSummaryFlags(robot);
     if (active) activeScheduledCount += 1;
@@ -166,58 +132,52 @@ async function computeAccountRobotSummary(userId: any) {
   return { activeScheduledCount, pausedScheduleCount };
 }
 
-/** Latest run per robotMetaId for a bounded id set (aggregation; avoids loading all runs for the account). */
+/**
+ * Latest run per robot for the dashboard. Projects only status/time fields and
+ * sorts by `_id` (insert order) so we never ship serializableOutput/logs through
+ * the aggregation pipeline — that was the main refresh latency source.
+ */
 async function fetchLatestRunPerRobotMetaIds(robotMetaIds: string[]): Promise<Map<string, any>> {
   const latestRuns = new Map<string, any>();
   if (robotMetaIds.length === 0) {
     return latestRuns;
   }
 
-  const pipeline: any[] = [
+  const rows = await Run.aggregate([
     { $match: { robotMetaId: { $in: robotMetaIds } } },
     {
-      $addFields: {
-        _sa: {
-          $convert: { input: { $ifNull: ['$startedAt', ''] }, to: 'date', onError: null, onNull: null },
-        },
-        _fa: {
-          $convert: { input: { $ifNull: ['$finishedAt', ''] }, to: 'date', onError: null, onNull: null },
-        },
+      $project: {
+        robotMetaId: 1,
+        runId: 1,
+        status: 1,
+        startedAt: 1,
+        finishedAt: 1,
+        name: 1,
       },
     },
-    {
-      $addFields: {
-        _sortTs: {
-          $max: [{ $ifNull: ['$_sa', new Date(0)] }, { $ifNull: ['$_fa', new Date(0)] }],
-        },
-      },
-    },
-    { $sort: { _sortTs: -1, _id: -1 } },
+    { $sort: { _id: -1 } },
     {
       $group: {
         _id: '$robotMetaId',
         run: { $first: '$$ROOT' },
       },
     },
-  ];
+  ]);
 
-  const rows = await Run.aggregate(pipeline);
   for (const row of rows) {
-    const r = row.run;
-    if (!r) continue;
-    delete r._sa;
-    delete r._fa;
-    delete r._sortTs;
-    latestRuns.set(row._id, r);
+    if (row?.run) {
+      latestRuns.set(row._id, row.run);
+    }
   }
   return latestRuns;
 }
 
-const mapAutomation = async (robot: any, latestRun?: any) => {
-  const rowsExtracted = latestRun
-    ? await ExtractedData.countDocuments({ runId: latestRun.runId })
-    : 0;
-
+const mapAutomation = (
+  robot: any,
+  latestRun?: any,
+  rowsExtracted: number = 0
+) => {
+  const config = getAutomationConfig(robot);
   const eff = resolveEffectiveScheduleState(robot);
   const hasInterval = !!(eff.cron || eff.every);
   const rootSch = robot.schedule || {};
@@ -253,8 +213,8 @@ const mapAutomation = async (robot: any, latestRun?: any) => {
     lastRunTime: latestRun?.finishedAt || latestRun?.startedAt || null,
     rowsExtracted,
     latestRunId: latestRun?.runId || null,
-    webhookUrl: getAutomationConfig(robot).webhookUrl || '',
-    config: getAutomationConfig(robot),
+    webhookUrl: config.webhookUrl || '',
+    config,
     schedule,
   };
 };
@@ -264,11 +224,26 @@ router.use(requireSignInOrApiKey);
 router.get('/dashboard/automations', async (req: any, res: any) => {
   try {
     const { page, limit, skip } = parseListPagination(req);
+    const ownerFilter = ownerIdFilter(req.user.id);
 
     const [summary, total, robots] = await Promise.all([
       computeAccountRobotSummary(req.user.id),
-      Robot.countDocuments({ userId: req.user.id }),
-      Robot.find({ userId: req.user.id }).sort({ _id: -1 }).skip(skip).limit(limit).lean(),
+      Robot.countDocuments(ownerFilter),
+      Robot.find(ownerFilter)
+        .select([
+          'schedule',
+          'recording_meta.id',
+          'recording_meta.name',
+          'recording_meta.url',
+          'recording_meta.createdAt',
+          'recording_meta.updatedAt',
+          'recording_meta.saasConfig.webhookUrl',
+          'recording_meta.saasConfig.schedule',
+        ].join(' '))
+        .sort({ _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
     ]);
 
     const summaryOut = {
@@ -277,12 +252,24 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
       pausedScheduleCount: summary.pausedScheduleCount,
     };
 
-    const pageIds = robots.map((robot: any) => robot.recording_meta.id);
+    const pageIds = robots
+      .map((robot: any) => robot.recording_meta?.id)
+      .filter(Boolean);
     const latestRuns = await fetchLatestRunPerRobotMetaIds(pageIds);
 
-    const automations = await Promise.all(
-      robots.map((robot: any) => mapAutomation(robot, latestRuns.get(robot.recording_meta.id)))
-    );
+    const runIds = pageIds
+      .map((id: string) => latestRuns.get(id)?.runId)
+      .filter(Boolean)
+      .map(String);
+    const rowCounts = await batchExtractedRowCounts(runIds);
+
+    const automations = robots.map((robot: any) => {
+      const latestRun = latestRuns.get(robot.recording_meta.id);
+      const rowsExtracted = latestRun?.runId
+        ? rowCounts.get(String(latestRun.runId)) || 0
+        : 0;
+      return mapAutomation(robot, latestRun, rowsExtracted);
+    });
 
     const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
 
@@ -303,52 +290,59 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
  */
 router.post('/automations/schedules/stop-all', async (req: any, res: any) => {
   try {
-    const robots = await Robot.find({ userId: req.user.id });
+    const robots = await Robot.find(ownerIdFilter(req.user.id));
     let stoppedCount = 0;
+    const STOP_BATCH = 8;
 
-    for (const robot of robots) {
-      const effective = resolveEffectiveScheduleState(robot.toJSON());
-      if (!effective.enabled || (!effective.cron && !effective.every)) {
-        continue;
-      }
+    for (let i = 0; i < robots.length; i += STOP_BATCH) {
+      const batch = robots.slice(i, i + STOP_BATCH);
+      const results = await Promise.all(
+        batch.map(async (robot) => {
+          const effective = resolveEffectiveScheduleState(robot.toJSON());
+          if (!effective.enabled || (!effective.cron && !effective.every)) {
+            return 0;
+          }
 
-      const existingConfig = (robot.recording_meta as any).saasConfig || {};
-      const tz =
-        (robot.recording_meta as any)?.saasConfig?.schedule?.timezone ||
-        (robot.schedule as any)?.timezone ||
-        'UTC';
+          const existingConfig = (robot.recording_meta as any).saasConfig || {};
+          const tz =
+            (robot.recording_meta as any)?.saasConfig?.schedule?.timezone ||
+            (robot.schedule as any)?.timezone ||
+            'UTC';
 
-      const preservedCron = (effective.cron || '').trim() || (typeof existingConfig.schedule?.cron === 'string' ? existingConfig.schedule.cron.trim() : '') || '';
+          const preservedCron = (effective.cron || '').trim() || (typeof existingConfig.schedule?.cron === 'string' ? existingConfig.schedule.cron.trim() : '') || '';
 
-      const nextSaasConfig = {
-        ...existingConfig,
-        schedule: {
-          enabled: false,
-          cron: preservedCron,
-          timezone: tz,
-        },
-      };
+          const nextSaasConfig = {
+            ...existingConfig,
+            schedule: {
+              enabled: false,
+              cron: preservedCron,
+              timezone: tz,
+            },
+          };
 
-      const nextMeta = {
-        ...robot.recording_meta,
-        updatedAt: new Date().toLocaleString(),
-        saasConfig: nextSaasConfig,
-      };
+          const nextMeta = {
+            ...robot.recording_meta,
+            updatedAt: new Date().toLocaleString(),
+            saasConfig: nextSaasConfig,
+          };
 
-      const nextSchedule = await syncAutomationSchedule(
-        {
-          ...robot.toJSON(),
-          recording_meta: nextMeta,
-          schedule: robot.schedule,
-        },
-        req.user.id,
-        tz
+          const nextSchedule = await syncAutomationSchedule(
+            {
+              ...robot.toJSON(),
+              recording_meta: nextMeta,
+              schedule: robot.schedule,
+            },
+            req.user.id,
+            tz
+          );
+
+          robot.recording_meta = nextMeta;
+          robot.schedule = nextSchedule;
+          await robot.save();
+          return 1;
+        })
       );
-
-      robot.recording_meta = nextMeta;
-      robot.schedule = nextSchedule;
-      await robot.save();
-      stoppedCount += 1;
+      stoppedCount += results.reduce((sum: number, n: number) => sum + n, 0);
     }
 
     logger.log('info', `Stopped all schedules for user ${req.user.id}: ${stoppedCount} automation(s)`);
@@ -366,64 +360,71 @@ router.post('/automations/schedules/stop-all', async (req: any, res: any) => {
  */
 router.post('/automations/schedules/resume-all', async (req: any, res: any) => {
   try {
-    const robots = await Robot.find({ userId: req.user.id });
+    const robots = await Robot.find(ownerIdFilter(req.user.id));
     let resumedCount = 0;
+    const RESUME_BATCH = 8;
 
-    for (const robot of robots) {
-      const effective = resolveEffectiveScheduleState(robot.toJSON());
-      const hasInterval = !!(effective.cron || effective.every);
-      if (effective.enabled || !hasInterval) {
-        continue;
-      }
+    for (let i = 0; i < robots.length; i += RESUME_BATCH) {
+      const batch = robots.slice(i, i + RESUME_BATCH);
+      const results = await Promise.all(
+        batch.map(async (robot) => {
+          const effective = resolveEffectiveScheduleState(robot.toJSON());
+          const hasInterval = !!(effective.cron || effective.every);
+          if (effective.enabled || !hasInterval) {
+            return 0;
+          }
 
-      const existingConfig = (robot.recording_meta as any).saasConfig || {};
-      const tz =
-        effective.timezone ||
-        existingConfig.schedule?.timezone ||
-        (robot.schedule as any)?.timezone ||
-        'UTC';
+          const existingConfig = (robot.recording_meta as any).saasConfig || {};
+          const tz =
+            effective.timezone ||
+            existingConfig.schedule?.timezone ||
+            (robot.schedule as any)?.timezone ||
+            'UTC';
 
-      const v = effective.cron
-        ? validateAutomationScheduleCron(effective.cron, tz)
-        : { ok: true as const };
-      if (!v.ok) {
-        logger.log(
-          'warn',
-          `resume-all: skip automation ${robot.recording_meta?.id} — invalid stored cron: ${(v as any).error}`
-        );
-        continue;
-      }
+          const v = effective.cron
+            ? validateAutomationScheduleCron(effective.cron, tz)
+            : { ok: true as const };
+          if (!v.ok) {
+            logger.log(
+              'warn',
+              `resume-all: skip automation ${robot.recording_meta?.id} — invalid stored cron: ${(v as any).error}`
+            );
+            return 0;
+          }
 
-      const nextSaasConfig = {
-        ...existingConfig,
-        schedule: {
-          enabled: true,
-          cron: effective.cron || '',
-          timezone: tz,
-          ...(effective.every != null ? { every: effective.every } : {}),
-        },
-      };
+          const nextSaasConfig = {
+            ...existingConfig,
+            schedule: {
+              enabled: true,
+              cron: effective.cron || '',
+              timezone: tz,
+              ...(effective.every != null ? { every: effective.every } : {}),
+            },
+          };
 
-      const nextMeta = {
-        ...robot.recording_meta,
-        updatedAt: new Date().toLocaleString(),
-        saasConfig: nextSaasConfig,
-      };
+          const nextMeta = {
+            ...robot.recording_meta,
+            updatedAt: new Date().toLocaleString(),
+            saasConfig: nextSaasConfig,
+          };
 
-      const nextSchedule = await syncAutomationSchedule(
-        {
-          ...robot.toJSON(),
-          recording_meta: nextMeta,
-          schedule: robot.schedule,
-        },
-        req.user.id,
-        tz
+          const nextSchedule = await syncAutomationSchedule(
+            {
+              ...robot.toJSON(),
+              recording_meta: nextMeta,
+              schedule: robot.schedule,
+            },
+            req.user.id,
+            tz
+          );
+
+          robot.recording_meta = nextMeta;
+          robot.schedule = nextSchedule;
+          await robot.save();
+          return 1;
+        })
       );
-
-      robot.recording_meta = nextMeta;
-      robot.schedule = nextSchedule;
-      await robot.save();
-      resumedCount += 1;
+      resumedCount += results.reduce((sum: number, n: number) => sum + n, 0);
     }
 
     logger.log('info', `Resumed all pausable schedules for user ${req.user.id}: ${resumedCount} automation(s)`);
@@ -438,7 +439,7 @@ router.post('/automations/schedules/resume-all', async (req: any, res: any) => {
 router.get('/automations/:id', async (req: any, res: any) => {
   try {
     const robot: any = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     }).lean();
 
@@ -446,13 +447,14 @@ router.get('/automations/:id', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Automation not found' });
     }
 
-    const allRuns = await Run.find({ robotMetaId: req.params.id }).lean();
-    const latestRun = allRuns.length > 0
-      ? allRuns.sort((a: any, b: any) => getRunSortTime(b) - getRunSortTime(a))[0]
-      : null;
+    const latestRun =
+      (await fetchLatestRunPerRobotMetaIds([req.params.id])).get(req.params.id) ?? null;
+    const rowsExtracted = latestRun?.runId
+      ? (await batchExtractedRowCounts([String(latestRun.runId)])).get(String(latestRun.runId)) || 0
+      : 0;
 
     return res.json({
-      automation: await mapAutomation(robot, latestRun),
+      automation: mapAutomation(robot, latestRun, rowsExtracted),
       workflow: robot.recording,
       rawRobotId: robot.id,
     });
@@ -496,7 +498,7 @@ router.post('/automations', async (req: any, res: any) => {
 
     const robot = await Robot.create({
       id: uuid(),
-      userId: req.user.id,
+      userId: normalizeOwnerIdForWrite(req.user.id),
       recording_meta: {
         name,
         id: robotMetaId,
@@ -552,7 +554,7 @@ router.post('/automations', async (req: any, res: any) => {
 router.put('/automations/:id/config', async (req: any, res: any) => {
   try {
     const robot = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     });
 
@@ -581,16 +583,54 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
       }
     }
 
+    const prevSaas = getAutomationConfig(robot) || {};
+    const incoming = (config && typeof config === 'object') ? config : {};
+    // Preserve extension-authored extraction unless the client explicitly sends listExtraction.
+    // Deep-merge destinations so partial updates do not drop sibling destination configs.
+    const nextSaasConfig: Record<string, any> = {
+      ...prevSaas,
+      ...incoming,
+      ...(webhookUrl !== undefined ? { webhookUrl } : {}),
+      destinations: {
+        ...((prevSaas as any).destinations || {}),
+        ...((incoming as any).destinations || {}),
+        webhook: {
+          ...((prevSaas as any).destinations?.webhook || {}),
+          ...((incoming as any).destinations?.webhook || {}),
+          ...(webhookUrl !== undefined
+            ? { url: webhookUrl || (incoming as any).destinations?.webhook?.url || '' }
+            : {}),
+        },
+        googleSheets: {
+          ...((prevSaas as any).destinations?.googleSheets || {}),
+          ...((incoming as any).destinations?.googleSheets || {}),
+        },
+        airtable: {
+          ...((prevSaas as any).destinations?.airtable || {}),
+          ...((incoming as any).destinations?.airtable || {}),
+        },
+        database: {
+          ...((prevSaas as any).destinations?.database || {}),
+          ...((incoming as any).destinations?.database || {}),
+        },
+      },
+    };
+    if (!Object.prototype.hasOwnProperty.call(incoming, 'listExtraction') && (prevSaas as any).listExtraction) {
+      nextSaasConfig.listExtraction = (prevSaas as any).listExtraction;
+    }
+    if (!Object.prototype.hasOwnProperty.call(incoming, 'previewRows') && (prevSaas as any).previewRows) {
+      nextSaasConfig.previewRows = (prevSaas as any).previewRows;
+    }
+    if (!Object.prototype.hasOwnProperty.call(incoming, 'columnOverrides') && (prevSaas as any).columnOverrides) {
+      nextSaasConfig.columnOverrides = (prevSaas as any).columnOverrides;
+    }
+
     const nextMeta = {
       ...robot.recording_meta,
       ...(name ? { name } : {}),
       ...(normalizedStartUrl ? { url: normalizedStartUrl } : {}),
       updatedAt: new Date().toLocaleString(),
-      saasConfig: {
-        ...(getAutomationConfig(robot) || {}),
-        ...(config || {}),
-        ...(webhookUrl !== undefined ? { webhookUrl } : {}),
-      },
+      saasConfig: nextSaasConfig,
     };
 
     // Re-sync the schedule whenever the payload may have mutated it, so the
@@ -629,7 +669,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
 router.post('/automations/:id/run', async (req: any, res: any) => {
   try {
     const robot: any = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     }).lean();
 
@@ -659,20 +699,26 @@ router.get('/automations/:id/data', async (req: any, res: any) => {
     const offset = (page - 1) * limit;
 
     const robot: any = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
-    }).lean();
+    })
+      .select('recording_meta.id recording_meta.saasConfig')
+      .lean();
 
     if (!robot) {
       return res.status(404).json({ error: 'Automation not found' });
     }
 
-    const total = await ExtractedData.countDocuments({ robotMetaId: req.params.id });
-    const rows = await ExtractedData.find({ robotMetaId: req.params.id })
-      .sort({ createdAt: -1 })
-      .skip(offset)
-      .limit(limit)
-      .lean();
+    const robotMetaId = req.params.id;
+    const [total, rows] = await Promise.all([
+      ExtractedData.countDocuments({ robotMetaId }),
+      ExtractedData.find({ robotMetaId })
+        .select('runId source createdAt data')
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .lean(),
+    ]);
 
     const cfg = getAutomationConfig(robot);
     const overrides = cfg.columnOverrides || {};
@@ -681,7 +727,7 @@ router.get('/automations/:id/data', async (req: any, res: any) => {
     const databaseTargetColumns =
       normalizedTargets !== undefined ? normalizedTargets : [...DEFAULT_JOB_DATABASE_TARGET_COLUMNS];
     const transformedRows = rows.map((row: any) => ({
-      id: row.id,
+      id: row._id?.toString?.() || row.id,
       runId: row.runId,
       source: row.source,
       createdAt: row.createdAt,
@@ -758,7 +804,7 @@ async function collectExtractedColumns(robotMetaId: string): Promise<string[]> {
 router.get('/automations/:id/columns', async (req: any, res: any) => {
   try {
     const robot: any = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     }).lean();
 
@@ -786,7 +832,7 @@ router.get('/automations/:id/columns', async (req: any, res: any) => {
 router.put('/automations/:id/columns', async (req: any, res: any) => {
   try {
     const robot = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     });
 
@@ -896,7 +942,7 @@ router.get('/runs/:id', async (req: any, res: any) => {
     }
 
     const robot: any = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': run.robotMetaId,
     }).lean();
 
@@ -955,7 +1001,7 @@ router.get('/runs/:id', async (req: any, res: any) => {
 router.put('/automations/:id/schedule', async (req: any, res: any) => {
   try {
     const robot = await Robot.findOne({
-      userId: req.user.id,
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     });
 
@@ -1016,6 +1062,7 @@ router.put('/automations/:id/schedule', async (req: any, res: any) => {
     }
 
     const scheduleEnabled = wantEnabled && !!nextCron;
+    const everyMs = nextCron ? intervalMsFromCron(nextCron) : null;
 
     const nextSaasConfig = {
       ...existingConfig,
@@ -1023,6 +1070,7 @@ router.put('/automations/:id/schedule', async (req: any, res: any) => {
         enabled: scheduleEnabled,
         cron: nextCron,
         timezone: tz,
+        ...(everyMs ? { every: everyMs } : { every: undefined }),
       },
     };
 
@@ -1077,21 +1125,30 @@ router.delete('/automations/:id', async (req: any, res: any) => {
 router.get('/runs', async (req: any, res: any) => {
   try {
     const { page, limit, skip } = parseListPagination(req);
-    const robots = await Robot.find({ userId: req.user.id }).lean();
+    const robots = await Robot.find(ownerIdFilter(req.user.id))
+      .select('recording_meta.id recording_meta.name recording_meta.url recording_meta.saasConfig')
+      .lean();
     const allowedRobotIds = new Set(robots.map((robot: any) => robot.recording_meta.id));
-    const robotMetaIdFilter = req.query.robotMetaId != null ? String(req.query.robotMetaId) : '';
+    const robotMetaIdFilter = req.query.robotMetaId != null ? String(req.query.robotMetaId).trim() : '';
+
+    if (robotMetaIdFilter && !allowedRobotIds.has(robotMetaIdFilter)) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
 
     const match: any =
       robotMetaIdFilter
         ? { robotMetaId: robotMetaIdFilter }
         : { robotMetaId: { $in: Array.from(allowedRobotIds) } };
 
-    if (robotMetaIdFilter && !allowedRobotIds.has(robotMetaIdFilter)) {
-      return res.status(404).json({ error: 'Automation not found' });
-    }
-
     const pipeline: any[] = [
       { $match: match },
+      {
+        $project: {
+          serializableOutput: 0,
+          binaryOutput: 0,
+          log: 0,
+        },
+      },
       {
         $addFields: {
           _sa: {
@@ -1132,12 +1189,13 @@ router.get('/runs', async (req: any, res: any) => {
       return copy;
     });
 
-    const hydratedRuns = await Promise.all(
-      pageRuns.map(async (run: any) => {
-        const robot = robots.find((candidate: any) => candidate.recording_meta.id === run.robotMetaId);
-        return enrichRunForSaas(run, robot);
-      })
-    );
+    const countMap = await batchExtractedRowCounts(pageRuns.map((r: any) => r.runId).filter(Boolean));
+    const robotById = new Map(robots.map((r: any) => [r.recording_meta.id, r]));
+
+    const hydratedRuns = pageRuns.map((run: any) => {
+      const robot = robotById.get(run.robotMetaId);
+      return enrichRunForList(run, robot, countMap.get(run.runId) || 0);
+    });
 
     return res.json({
       runs: hydratedRuns,

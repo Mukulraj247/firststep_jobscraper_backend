@@ -3,6 +3,8 @@ import {
   validateCron,
   validateAutomationScheduleCron,
   computeNextRun,
+  intervalMsFromCron,
+  computeNextRunFromInterval,
 } from './schedule';
 
 describe('validateCron', () => {
@@ -59,5 +61,26 @@ describe('computeNextRun', () => {
 
   it('returns null for invalid input', () => {
     expect(computeNextRun('bogus', 'UTC')).toBeNull();
+  });
+});
+
+describe('intervalMsFromCron', () => {
+  it('maps short presets to interval ms', () => {
+    expect(intervalMsFromCron('*/15 * * * *')).toBe(15 * 60 * 1000);
+    expect(intervalMsFromCron('*/30 * * * *')).toBe(30 * 60 * 1000);
+    expect(intervalMsFromCron('0 * * * *')).toBe(60 * 60 * 1000);
+  });
+
+  it('returns null for calendar crons', () => {
+    expect(intervalMsFromCron('0 0 * * *')).toBeNull();
+    expect(intervalMsFromCron('0 0 * * 1')).toBeNull();
+  });
+});
+
+describe('computeNextRunFromInterval', () => {
+  it('adds everyMs from the given anchor', () => {
+    const from = new Date('2026-07-31T10:00:00.000Z');
+    const next = computeNextRunFromInterval(15 * 60 * 1000, from);
+    expect(next.toISOString()).toBe('2026-07-31T10:15:00.000Z');
   });
 });

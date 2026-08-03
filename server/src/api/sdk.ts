@@ -23,6 +23,7 @@ import {
     OutputFormat,
     SCRAPE_OUTPUT_FORMAT_OPTIONS,
 } from '../constants/output-formats';
+import { ownerIdFilter } from "../utils/ownerId";
 
 const router = Router();
 
@@ -183,10 +184,30 @@ router.post("/sdk/robots", requireAPIKey, async (req: AuthenticatedRequest, res:
  */
 router.get("/sdk/robots", requireAPIKey, async (req: AuthenticatedRequest, res: Response) => {
     try {
-        const robots = await Robot.find();
+        if (!req.user) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const rawPage = parseInt(String((req.query as any)?.page ?? '1'), 10);
+        const rawLimit = parseInt(String((req.query as any)?.limit ?? '50'), 10);
+        const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
+        const limit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
+        const skip = (page - 1) * limit;
+
+        const filter = ownerIdFilter(req.user.id);
+        const [totalCount, robots] = await Promise.all([
+            Robot.countDocuments(filter),
+            Robot.find(filter).sort({ _id: -1 }).skip(skip).limit(limit).lean(),
+        ]);
 
         return res.status(200).json({
-            data: robots
+            data: robots,
+            pagination: {
+                page,
+                limit,
+                totalCount,
+                totalPages: totalCount === 0 ? 1 : Math.ceil(totalCount / limit),
+            },
         });
     } catch (error: any) {
         logger.error("[SDK] Error listing robots:", error);
@@ -206,6 +227,7 @@ router.get("/sdk/robots/:id", requireAPIKey, async (req: AuthenticatedRequest, r
         const robotId = req.params.id;
 
         const robot = await Robot.findOne({
+            ...ownerIdFilter(req.user?.id),
             'recording_meta.id': robotId
         });
 

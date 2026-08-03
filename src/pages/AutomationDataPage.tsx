@@ -45,6 +45,30 @@ const DATA_COLUMN_LABELS: Record<string, string> = {
   f500: 'F500',
 };
 
+const URLISH_COLUMNS = new Set(['jobUrl', 'job_url', 'applicationUrl', 'application_url', 'url', 'link']);
+
+const formatCellDisplay = (column: string, value: unknown): { text: string; href?: string; title: string } => {
+  if (value == null || value === '') {
+    return { text: '', title: '' };
+  }
+  if (typeof value === 'object') {
+    const json = JSON.stringify(value);
+    return { text: json.length > 80 ? `${json.slice(0, 77)}…` : json, title: json };
+  }
+  const raw = String(value);
+  if (URLISH_COLUMNS.has(column) || /^https?:\/\//i.test(raw)) {
+    const short =
+      raw.length > 48
+        ? `${raw.slice(0, 28)}…${raw.slice(-12)}`
+        : raw;
+    return { text: short, href: /^https?:\/\//i.test(raw) ? raw : undefined, title: raw };
+  }
+  if (raw.length > 100) {
+    return { text: `${raw.slice(0, 97)}…`, title: raw };
+  }
+  return { text: raw, title: raw };
+};
+
 const normalizeRowContext = (
   rc?: RowContextFields | null
 ): { sectorIndustry: string; f500: '' | 'yes' | 'no' } => ({
@@ -181,6 +205,7 @@ export const AutomationDataPage = () => {
     f500: '',
   });
   const [editError, setEditError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   /**
    * Original (pre-override) column names that the user can edit. We derive
@@ -202,7 +227,25 @@ export const AutomationDataPage = () => {
     return Array.from(result).sort((a, b) => a.localeCompare(b));
   }, [columns, overrides]);
 
+  /** Drop columns that are empty on every row of the current page (keeps grid narrower). */
+  const visibleColumns = useMemo(() => {
+    if (!rows.length) return columns;
+    return columns.filter((column) =>
+      rows.some((row) => {
+        const value = row.data?.[column];
+        if (value == null) return false;
+        if (typeof value === 'string') return value.trim().length > 0;
+        if (typeof value === 'boolean') return true;
+        if (typeof value === 'number') return true;
+        if (Array.isArray(value)) return value.length > 0;
+        if (typeof value === 'object') return Object.keys(value).length > 0;
+        return String(value).length > 0;
+      })
+    );
+  }, [columns, rows]);
+
   const loadData = async () => {
+    setIsLoading(true);
     try {
       const response = await getAutomationData(id, page + 1, limit);
       setRows(response.rows);
@@ -213,6 +256,8 @@ export const AutomationDataPage = () => {
       setDatabaseTargetColumns(response.databaseTargetColumns || []);
     } catch (error: any) {
       notify('error', error?.response?.data?.error || 'Failed to load automation data');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -346,26 +391,39 @@ export const AutomationDataPage = () => {
         </Box>
         <Stack direction="row" spacing={1}>
           <Button variant="outlined" onClick={() => navigate('/dashboard')}>Back</Button>
-          <Button variant="outlined" onClick={openEdit}>
+          <Button variant="outlined" onClick={openEdit} disabled={isLoading}>
             Edit columns{activeOverrideCount > 0 ? ` (${activeOverrideCount})` : ''}
           </Button>
-          <Button variant="outlined" onClick={exportCsv}>Export CSV</Button>
-          <Button variant="contained" onClick={exportJson}>Export JSON</Button>
+          <Tooltip title="Exports the current page only">
+            <span>
+              <Button variant="outlined" onClick={exportCsv} disabled={isLoading || !rows.length}>Export CSV</Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="Exports the current page only">
+            <span>
+              <Button variant="contained" onClick={exportJson} disabled={isLoading || !rows.length}>Export JSON</Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Stack>
 
-      <TableContainer component={Paper}>
-        <Table size="small">
+      {isLoading ? (
+        <Paper sx={{ p: 4 }}>
+          <Typography color="text.secondary">Loading extracted rows…</Typography>
+        </Paper>
+      ) : (
+      <TableContainer component={Paper} sx={{ maxHeight: '70vh' }}>
+        <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
-              <TableCell>Run</TableCell>
-              <TableCell>Source</TableCell>
-              <TableCell>Created</TableCell>
-              {columns.map((column) => {
+              <TableCell sx={{ whiteSpace: 'nowrap' }}>Run</TableCell>
+              <TableCell sx={{ whiteSpace: 'nowrap' }}>Source</TableCell>
+              <TableCell sx={{ whiteSpace: 'nowrap' }}>Created</TableCell>
+              {visibleColumns.map((column) => {
                 const meta = overrideForVisible(column);
                 const headerLabel = DATA_COLUMN_LABELS[column] ?? column;
                 return (
-                  <TableCell key={column}>
+                  <TableCell key={column} sx={{ whiteSpace: 'nowrap', maxWidth: 220 }}>
                     <Stack direction="row" spacing={1} alignItems="center">
                       <span>{headerLabel}</span>
                       {meta?.rename && meta.original && meta.original !== column ? (
@@ -387,25 +445,50 @@ export const AutomationDataPage = () => {
           <TableBody>
             {rows.map((row) => (
               <TableRow key={row.id} hover>
-                <TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>
                   <Button size="small" onClick={() => navigate(`/run/${row.runId}`)}>
-                    {row.runId.slice(0, 8)}
+                    {String(row.runId || '').slice(0, 8)}
                   </Button>
                 </TableCell>
-                <TableCell>{row.source}</TableCell>
-                <TableCell>{row.createdAt}</TableCell>
-                {columns.map((column) => (
-                  <TableCell key={column}>
-                    {typeof row.data?.[column] === 'object'
-                      ? JSON.stringify(row.data?.[column])
-                      : String(row.data?.[column] ?? '')}
-                  </TableCell>
-                ))}
+                <TableCell sx={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <Tooltip title={String(row.source || '')}>
+                    <span>{row.source}</span>
+                  </Tooltip>
+                </TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                  {row.createdAt ? new Date(row.createdAt).toLocaleString() : ''}
+                </TableCell>
+                {visibleColumns.map((column) => {
+                  const cell = formatCellDisplay(column, row.data?.[column]);
+                  return (
+                    <TableCell key={column} sx={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <Tooltip title={cell.title || ''}>
+                        {cell.href ? (
+                          <Link href={cell.href} target="_blank" rel="noopener noreferrer" underline="hover">
+                            {cell.text}
+                          </Link>
+                        ) : (
+                          <span>{cell.text}</span>
+                        )}
+                      </Tooltip>
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             ))}
+            {!rows.length ? (
+              <TableRow>
+                <TableCell colSpan={Math.max(3, visibleColumns.length + 3)}>
+                  <Typography color="text.secondary" sx={{ py: 2 }}>
+                    No extracted rows yet for this automation.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : null}
           </TableBody>
         </Table>
       </TableContainer>
+      )}
 
       <TablePagination
         component="div"
@@ -417,6 +500,7 @@ export const AutomationDataPage = () => {
           setLimit(parseInt(event.target.value, 10));
           setPage(0);
         }}
+        rowsPerPageOptions={[10, 25, 50, 100]}
       />
 
       <Dialog open={editOpen} onClose={closeEdit} fullWidth maxWidth="md">

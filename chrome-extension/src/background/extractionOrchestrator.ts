@@ -307,12 +307,17 @@ async function extractionLoop(): Promise<void> {
   if (newRows.length === 0) activeSession.emptyStreak += 1;
   else activeSession.emptyStreak = 0;
 
-  // Check if we should paginate
+  // Check if we should paginate.
+  // For click/URL pagination: keep going until maxPages even if one page
+  // yielded 0 *new* rows after dedupe (duplicate-heavy boards). Scroll still
+  // uses emptyStreak so infinite scroll can stop at the end of the feed.
   let shouldPaginate =
     activeSession.status === 'running' &&
     activeSession.pagination.type !== '' &&
     activeSession.currentPage < activeSession.maxPages &&
-    (newRows.length > 0 || (isScroll && activeSession.emptyStreak < SCROLL_EMPTY_STREAK_LIMIT));
+    (isScroll
+      ? activeSession.emptyStreak < SCROLL_EMPTY_STREAK_LIMIT
+      : true);
 
   console.log(
     `[Maxun] shouldPaginate: status=${activeSession.status}, type=${activeSession.pagination.type}, ` +
@@ -344,8 +349,10 @@ async function extractionLoop(): Promise<void> {
     const paginated = await executePagination();
 
     if (paginated) {
-      console.log(`[Maxun] Page change confirmed, waiting ${activeSession.pagination.pageDelayMs || 2000}ms for render...`);
-      await delay(activeSession.pagination.pageDelayMs || 2000);
+      console.log(`[Maxun] Page change confirmed, waiting for page ready...`);
+      await waitForTabComplete(activeSession.tabId, 15_000);
+      // Extra settle time for Naukri-like boards after full reload.
+      await delay(Math.max(activeSession.pagination.pageDelayMs || 2000, 2000));
       await extractionLoop();
       return;
     } else {
@@ -404,7 +411,7 @@ async function extractCurrentPage(): Promise<ExtractedRow[]> {
     });
   };
 
-  return attempt(3);
+  return attempt(8);
 }
 
 async function executePagination(): Promise<boolean> {
@@ -417,10 +424,23 @@ async function executePagination(): Promise<boolean> {
 
     const hint = type === 'clickLoadMore' ? 'loadMore' : 'next';
     const targetPage = activeSession.currentPage;
+    const tabId = activeSession.tabId;
 
-    return new Promise((resolve) => {
+    // Snapshot URL before click. Naukri (and many boards) do a full document
+    // navigation on Next — that destroys the content script mid-click so
+    // sendResponse never returns `changed: true`, and the old code aborted
+    // after page 1 even though the tab had already moved.
+    let oldUrl = activeSession.pageUrl || '';
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.url) oldUrl = tab.url;
+    } catch {
+      /* keep session url */
+    }
+
+    const contentSaidChanged = await new Promise<boolean>((resolve) => {
       chrome.tabs.sendMessage(
-        activeSession!.tabId,
+        tabId,
         {
           type: MSG.CLICK_NEXT,
           payload: {
@@ -431,16 +451,59 @@ async function executePagination(): Promise<boolean> {
           },
         },
         (response) => {
-          console.log('[Maxun] CLICK_NEXT response:', JSON.stringify(response));
           if (chrome.runtime.lastError) {
-            console.log('[Maxun] CLICK_NEXT runtime error:', chrome.runtime.lastError.message);
+            // Expected on full navigations — port closes as the document unloads.
+            console.log(
+              '[Maxun] CLICK_NEXT runtime error (often OK on full reload):',
+              chrome.runtime.lastError.message
+            );
             resolve(false);
             return;
           }
-          resolve(response?.changed || false);
+          console.log('[Maxun] CLICK_NEXT response:', JSON.stringify(response));
+          resolve(!!response?.changed);
         }
       );
     });
+
+    if (contentSaidChanged) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.url) activeSession.pageUrl = tab.url;
+      } catch {
+        /* ignore */
+      }
+      return true;
+    }
+
+    // Content script died or reported no change — confirm via tab URL / load.
+    const navigated = await waitForAnyUrlChange(tabId, oldUrl, 12_000);
+    if (navigated) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.url) activeSession.pageUrl = tab.url;
+      } catch {
+        /* ignore */
+      }
+      console.log('[Maxun] CLICK_NEXT: confirmed via tab URL change →', activeSession.pageUrl);
+      await waitForTabComplete(tabId, 15_000);
+      return true;
+    }
+
+    // Last resort for Naukri-style path pages: …-bangalore → …-bangalore-2
+    if (type === 'clickNext') {
+      const pathUrl = buildPathPageUrl(oldUrl, targetPage);
+      if (pathUrl && pathUrl !== oldUrl) {
+        console.log('[Maxun] CLICK_NEXT: path-URL fallback →', pathUrl);
+        const ok = await navigateTabAndWait(tabId, pathUrl, oldUrl, 12_000);
+        if (ok) {
+          activeSession.pageUrl = pathUrl;
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   if (type === 'scrollDown' || type === 'scrollUp') {
@@ -551,6 +614,97 @@ async function executePagination(): Promise<boolean> {
   }
 
   return false;
+}
+
+/** True when the tab URL differs from `oldUrl` (full document navigations). */
+function waitForAnyUrlChange(tabId: number, oldUrl: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = async () => {
+      if (Date.now() > deadline) {
+        resolve(false);
+        return;
+      }
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        const tabUrl = tab.url || '';
+        if (tabUrl && oldUrl && tabUrl !== oldUrl && !tabUrl.startsWith('chrome://')) {
+          // Prefer waiting until load completes so content script can reinject.
+          if (tab.status === 'complete') {
+            resolve(true);
+            return;
+          }
+        }
+      } catch {
+        /* tab may be mid-navigation */
+      }
+      setTimeout(check, 300);
+    };
+    check();
+  });
+}
+
+function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = async () => {
+      if (Date.now() > deadline) {
+        resolve();
+        return;
+      }
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.status === 'complete') {
+          resolve();
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      setTimeout(check, 300);
+    };
+    check();
+  });
+}
+
+/** Naukri-style `...-bangalore` / `...-bangalore-2` → next path page. */
+function buildPathPageUrl(currentUrl: string, nextPage: number): string | null {
+  if (!nextPage || nextPage < 2) return null;
+  try {
+    const url = new URL(currentUrl);
+    const path = url.pathname;
+    const suffixRe = /-(\d+)\/?$/;
+    if (suffixRe.test(path)) {
+      url.pathname = path.replace(suffixRe, `-${nextPage}`);
+      return url.toString();
+    }
+    if (!/jobs|careers|search|portals|vacancies|openings/i.test(path)) return null;
+    url.pathname = path.replace(/\/?$/, '') + `-${nextPage}`;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function navigateTabAndWait(
+  tabId: number,
+  navUrl: string,
+  oldUrl: string,
+  timeoutMs: number
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.tabs.update(tabId, { url: navUrl }, (tab) => {
+      if (chrome.runtime.lastError || !tab) {
+        console.error('[Maxun] tab.update failed:', chrome.runtime.lastError?.message);
+        resolve(false);
+        return;
+      }
+      waitForAnyUrlChange(tabId, oldUrl, timeoutMs).then(async (changed) => {
+        if (changed) await waitForTabComplete(tabId, timeoutMs);
+        resolve(changed);
+      });
+    });
+  });
 }
 
 function deduplicateRows(rows: ExtractedRow[]): ExtractedRow[] {

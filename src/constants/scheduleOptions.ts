@@ -1,7 +1,6 @@
 /**
  * Shared schedule option definitions.
- * Used by both the web dashboard ScheduleModal/AutomationConfigPage
- * and (inlined) by the Chrome extension ExtensionSchedulePicker.
+ * Used by the web dashboard and Chrome extension (via re-export).
  */
 
 export interface ScheduleOption {
@@ -21,31 +20,31 @@ export const SCHEDULE_OPTIONS: ScheduleOption[] = [
   },
   {
     label: 'Every 15 minutes',
-    description: 'Runs every 15 minutes',
+    description: 'Runs 15 minutes after save, then every 15 minutes',
     cron: '*/15 * * * *',
     icon: '🕐',
   },
   {
     label: 'Every 30 minutes',
-    description: 'Runs every 30 minutes',
+    description: 'Runs 30 minutes after save, then every 30 minutes',
     cron: '*/30 * * * *',
     icon: '🕐',
   },
   {
     label: 'Every hour',
-    description: 'Runs at the top of every hour',
+    description: 'Runs 1 hour after save, then every hour',
     cron: '0 * * * *',
     icon: '🕐',
   },
   {
     label: 'Every 6 hours',
-    description: 'Runs 4 times a day',
+    description: 'Runs 6 hours after save, then every 6 hours',
     cron: '0 */6 * * *',
     icon: '🕐',
   },
   {
     label: 'Every 12 hours',
-    description: 'Runs twice a day',
+    description: 'Runs 12 hours after save, then every 12 hours',
     cron: '0 */12 * * *',
     icon: '🕐',
   },

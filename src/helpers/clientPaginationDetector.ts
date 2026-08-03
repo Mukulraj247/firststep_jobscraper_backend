@@ -48,7 +48,7 @@ const loadMorePatterns = [
 
 const paginationContainerPatterns = /paginat|page-nav|pager|page-numbers|page-list/i;
 
-class ClientPaginationDetector {
+export class ClientPaginationDetector {
   autoDetectPagination(
     doc: Document,
     listSelector: string,

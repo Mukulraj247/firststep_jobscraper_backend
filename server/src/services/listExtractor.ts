@@ -545,20 +545,143 @@ const dedupeRows = (rows: Record<string, any>[], uniqueKey?: string): Record<str
 };
 
 /**
- * Many SPAs (e.g. amazon.jobs Stencil pagination) disable "Next" with `aria-disabled="true"`
- * only — no `disabled` attribute. The old check caused 30s click timeouts on the last page.
- * Mirrors `clickPaginationButton` in the Chrome extension content script.
+ * Explicit disabled signals only. Do NOT use Playwright `isEnabled()` for generic
+ * locators — on Naukri (and similar boards) `.first()` often matches the current
+ * page number or a non-button node where `isEnabled()` false-positives after page 2,
+ * aborting pagination even when Max Pages is 3+.
+ * Mirrors the extension's `clickPaginationButton` disabled checks.
  */
-const isNextControlDisabled = async (loc: Locator): Promise<boolean> => {
+const isExplicitlyDisabledElement = async (loc: Locator): Promise<boolean> => {
   if ((await loc.count()) === 0) return true;
-  const first = loc.first();
-  if ((await first.getAttribute('disabled')) !== null) return true;
-  const aria = (await first.getAttribute('aria-disabled'))?.toLowerCase();
+  const el = loc.first();
+  if ((await el.getAttribute('disabled')) !== null) return true;
+  const aria = (await el.getAttribute('aria-disabled'))?.toLowerCase();
   if (aria === 'true' || aria === '1') return true;
+  const className = (await el.getAttribute('class')) || '';
+  if (/(^|\s)(disabled|is-disabled|btn-disabled)(\s|$)/i.test(className)) return true;
+  // Form controls: trust native disabled / Playwright enabled state.
   try {
-    return !(await first.isEnabled());
+    const tag = await el.evaluate((node) => (node as HTMLElement).tagName.toLowerCase());
+    if (tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea') {
+      return !(await el.isEnabled());
+    }
   } catch {
-    return true;
+    /* treat as not explicitly disabled */
+  }
+  return false;
+};
+
+/**
+ * Among all matches for the user selector, pick the real "Next" control (not page "1"
+ * / current page). Mirrors extension `resolvePaginationElement(hint='next')`.
+ * Returns the match index, or -1 if none.
+ */
+const resolveNextButtonIndex = async (
+  page: Page,
+  selector: string,
+  targetPage: number
+): Promise<number> => {
+  try {
+    return await page.evaluate(
+      ({ sel, target }) => {
+        let matches: HTMLElement[] = [];
+        try {
+          matches = Array.from(document.querySelectorAll(sel)) as HTMLElement[];
+        } catch {
+          return -1;
+        }
+        if (matches.length === 0) return -1;
+
+        const isVisible = (el: HTMLElement) => {
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) return false;
+          const style = window.getComputedStyle(el);
+          if (style.visibility === 'hidden' || style.display === 'none') return false;
+          return true;
+        };
+        const isDisabled = (el: HTMLElement) =>
+          el.hasAttribute('disabled') ||
+          el.getAttribute('aria-disabled') === 'true' ||
+          /(^|\s)(disabled|is-disabled|btn-disabled)(\s|$)/i.test(el.className) ||
+          (el as HTMLButtonElement).disabled === true;
+
+        const visible = matches.filter(isVisible);
+        const pool = visible.length > 0 ? visible : matches;
+        const enabled = pool.filter((el) => !isDisabled(el));
+        const searchPool = enabled.length > 0 ? enabled : pool;
+        if (searchPool.length === 0) return -1;
+
+        const indexOf = (el: HTMLElement) => matches.indexOf(el);
+
+        const byRel = searchPool.find((el) => (el.getAttribute('rel') || '').toLowerCase() === 'next');
+        if (byRel) return indexOf(byRel);
+
+        const byAria = searchPool.find((el) => {
+          const v = (el.getAttribute('aria-label') || '').toLowerCase();
+          return /\b(next|siguiente|suivant|weiter|próximo)\b/.test(v);
+        });
+        if (byAria) return indexOf(byAria);
+
+        const byText = searchPool.find((el) => {
+          const text = (el.textContent || '').trim().toLowerCase();
+          return (
+            /\b(next|siguiente|suivant|weiter|próximo)\b/.test(text) ||
+            /^(›|→|»|>)\s*$/.test(text) ||
+            /(›|→|»)/.test(text)
+          );
+        });
+        if (byText) return indexOf(byText);
+
+        // Prefer a numbered page link matching the target page (Naukri-style).
+        const byPageText = searchPool.find(
+          (el) => (el.textContent || '').trim() === String(target)
+        );
+        if (byPageText) return indexOf(byPageText);
+
+        const byHref = searchPool.find((el) => {
+          const href = el.getAttribute('href') || '';
+          return new RegExp(`[?&](?:page|pg|p)=${target}\\b`, 'i').test(href);
+        });
+        if (byHref) return indexOf(byHref);
+
+        // Path suffix page (naukri.com/...-bangalore-3)
+        const byPath = searchPool.find((el) => {
+          const href = el.getAttribute('href') || '';
+          return new RegExp(`-${target}(?:[/?#]|$)`).test(href);
+        });
+        if (byPath) return indexOf(byPath);
+
+        // Last enabled match is usually "Next" in LTR pagers.
+        return indexOf(searchPool[searchPool.length - 1]);
+      },
+      { sel: selector, target: targetPage }
+    );
+  } catch (err: any) {
+    logger.log('warn', `resolveNextButtonIndex failed: ${err?.message || err}`);
+    return -1;
+  }
+};
+
+/**
+ * Naukri / Indeed-style path pages: `...-bangalore` → `...-bangalore-2` → `...-bangalore-3`.
+ * Used when the clickable next control is missing or falsely disabled.
+ */
+const buildPathIncrementUrl = (currentUrl: string, nextPage: number): string | null => {
+  if (!nextPage || nextPage < 2) return null;
+  try {
+    const url = new URL(currentUrl);
+    const path = url.pathname;
+    const suffixRe = /-(\d+)\/?$/;
+    if (suffixRe.test(path)) {
+      url.pathname = path.replace(suffixRe, `-${nextPage}`);
+      return url.toString();
+    }
+    // Page 1 often has no numeric suffix — only invent one on job-board-like paths.
+    if (!/jobs|careers|search|portals|vacancies|openings/i.test(path)) return null;
+    url.pathname = path.replace(/\/?$/, '') + `-${nextPage}`;
+    return url.toString();
+  } catch {
+    return null;
   }
 };
 
@@ -573,35 +696,92 @@ const paginateByNextButton = async (
     logger.log('warn', 'List extractor pagination skipped because nextButtonSelector is empty');
     return false;
   }
-  const nextButton = page.locator(nextButtonSelector).first();
-  const count = await nextButton.count();
-  if (count === 0) return false;
-  if (await isNextControlDisabled(nextButton)) {
-    logger.log(
-      'info',
-      'List extractor: next control is disabled or not enabled — stopping pagination (last page or blocked)'
-    );
-    return false;
+
+  const targetPage = currentPage + 1;
+  const matchCount = await page.locator(nextButtonSelector).count();
+  let nextButton: Locator | null = null;
+
+  if (matchCount > 0) {
+    const idx = await resolveNextButtonIndex(page, nextButtonSelector, targetPage);
+    if (idx >= 0) {
+      nextButton = page.locator(nextButtonSelector).nth(idx);
+      logger.log(
+        'info',
+        `List extractor resolved next control index=${idx} of ${matchCount} for page ${targetPage}`
+      );
+    } else {
+      nextButton = page.locator(nextButtonSelector).first();
+    }
   }
 
-  // Snapshot before click so we can assert the page actually re-rendered,
-  // matching the extension's `waitForPageChange` behaviour.
   const before = await snapshotListArea(page, itemSelector);
 
-  await nextButton.click();
-  await page.waitForLoadState('networkidle').catch(() => undefined);
+  if (nextButton) {
+    const disabled = await isExplicitlyDisabledElement(nextButton);
+    if (disabled && matchCount <= 1) {
+      // Single Next control, honestly disabled → last page.
+      logger.log(
+        'info',
+        `List extractor: next control is explicitly disabled — stopping pagination at page ${currentPage}`
+      );
+      return false;
+    }
 
-  const waitBudget = Math.max(pagination.loadMoreWaitMs || DEFAULT_LOAD_MORE_WAIT_MS, 4000);
-  const changed = await waitForPageChange(page, itemSelector, before, waitBudget);
-  if (!changed) {
+    if (!disabled) {
+      try {
+        await nextButton.click({ timeout: 8_000 });
+        await page.waitForLoadState('networkidle').catch(() => undefined);
+
+        const waitBudget = Math.max(pagination.loadMoreWaitMs || DEFAULT_LOAD_MORE_WAIT_MS, 4000);
+        const changed = await waitForPageChange(page, itemSelector, before, waitBudget);
+        await page.waitForTimeout(pagination.pageDelayMs || DEFAULT_SCROLL_DELAY_MS);
+        logger.log(
+          'info',
+          `List extractor clicked next button for page ${targetPage} (changed=${changed})`
+        );
+        if (changed) return true;
+        logger.log(
+          'warn',
+          `paginateByNextButton: page did not change after click (page ${targetPage}); trying path-URL fallback`
+        );
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `paginateByNextButton: click failed (${err?.message || err}); trying path-URL fallback`
+        );
+      }
+    } else {
+      logger.log(
+        'info',
+        `List extractor: resolved next among ${matchCount} matches is disabled (likely wrong node) — trying path-URL fallback for page ${targetPage}`
+      );
+    }
+  } else {
     logger.log(
-      'warn',
-      `paginateByNextButton: page did not change within ${waitBudget}ms after clicking next (page ${currentPage + 1})`
+      'info',
+      `List extractor: next control not found for selector — trying path-URL fallback for page ${targetPage}`
     );
   }
-  await page.waitForTimeout(pagination.pageDelayMs || DEFAULT_SCROLL_DELAY_MS);
-  logger.log('info', `List extractor clicked next button for page ${currentPage + 1} (changed=${changed})`);
-  return true;
+
+  // Path-suffix fallback (Naukri `...-bangalore-2`, etc.) when click path stalls.
+  const pathUrl = buildPathIncrementUrl(page.url() || '', targetPage);
+  if (pathUrl && pathUrl !== (page.url() || '')) {
+    await gotoForListExtraction(page, pathUrl);
+    await page.waitForTimeout(pagination.pageDelayMs || DEFAULT_SCROLL_DELAY_MS);
+    const after = await snapshotListArea(page, itemSelector);
+    const changed = after.url !== before.url;
+    logger.log(
+      'info',
+      `List extractor path-URL pagination to ${pathUrl} (changed=${changed})`
+    );
+    return changed;
+  }
+
+  logger.log(
+    'info',
+    'List extractor: next control unavailable and no path-URL fallback — stopping pagination'
+  );
+  return false;
 };
 
 const paginateByPageNumber = async (

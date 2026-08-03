@@ -1,0 +1,108 @@
+import axios from 'axios';
+import { apiUrl } from '../apiConfig';
+
+const withCreds = { withCredentials: true as const };
+
+export type AdminSession = {
+  authenticated: boolean;
+  configured: boolean;
+};
+
+export type AdminOverview = {
+  generatedAt: string;
+  totals: {
+    runs: number;
+    robots: number;
+    users: number;
+    activeRunsNow: number;
+    runsLast24h: number;
+  };
+  byStatus: Record<string, number>;
+  compute: {
+    scraperWorkerConcurrency: number;
+    scraperJobTimeoutMs: number;
+    scraperMaxAttempts: number;
+    runEmbeddedWorkers: boolean;
+    nodeEnv: string;
+    defaultBrowserType: string;
+    activeBrowsers: number;
+    activeBrowserIds: string[];
+    avgDurationMsLast24h: number | null;
+    p95DurationMsLast24h: number | null;
+    memoryUsage: {
+      rss: number;
+      heapTotal: number;
+      heapUsed: number;
+      external: number;
+      arrayBuffers?: number;
+    };
+    uptimeSeconds: number;
+  };
+};
+
+export type AdminRunSummary = {
+  runId: string;
+  name: string;
+  status: string;
+  robotMetaId: string;
+  robotId?: string | null;
+  targetUrl?: string | null;
+  ownerUserId?: string | null;
+  ownerEmail?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+  durationSeconds?: number | null;
+  browserId?: string | null;
+  retryCount?: number;
+  errorMessage?: string | null;
+  queueJobId?: string | null;
+  trigger?: string;
+  rowsExtracted?: number;
+  hasSerializableOutput?: boolean;
+  hasBinaryOutput?: boolean;
+  screenshotCount?: number;
+  logBytes?: number;
+  automationConfigSummary?: Record<string, unknown>;
+};
+
+export async function getAdminSession(): Promise<AdminSession> {
+  const response = await axios.get(`${apiUrl}/api/admin/session`, withCreds);
+  return response.data;
+}
+
+export async function adminLogin(password: string): Promise<{ success: boolean }> {
+  const response = await axios.post(`${apiUrl}/api/admin/login`, { password }, withCreds);
+  return response.data;
+}
+
+export async function adminLogout(): Promise<void> {
+  await axios.post(`${apiUrl}/api/admin/logout`, {}, withCreds);
+}
+
+export async function getAdminOverview(): Promise<AdminOverview> {
+  const response = await axios.get(`${apiUrl}/api/admin/overview`, withCreds);
+  return response.data;
+}
+
+export async function listAdminRuns(params: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  ownerEmail?: string;
+  q?: string;
+}): Promise<{
+  runs: AdminRunSummary[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}> {
+  const response = await axios.get(`${apiUrl}/api/admin/runs`, {
+    ...withCreds,
+    params,
+  });
+  return response.data;
+}
+
+export async function getAdminRun(runId: string): Promise<any> {
+  const response = await axios.get(`${apiUrl}/api/admin/runs/${encodeURIComponent(runId)}`, withCreds);
+  return response.data;
+}

@@ -3,7 +3,6 @@ import logger from "../../logger";
 import { Socket } from "socket.io";
 import { Page } from "playwright-core";
 import { InterpreterSettings } from "../../types";
-import { decrypt } from "../../utils/auth";
 import Run from "../../models/Run";
 import {
   dismissNow,
@@ -12,6 +11,7 @@ import {
   OverlayDismisserOptions,
   CaptchaGateOptions,
 } from "../../services/scraping";
+import { processWorkflowFile as processWorkflow, deepClone } from "../../utils/workflowHelpers";
 
 /**
  * Build pagination hooks wired to our overlay dismisser + captcha gate so the
@@ -40,47 +40,6 @@ function buildEnginePaginationHooks(settings: any) {
     },
     installDialogHandler: (page: Page) => installDialogHandler(page, popups),
   };
-}
-
-/**
- * Decrypts any encrypted inputs in the workflow. If checkLimit is true, it will also handle the limit validation for scrapeList action.
- * @param workflow The workflow to decrypt.
- * @param checkLimit If true, it will handle the limit validation for scrapeList action.
- */
-function processWorkflow(workflow: WorkflowFile, checkLimit: boolean = false): WorkflowFile {
-  const processedWorkflow = JSON.parse(JSON.stringify(workflow)) as WorkflowFile;
-
-  processedWorkflow.workflow.forEach((pair) => {
-    pair.what.forEach((action) => {
-      if (action.action === 'scrapeList' && checkLimit && Array.isArray(action.args) && action.args.length > 0) {
-        const scrapeConfig = action.args[0];
-        if (scrapeConfig && typeof scrapeConfig === 'object' && 'limit' in scrapeConfig) {
-          if (typeof scrapeConfig.limit === 'number' && scrapeConfig.limit > 5) {
-            scrapeConfig.limit = 5;
-          }
-        }
-      }
-
-      if ((action.action === 'type' || action.action === 'press') && Array.isArray(action.args) && action.args.length > 1) {
-        try {
-          const encryptedValue = action.args[1];
-          if (typeof encryptedValue === 'string') {
-            const decryptedValue = decrypt(encryptedValue);
-            action.args[1] = decryptedValue;
-          } else {
-            logger.log('error', 'Encrypted value is not a string');
-            action.args[1] = '';
-          }
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.log('error', `Failed to decrypt input value: ${errorMessage}`);
-          action.args[1] = '';
-        }
-      }
-    });
-  });
-
-  return processedWorkflow;
 }
 
 /**
@@ -552,7 +511,7 @@ export class WorkflowInterpreter {
 
       const currentBinaryOutput =
         run.binaryOutput && typeof run.binaryOutput === 'object'
-          ? JSON.parse(JSON.stringify(run.binaryOutput))
+          ? deepClone(run.binaryOutput)
           : {};
 
       const baseName = binaryItem.name?.trim() || `Screenshot ${Object.keys(currentBinaryOutput).length + 1}`;
@@ -866,7 +825,7 @@ export class WorkflowInterpreter {
       }
 
       const currentSerializableOutput = run.serializableOutput ?
-        JSON.parse(JSON.stringify(run.serializableOutput)) :
+        deepClone(run.serializableOutput) :
         { scrapeSchema: {}, scrapeList: {}, crawl: {}, search: {} };
       
       if (Array.isArray(currentSerializableOutput.scrapeList)) {

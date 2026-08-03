@@ -3,144 +3,57 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
-  Typography,
-  TextField,
   Button,
-  Checkbox,
-  IconButton,
   Card,
-  CircularProgress,
   Container,
-  Tabs,
-  Tab,
-  FormControl,
-  Select,
-  MenuItem,
-  InputLabel,
-  Collapse,
-  FormControlLabel
+  IconButton,
+  Typography,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import { ArrowBack } from '@mui/icons-material';
-import { useGlobalInfoStore, useCacheInvalidation } from '../../../context/globalInfo';
-import { canCreateBrowserInState, getActiveBrowserId, stopRecording } from '../../../api/recording';
-import { createScrapeRobot, createCrawlRobot, createSearchRobot } from "../../../api/storage";
-import { AuthContext } from '../../../context/auth';
+import { useGlobalInfoStore } from '../../../context/globalInfo';
+import { stopRecording } from '../../../api/recording';
 import { GenericModal } from '../../ui/GenericModal';
-import { DEFAULT_OUTPUT_FORMATS, OUTPUT_FORMAT_LABELS, OUTPUT_FORMAT_OPTIONS, OutputFormat } from '../../../constants/outputFormats';
-import ScoutXLogo from '../../../assets/scoutx-logo.png';
+import { ExtractCreatePanel } from './create/ExtractCreatePanel';
+import { ScrapeCreatePanel } from './create/ScrapeCreatePanel';
+import { CrawlCreatePanel } from './create/CrawlCreatePanel';
+import { SearchCreatePanel } from './create/SearchCreatePanel';
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
+type CreateMode = 'extract' | 'scrape' | 'crawl' | 'search';
 
-function TabPanel(props: TabPanelProps) {
-  const { children, value, index, ...other } = props;
-
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`robot-tabpanel-${index}`}
-      aria-labelledby={`robot-tab-${index}`}
-      {...other}
-    >
-      {value === index && <Box>{children}</Box>}
-    </div>
-  );
-}
+const MODE_META: Record<CreateMode, { label: string; description: string }> = {
+  extract: {
+    label: 'Extract',
+    description: 'Record clicks on a job board — no AI',
+  },
+  scrape: {
+    label: 'Scrape',
+    description: 'Capture a page as Markdown/HTML',
+  },
+  crawl: {
+    label: 'Crawl',
+    description: 'Follow links across many pages',
+  },
+  search: {
+    label: 'Search',
+    description: 'Discover URLs from a query',
+  },
+};
 
 const RobotCreate: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { setBrowserId, setRecordingUrl, notify, setRerenderRobots } = useGlobalInfoStore();
+  const { setBrowserId, setRecordingUrl, notify } = useGlobalInfoStore();
 
-  const [tabValue, setTabValue] = useState(0);
-  const [url, setUrl] = useState('');
-  const [scrapeRobotName, setScrapeRobotName] = useState('');
-  const [needsLogin, setNeedsLogin] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [mode, setMode] = useState<CreateMode>('extract');
   const [isWarningModalOpen, setWarningModalOpen] = useState(false);
   const [activeBrowserId, setActiveBrowserId] = useState('');
-  const [outputFormats, setOutputFormats] = useState<string[]>([]);
-  const [crawlRobotName, setCrawlRobotName] = useState('');
-  const [crawlUrl, setCrawlUrl] = useState('');
-  const [crawlMode, setCrawlMode] = useState<'domain' | 'subdomain' | 'path'>('domain');
-  const [crawlLimit, setCrawlLimit] = useState(50);
-  const [crawlMaxDepth, setCrawlMaxDepth] = useState(3);
-  const [crawlIncludePaths, setCrawlIncludePaths] = useState<string>('');
-  const [crawlExcludePaths, setCrawlExcludePaths] = useState<string>('');
-  const [crawlUseSitemap, setCrawlUseSitemap] = useState(true);
-  const [crawlFollowLinks, setCrawlFollowLinks] = useState(true);
-  const [crawlRespectRobots, setCrawlRespectRobots] = useState(true);
-  const [showCrawlAdvanced, setShowCrawlAdvanced] = useState(false);
+  const [pendingExtractUrl, setPendingExtractUrl] = useState('');
 
-  const [searchRobotName, setSearchRobotName] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchLimit, setSearchLimit] = useState(10);
-  const [searchProvider] = useState<'duckduckgo'>('duckduckgo');
-  const [searchMode, setSearchMode] = useState<'discover' | 'scrape'>('discover');
-  const [searchTimeRange, setSearchTimeRange] = useState<'day' | 'week' | 'month' | 'year' | ''>('');
-
-  const [crawlOutputFormats, setCrawlOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
-  const [searchOutputFormats, setSearchOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
-
-  const { state } = React.useContext(AuthContext);
-  const { user } = state;
-  const { invalidateRecordings } = useCacheInvalidation();
-
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTabValue(newValue);
-  };
-
-
-  const handleStartRecording = async () => {
-    if (!url.trim()) {
-      notify('error', 'Please enter a valid URL');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const canCreateRecording = await canCreateBrowserInState("recording");
-
-      if (!canCreateRecording) {
-        const activeBrowser = await getActiveBrowserId();
-        if (activeBrowser) {
-          setActiveBrowserId(activeBrowser);
-          setWarningModalOpen(true);
-        } else {
-          notify('warning', t('recordingtable.notifications.browser_limit_warning'));
-        }
-        setIsLoading(false);
-        return;
-      }
-
-      setBrowserId('new-recording');
-      setRecordingUrl(url);
-
-      window.sessionStorage.setItem('browserId', 'new-recording');
-      window.sessionStorage.setItem('recordingUrl', url);
-      window.sessionStorage.setItem('initialUrl', url);
-      window.sessionStorage.setItem('needsLogin', needsLogin.toString());
-
-      const sessionId = Date.now().toString();
-      window.sessionStorage.setItem('recordingSessionId', sessionId);
-      window.sessionStorage.setItem('recordingOriginPage', window.location.pathname + window.location.search);
-
-      window.open(`/recording-setup?session=${sessionId}`, '_blank');
-      window.sessionStorage.setItem('nextTabIsRecording', 'true');
-
-      // Reset loading state immediately after opening new tab
-      setIsLoading(false);
-      navigate('/robots');
-    } catch (error) {
-      console.error('Error starting recording:', error);
-      notify('error', 'Failed to start recording. Please try again.');
-      setIsLoading(false);
-    }
+  const handleBrowserConflict = (browserId: string) => {
+    setActiveBrowserId(browserId);
+    setWarningModalOpen(true);
   };
 
   const handleDiscardAndCreate = async () => {
@@ -150,757 +63,133 @@ const RobotCreate: React.FC = () => {
     }
 
     setWarningModalOpen(false);
-    setIsLoading(false);
 
-    // Continue with the original Recording logic
+    const url =
+      pendingExtractUrl ||
+      window.sessionStorage.getItem('recordingUrl') ||
+      '';
+
     setBrowserId('new-recording');
     setRecordingUrl(url);
-
     window.sessionStorage.setItem('browserId', 'new-recording');
-    window.sessionStorage.setItem('recordingUrl', url);
-    window.sessionStorage.setItem('initialUrl', url);
-    window.sessionStorage.setItem('needsLogin', needsLogin.toString());
+    if (url) {
+      window.sessionStorage.setItem('recordingUrl', url);
+      window.sessionStorage.setItem('initialUrl', url);
+    }
 
     const sessionId = Date.now().toString();
     window.sessionStorage.setItem('recordingSessionId', sessionId);
-    window.sessionStorage.setItem('recordingOriginPage', window.location.pathname + window.location.search);
-
+    window.sessionStorage.setItem(
+      'recordingOriginPage',
+      window.location.pathname + window.location.search
+    );
     window.open(`/recording-setup?session=${sessionId}`, '_blank');
     window.sessionStorage.setItem('nextTabIsRecording', 'true');
-
     navigate('/robots');
-  };
-
-  const handleCreateCrawlRobot = async () => {
-    if (!crawlUrl.trim()) {
-      notify('error', 'Please enter a valid URL');
-      return;
-    }
-    if (!crawlRobotName.trim()) {
-      notify('error', 'Please enter a robot name');
-      return;
-    }
-    if (crawlOutputFormats.length === 0) {
-      notify('error', 'Please select at least one output format');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const result = await createCrawlRobot(
-        crawlUrl,
-        crawlRobotName,
-        {
-          mode: crawlMode,
-          limit: crawlLimit,
-          maxDepth: crawlMaxDepth,
-          includePaths: crawlIncludePaths ? crawlIncludePaths.split(',').map(p => p.trim()) : [],
-          excludePaths: crawlExcludePaths ? crawlExcludePaths.split(',').map(p => p.trim()) : [],
-          useSitemap: crawlUseSitemap,
-          followLinks: crawlFollowLinks,
-          respectRobots: crawlRespectRobots
-        },
-        crawlOutputFormats
-      );
-      setIsLoading(false);
-      if (result) {
-        invalidateRecordings();
-        notify('success', `${crawlRobotName} created successfully!`);
-        navigate('/robots');
-      } else {
-        notify('error', 'Failed to create crawl robot');
-      }
-    } catch (error: any) {
-      setIsLoading(false);
-      notify('error', error.message || 'Failed to create crawl robot');
-    }
-  };
-
-  const handleCreateSearchRobot = async () => {
-    if (!searchQuery.trim()) {
-      notify('error', 'Please enter a search query');
-      return;
-    }
-    if (!searchRobotName.trim()) {
-      notify('error', 'Please enter a robot name');
-      return;
-    }
-    if (searchMode === 'scrape' && searchOutputFormats.length === 0) {
-      notify('error', 'Please select at least one output format');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const formatsForRequest = searchMode === 'discover' ? [] : searchOutputFormats;
-      
-      const result = await createSearchRobot(
-        searchRobotName,
-        {
-          query: searchQuery,
-          limit: searchLimit,
-          provider: searchProvider,
-          filters: {
-            timeRange: searchTimeRange ? searchTimeRange as 'day' | 'week' | 'month' | 'year' : undefined
-          },
-          mode: searchMode
-        },
-        formatsForRequest
-      );
-      setIsLoading(false);
-      if (result) {
-        invalidateRecordings();
-        notify('success', `${searchRobotName} created successfully!`);
-        navigate('/robots');
-      } else {
-        notify('error', 'Failed to create search robot');
-      }
-    } catch (error: any) {
-      setIsLoading(false);
-      notify('error', error.message || 'Failed to create search robot');
-    }
   };
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
-      <Box>
-        <Box display="flex" alignItems="center" mb={3}>
-          <IconButton
-            onClick={() => navigate('/robots')}
-            sx={{
-              ml: -1,
-              mr: 1,
-              color: theme => theme.palette.text.primary,
-              backgroundColor: 'transparent !important',
-              '&:hover': {
-                backgroundColor: 'transparent !important',
-              },
-              '&:active': {
-                backgroundColor: 'transparent !important',
-              },
-              '&:focus': {
-                backgroundColor: 'transparent !important',
-              },
-              '&:focus-visible': {
-                backgroundColor: 'transparent !important',
-              },
-            }}
-            disableRipple
-            aria-label="Go back"
-          >
-            <ArrowBack />
-          </IconButton>
-          <Typography variant="h5" component="h1">
+      <Box display="flex" alignItems="center" mb={2}>
+        <IconButton
+          onClick={() => navigate('/robots')}
+          sx={{
+            ml: -1,
+            mr: 1,
+            color: (theme) => theme.palette.text.primary,
+            backgroundColor: 'transparent !important',
+          }}
+          disableRipple
+          aria-label="Go back"
+        >
+          <ArrowBack />
+        </IconButton>
+        <Box>
+          <Typography variant="h5" component="h1" sx={{ fontWeight: 600 }}>
             {t('recordingtable.create_page_title')}
           </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Choose how this automation should collect data
+          </Typography>
         </Box>
-
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2, mt: "-30px" }}>
-          <Tabs
-            value={tabValue}
-            centered
-            onChange={handleTabChange}
-            aria-label="robot type tabs"
-            sx={{
-              minHeight: 36,
-              '& .MuiTab-root': {
-                minHeight: 36,
-                paddingX: 2,
-                paddingY: 1.5,
-                minWidth: 0,
-              },
-              '& .MuiTabs-indicator': {
-                height: 2,
-              },
-            }}
-          >
-            <Tab label="Extract" id="extract-robot" aria-controls="extract-robot" />
-            <Tab label="Scrape" id="scrape-robot" aria-controls="scrape-robot" />
-            <Tab label="Crawl" id="crawl-robot" aria-controls="crawl-robot" />
-            <Tab label="Search" id="search-robot" aria-controls="search-robot" />
-          </Tabs>
-        </Box>
-
-        <TabPanel value={tabValue} index={0}>
-          <Card sx={{ mb: 4, p: 4 }}>
-            <Box display="flex" flexDirection="column" alignItems="center">
-              <img
-                src={ScoutXLogo}
-                width={73}
-                height={65}
-                style={{
-                  borderRadius: '5px',
-                  marginBottom: '30px'
-                }}
-                alt="Scout-X Scrapper"
-              />
-
-              <Typography variant="body2" color="text.secondary" mb={3} sx={{ textAlign: 'center', maxWidth: 560 }}>
-                {t('recordingtable.extract_intro')}
-              </Typography>
-              <Box sx={{ width: '100%', maxWidth: 700, mb: 3 }}>
-                <TextField
-                  placeholder={t('recordingtable.extract_url_placeholder')}
-                  variant="outlined"
-                  fullWidth
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  label={t('recordingtable.extract_url_label')}
-                />
-              </Box>
-              <Box sx={{ width: '100%', maxWidth: 700 }}>
-                <Button
-                  variant="contained"
-                  fullWidth
-                  onClick={handleStartRecording}
-                  disabled={!url.trim() || isLoading}
-                  sx={{
-                    bgcolor: '#ff00c3',
-                    py: 1.4,
-                    fontSize: '1rem',
-                    textTransform: 'none',
-                    borderRadius: 2
-                  }}
-                  startIcon={isLoading ? <CircularProgress size={20} color="inherit" /> : null}
-                >
-                  {isLoading ? t('recordingtable.modal.button_loading') : t('recordingtable.modal.button')}
-                </Button>
-              </Box>
-            </Box>
-          </Card>
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={1}>
-          <Card sx={{ mb: 4, p: 4, textAlign: 'center' }}>
-            <Box display="flex" flexDirection="column" alignItems="center">
-              <img
-                src={ScoutXLogo}
-                width={73}
-                height={65}
-                style={{
-                  borderRadius: '5px',
-                  marginBottom: '30px'
-                }}
-                alt="Scout-X Scrapper"
-              />
-
-              <Typography variant="body2" color="text.secondary" mb={3}>
-                {t('recordingtable.scrape_intro')}
-              </Typography>
-
-              <Box sx={{ width: '100%', maxWidth: 700, mb: 2 }}>
-                <TextField
-                  placeholder="Example: YC Companies Scraper"
-                  variant="outlined"
-                  fullWidth
-                  value={scrapeRobotName}
-                  onChange={(e) => setScrapeRobotName(e.target.value)}
-                  sx={{ mb: 2 }}
-                  label="Name"
-                />
-                <TextField
-                  placeholder="Example: https://www.ycombinator.com/companies/"
-                  variant="outlined"
-                  fullWidth
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  label="Website URL"
-                  sx={{ mb: 2 }}
-                />
-
-                <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-start' }}>
-                  <FormControl sx={{ mb: 2, width: '300px' }}>
-                    <InputLabel id="output-formats-label">Output Formats *</InputLabel>
-                    <Select
-                      labelId="output-formats-label"
-                      id="output-formats"
-                      multiple
-                      value={outputFormats}
-                      label="Output Formats *"
-                      onChange={(e) => {
-                        const value =
-                          typeof e.target.value === 'string'
-                            ? e.target.value.split(',')
-                            : e.target.value;
-                        setOutputFormats(value);
-                      }}
-                      renderValue={(selected) => {
-                        if (selected.length === 0) {
-                          return <em style={{ color: '#999' }}>Select formats</em>;
-                        }
-
-                        const OUTPUT_FORMAT_LABELS: Record<string, string> = {
-                          markdown: 'Markdown',
-                          html: 'HTML',
-                          'screenshot-visible': 'Screenshot (Visible)',
-                          'screenshot-fullpage': 'Screenshot (Full Page)',
-                        };
-
-                        const labels = selected.map(
-                          (value) => OUTPUT_FORMAT_LABELS[value] ?? value
-                        );
-
-                        const MAX_ITEMS = 2; // Show only first 2, then ellipsis
-
-                        const display =
-                          labels.length > MAX_ITEMS
-                            ? `${labels.slice(0, MAX_ITEMS).join(', ')}…`
-                            : labels.join(', ');
-
-                        return (
-                          <Box
-                            sx={{
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}
-                          >
-                            {display}
-                          </Box>
-                        );
-                      }}
-                      MenuProps={{
-                        PaperProps: {
-                          style: {
-                            maxHeight: 300,
-                          },
-                        },
-                      }}
-                    >
-                      <MenuItem value="markdown">
-                        <Checkbox checked={outputFormats.includes('markdown')} />
-                        Markdown
-                      </MenuItem>
-                      <MenuItem value="html">
-                        <Checkbox checked={outputFormats.includes('html')} />
-                        HTML
-                      </MenuItem>
-                      <MenuItem value="screenshot-visible">
-                        <Checkbox checked={outputFormats.includes('screenshot-visible')} />
-                        Screenshot - Visible Viewport
-                      </MenuItem>
-                      <MenuItem value="screenshot-fullpage">
-                        <Checkbox checked={outputFormats.includes('screenshot-fullpage')} />
-                        Screenshot - Full Page
-                      </MenuItem>
-                    </Select>
-                  </FormControl>
-                </Box>
-              </Box>
-
-              <Button
-                variant="contained"
-                fullWidth
-                onClick={async () => {
-                  if (!url.trim()) {
-                    notify('error', 'Please enter a valid URL');
-                    return;
-                  }
-                  if (!scrapeRobotName.trim()) {
-                    notify('error', 'Please enter a robot name');
-                    return;
-                  }
-                  if (outputFormats.length === 0) {
-                    notify('error', 'Please select at least one output format');
-                    return;
-                  }
-
-                  setIsLoading(true);
-                  try {
-                    const result = await createScrapeRobot(url, scrapeRobotName, outputFormats);
-                    setIsLoading(false);
-                    if (result) {
-                      setRerenderRobots(true);
-                      notify('success', `${scrapeRobotName} created successfully!`);
-                      navigate('/robots');
-                    } else {
-                      notify('error', 'Failed to create scrape robot');
-                    }
-                  } catch (error: any) {
-                    setIsLoading(false);
-                    notify('error', error.message || 'Failed to create scrape robot');
-                  }
-                }}
-                disabled={!url.trim() || !scrapeRobotName.trim() || outputFormats.length === 0 || isLoading}
-                sx={{
-                  bgcolor: '#ff00c3',
-                  py: 1.4,
-                  fontSize: '1rem',
-                  textTransform: 'none',
-                  maxWidth: 700,
-                  borderRadius: 2
-                }}
-                startIcon={isLoading ? <CircularProgress size={20} color="inherit" /> : null}
-              >
-                {isLoading
-                  ? "Creating..."
-                  : `Create Robot`
-                }
-              </Button>
-            </Box>
-          </Card>
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={2}>
-          <Card sx={{ mb: 4, p: 4, textAlign: 'center' }}>
-            <Box display="flex" flexDirection="column" alignItems="center">
-              <img
-                src={ScoutXLogo}
-                width={73}
-                height={65}
-                style={{
-                  borderRadius: '5px',
-                  marginBottom: '30px'
-                }}
-                alt="Scout-X Scrapper"
-              />
-
-              <Typography variant="body2" color="text.secondary" mb={3}>
-                Crawl entire websites and gather data from multiple pages automatically.
-              </Typography>
-
-              <Box sx={{ width: '100%', maxWidth: 700, mb: 2 }}>
-                <TextField
-                  label="Name"
-                  placeholder="Example: YC Companies Crawler"
-                  fullWidth
-                  value={crawlRobotName}
-                  onChange={(e) => setCrawlRobotName(e.target.value)}
-                  sx={{ mb: 2 }}
-                />
-                <TextField
-                  label="Starting URL"
-                  placeholder="https://www.ycombinator.com/companies"
-                  fullWidth
-                  value={crawlUrl}
-                  onChange={(e) => setCrawlUrl(e.target.value)}
-                  sx={{ mb: 2 }}
-                />
-
-                <TextField
-                  label="Max Pages to Crawl"
-                  type="number"
-                  fullWidth
-                  value={crawlLimit}
-                  onChange={(e) => setCrawlLimit(parseInt(e.target.value) || 10)}
-                  sx={{ mb: 2 }}
-                />
-
-                <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-start', mb: 2 }}>
-                  <FormControl sx={{ width: '300px' }}>
-                    <InputLabel id="crawl-output-formats-label">Output Formats *</InputLabel>
-                    <Select
-                      labelId="crawl-output-formats-label"
-                      multiple
-                      value={crawlOutputFormats}
-                      label="Output Formats *"
-                      onChange={(e) => {
-                        const value = typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value;
-                        setCrawlOutputFormats(value as OutputFormat[]);
-                      }}
-                      renderValue={(selected) => {
-                        const labels = selected.map(v => OUTPUT_FORMAT_LABELS[v] ?? v);
-                        return labels.length > 2 ? `${labels.slice(0, 2).join(', ')}…` : labels.join(', ');
-                      }}
-                    >
-                      {OUTPUT_FORMAT_OPTIONS.map((format) => (
-                        <MenuItem key={format} value={format}>
-                          <Checkbox checked={crawlOutputFormats.includes(format)} />
-                          {OUTPUT_FORMAT_LABELS[format]}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Box>
-
-                <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-start', mb: 2 }}>
-                  <Button
-                  onClick={() => setShowCrawlAdvanced(!showCrawlAdvanced)}
-                  sx={{
-                    textTransform: 'none',
-                    color: '#ff00c3',
-                  }}
-                  >
-                  {showCrawlAdvanced ? 'Hide Advanced Options' : 'Advanced Options'}
-                  </Button>
-                </Box>
-
-                <Collapse in={showCrawlAdvanced}>
-                  <Box sx={{ mb: 2 }}>
-                    <FormControl fullWidth sx={{ mb: 2 }}>
-                      <InputLabel>Crawl Scope</InputLabel>
-                      <Select
-                        value={crawlMode}
-                        label="Crawl Scope"
-                        onChange={(e) => setCrawlMode(e.target.value as any)}
-                      >
-                        <MenuItem value="domain">Same Domain Only</MenuItem>
-                        <MenuItem value="subdomain">Include Subdomains</MenuItem>
-                        <MenuItem value="path">Specific Path Only</MenuItem>
-                      </Select>
-                    </FormControl>
-
-                    <TextField
-                      label="Max Depth"
-                      type="number"
-                      fullWidth
-                      value={crawlMaxDepth}
-                      onChange={(e) => setCrawlMaxDepth(parseInt(e.target.value) || 3)}
-                      sx={{ mb: 2 }}
-                      helperText="How many links deep to follow (default: 3)"
-                      FormHelperTextProps={{ sx: { ml: 0 } }}
-                    />
-
-                    <TextField
-                      label="Include Paths"
-                      placeholder="Example: /products, /blog"
-                      fullWidth
-                      value={crawlIncludePaths}
-                      onChange={(e) => setCrawlIncludePaths(e.target.value)}
-                      sx={{ mb: 2 }}
-                      helperText="Only crawl URLs matching these paths (comma-separated)"
-                      FormHelperTextProps={{ sx: { ml: 0 } }}
-                    />
-
-                    <TextField
-                      label="Exclude Paths"
-                      placeholder="Example: /admin, /login"
-                      fullWidth
-                      value={crawlExcludePaths}
-                      onChange={(e) => setCrawlExcludePaths(e.target.value)}
-                      sx={{ mb: 2 }}
-                      helperText="Skip URLs matching these paths (comma-separated)"
-                      FormHelperTextProps={{ sx: { ml: 0 } }}
-                    />
-
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={crawlUseSitemap}
-                            onChange={(e) => setCrawlUseSitemap(e.target.checked)}
-                          />
-                        }
-                        label="Use sitemap.xml for URL discovery"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={crawlFollowLinks}
-                            onChange={(e) => setCrawlFollowLinks(e.target.checked)}
-                          />
-                        }
-                        label="Follow links on pages"
-                      />
-                      <FormControlLabel
-                        control={
-                          <Checkbox
-                            checked={crawlRespectRobots}
-                            onChange={(e) => setCrawlRespectRobots(e.target.checked)}
-                          />
-                        }
-                        label="Respect robots.txt"
-                      />
-                    </Box>
-                  </Box>
-                </Collapse>
-              </Box>
-
-              <Button
-                variant="contained"
-                fullWidth
-                onClick={handleCreateCrawlRobot}
-                disabled={!crawlUrl.trim() || !crawlRobotName.trim() || crawlOutputFormats.length === 0 || isLoading}
-                sx={{
-                  bgcolor: '#ff00c3',
-                  py: 1.4,
-                  fontSize: '1rem',
-                  textTransform: 'none',
-                  maxWidth: 700,
-                  borderRadius: 2
-                }}
-                startIcon={isLoading ? <CircularProgress size={20} color="inherit" /> : null}
-              >
-                {isLoading ? 'Creating...' : 'Create Robot'}
-              </Button>
-            </Box>
-          </Card>
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={3}>
-          <Card sx={{ mb: 4, p: 4, textAlign: 'center' }}>
-            <Box display="flex" flexDirection="column" alignItems="center">
-              <img
-                src={ScoutXLogo}
-                width={73}
-                height={65}
-                style={{
-                  borderRadius: '5px',
-                  marginBottom: '30px'
-                }}
-                alt="Scout-X Scrapper"
-              />
-
-              <Typography variant="body2" color="text.secondary" mb={3}>
-                Search the web and gather data from relevant results.
-              </Typography>
-
-              <Box sx={{ width: '100%', maxWidth: 700, mb: 2 }}>
-                <TextField
-                  label="Name"
-                  placeholder="Example: AI News Monitor"
-                  fullWidth
-                  value={searchRobotName}
-                  onChange={(e) => setSearchRobotName(e.target.value)}
-                  sx={{ mb: 2 }}
-                />
-
-                <TextField
-                  label="Search Query"
-                  placeholder="Example: latest AI breakthroughs 2025"
-                  fullWidth
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  sx={{ mb: 2 }}
-                />
-
-                <TextField
-                  label="Number of Results"
-                  type="number"
-                  fullWidth
-                  value={searchLimit}
-                  onChange={(e) => setSearchLimit(parseInt(e.target.value) || 10)}
-                  sx={{ mb: 2 }}
-                />
-
-                <Box sx={{ display: 'flex', gap: 2 }}>
-                  <FormControl fullWidth sx={{ mb: 2 }}>
-                  <InputLabel>Mode</InputLabel>
-                  <Select
-                    value={searchMode}
-                    label="Mode"
-                    onChange={(e) => {
-                      const newMode = e.target.value as 'discover' | 'scrape';
-                      setSearchMode(newMode);
-                      if (newMode === 'discover') {
-                        setSearchOutputFormats([]);
-                      } else if (searchOutputFormats.length === 0) {
-                        setSearchOutputFormats(DEFAULT_OUTPUT_FORMATS);
-                      }
-                    }}
-                  >
-                    <MenuItem value="discover">Discover URLs Only</MenuItem>
-                    <MenuItem value="scrape">Extract Data from Results</MenuItem>
-                  </Select>
-                  </FormControl>
-
-                  <FormControl fullWidth sx={{ mb: 2 }}>
-                  <InputLabel>Time Range</InputLabel>
-                  <Select
-                    value={searchTimeRange}
-                    label="Time Range"
-                    onChange={(e) => setSearchTimeRange(e.target.value as 'day' | 'week' | 'month' | 'year' | '')}
-                  >
-                    <MenuItem value="">No Filter</MenuItem>
-                    <MenuItem value="day">Past 24 Hours</MenuItem>
-                    <MenuItem value="week">Past Week</MenuItem>
-                    <MenuItem value="month">Past Month</MenuItem>
-                    <MenuItem value="year">Past Year</MenuItem>
-                  </Select>
-                  </FormControl>
-                </Box>
-
-                {searchMode === 'scrape' ? (
-                  <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-start', mb: 2 }}>
-                    <FormControl sx={{ width: '300px' }}>
-                      <InputLabel id="search-output-formats-label">Output Formats *</InputLabel>
-                      <Select
-                        labelId="search-output-formats-label"
-                        multiple
-                        value={searchOutputFormats}
-                        label="Output Formats *"
-                        onChange={(e) => {
-                          const value = typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value;
-                          setSearchOutputFormats(value as OutputFormat[]);
-                        }}
-                        renderValue={(selected) => {
-                          const labels = selected.map(v => OUTPUT_FORMAT_LABELS[v] ?? v);
-                          return labels.length > 2 ? `${labels.slice(0, 2).join(', ')}…` : labels.join(', ');
-                        }}
-                      >
-                        {OUTPUT_FORMAT_OPTIONS.map((format) => (
-                          <MenuItem key={format} value={format}>
-                            <Checkbox checked={searchOutputFormats.includes(format)} />
-                            {OUTPUT_FORMAT_LABELS[format]}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </Box>
-                ) : (
-                  <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-start', mb: 2, alignItems: 'center' }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Output formats are only available in "Extract Data from Results" mode
-                    </Typography>
-                  </Box>
-                )}
-              </Box>
-
-              <Button
-                variant="contained"
-                fullWidth
-                onClick={handleCreateSearchRobot}
-                disabled={!searchQuery.trim() || !searchRobotName.trim() || (searchMode === 'scrape' && searchOutputFormats.length === 0) || isLoading}
-                sx={{
-                  bgcolor: '#ff00c3',
-                  py: 1.4,
-                  fontSize: '1rem',
-                  textTransform: 'none',
-                  maxWidth: 700,
-                  borderRadius: 2
-                }}
-                startIcon={isLoading ? <CircularProgress size={20} color="inherit" /> : null}
-              >
-                {isLoading ? 'Creating...' : 'Create Robot'}
-              </Button>
-            </Box>
-          </Card>
-        </TabPanel>
       </Box>
 
+      <ToggleButtonGroup
+        exclusive
+        fullWidth
+        value={mode}
+        onChange={(_, next) => {
+          if (next) setMode(next);
+        }}
+        aria-label="Scraper type"
+        sx={{
+          mb: 2,
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(4, 1fr)' },
+          gap: 1,
+          '& .MuiToggleButtonGroup-grouped': {
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: '8px !important',
+            m: 0,
+            textTransform: 'none',
+            alignItems: 'flex-start',
+            justifyContent: 'flex-start',
+            px: 1.5,
+            py: 1.25,
+          },
+        }}
+      >
+        {(Object.keys(MODE_META) as CreateMode[]).map((key) => (
+          <ToggleButton key={key} value={key} aria-label={MODE_META[key].label}>
+            <Box textAlign="left">
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                {MODE_META[key].label}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'normal' }}>
+                {MODE_META[key].description}
+              </Typography>
+            </Box>
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
 
-      <GenericModal isOpen={isWarningModalOpen} onClose={() => {
-        setWarningModalOpen(false);
-        setIsLoading(false);
-      }} modalStyle={modalStyle}>
+      <Card variant="outlined" sx={{ p: { xs: 2.5, sm: 4 } }}>
+        {mode === 'extract' && (
+          <ExtractCreatePanel
+            onBrowserConflict={(id, url) => {
+              setPendingExtractUrl(url);
+              handleBrowserConflict(id);
+            }}
+          />
+        )}
+        {mode === 'scrape' && <ScrapeCreatePanel />}
+        {mode === 'crawl' && <CrawlCreatePanel />}
+        {mode === 'search' && <SearchCreatePanel />}
+      </Card>
+
+      <GenericModal
+        isOpen={isWarningModalOpen}
+        onClose={() => setWarningModalOpen(false)}
+        modalStyle={modalStyle}
+      >
         <div style={{ padding: '10px' }}>
-          <Typography variant="h6" gutterBottom>{t('recordingtable.warning_modal.title')}</Typography>
+          <Typography variant="h6" gutterBottom>
+            {t('recordingtable.warning_modal.title')}
+          </Typography>
           <Typography variant="body1" style={{ marginBottom: '20px' }}>
             {t('recordingtable.warning_modal.message')}
           </Typography>
-
           <Box display="flex" justifyContent="space-between" mt={2}>
-            <Button
-              onClick={handleDiscardAndCreate}
-              variant="contained"
-              color="error"
-            >
+            <Button onClick={handleDiscardAndCreate} variant="contained" color="error">
               {t('recordingtable.warning_modal.discard_and_create')}
             </Button>
-            <Button
-              onClick={() => {
-                setWarningModalOpen(false);
-                setIsLoading(false);
-              }}
-              variant="outlined"
-            >
+            <Button onClick={() => setWarningModalOpen(false)} variant="outlined">
               {t('recordingtable.warning_modal.cancel')}
             </Button>
           </Box>
         </div>
       </GenericModal>
-
-
     </Container>
   );
 };

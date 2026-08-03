@@ -3,6 +3,9 @@ NODE_ENV=production                     # Set to 'development' or 'production' a
 JWT_SECRET=a9Z$kLq7^f03GzNw!bP9dH4xV6sT2yXl3O8vR@uYq3          # Replace with a secure JWT secret key
 ENCRYPTION_KEY=f4d5e6a7b8c9d0e1f23456789abcdef01234567890abcdef123456789abcdef0      # Key for encrypting sensitive data (passwords and proxies)
 SESSION_SECRET=maxun_session # A strong, random string used to sign session cookies. Recommended to define your own session secret to avoid session hijacking.
+# Ops admin gate for /admin (all-account runs + compute). Required to unlock the admin UI.
+# Keep this secret; it is independent of normal scout login.
+ADMIN_PASSWORD=change-me-admin-password
 
 # MongoDB (required): Mongoose models, Agenda job queue (agendaJobs collection), express-session store, Socket.IO session data.
 # Use MongoDB Atlas in production: create a cluster → Connect → Drivers → copy URI.

@@ -4,6 +4,46 @@ import moment from 'moment-timezone';
 /** Minimum gap between two consecutive schedule fires (product policy). */
 export const MIN_SCHEDULE_INTERVAL_MS = 15 * 60 * 1000;
 
+/**
+ * Wall-clock cron presets that should instead run as true intervals from
+ * schedule-save / last-run time — so "Every 15 min" automations do not all
+ * pile up on :00/:15/:30/:45 and overload the scraper.
+ */
+const INTERVAL_CRON_TO_MS: Record<string, number> = {
+  '*/15 * * * *': 15 * 60 * 1000,
+  '*/30 * * * *': 30 * 60 * 1000,
+  '0 * * * *': 60 * 60 * 1000,
+  '0 */6 * * *': 6 * 60 * 60 * 1000,
+  '0 */12 * * *': 12 * 60 * 60 * 1000,
+};
+
+const INTERVAL_MS_TO_HUMAN: Record<number, string> = {
+  [15 * 60 * 1000]: '15 minutes',
+  [30 * 60 * 1000]: '30 minutes',
+  [60 * 60 * 1000]: '1 hour',
+  [6 * 60 * 60 * 1000]: '6 hours',
+  [12 * 60 * 60 * 1000]: '12 hours',
+};
+
+export function normalizeCronExpression(cron: string): string {
+  return cron.trim().replace(/\s+/g, ' ');
+}
+
+/** Map known short presets to interval ms, or null for calendar cron. */
+export function intervalMsFromCron(cron: string | null | undefined): number | null {
+  if (!cron || typeof cron !== 'string') return null;
+  return INTERVAL_CRON_TO_MS[normalizeCronExpression(cron)] ?? null;
+}
+
+/** Agenda `repeatEvery` human-interval string for a known preset ms value. */
+export function humanIntervalFromMs(everyMs: number): string | null {
+  return INTERVAL_MS_TO_HUMAN[everyMs] ?? null;
+}
+
+export function computeNextRunFromInterval(everyMs: number, from: Date = new Date()): Date {
+  return new Date(from.getTime() + everyMs);
+}
+
 // Function to compute next run date based on the cron pattern and timezone
 export function computeNextRun(cronExpression: string, timezone: string) {
   try {

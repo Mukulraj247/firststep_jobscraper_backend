@@ -18,6 +18,7 @@ import { getBestSelectorForAction } from "../utils";
 import { v4 as uuid } from "uuid";
 import { capture } from "../../utils/analytics"
 import { decrypt, encrypt } from "../../utils/auth";
+import { addGeneratedFlags } from "../../utils/workflowHelpers";
 
 interface PersistedGeneratedData {
   lastUsedSelector: string;
@@ -963,14 +964,7 @@ export class WorkflowGenerator {
    * @returns {WorkflowFile}
    */
   public AddGeneratedFlags = (workflow: WorkflowFile): WorkflowFile => {
-    const copy = JSON.parse(JSON.stringify(workflow));
-    for (let i = 0; i < workflow.workflow.length; i++) {
-      copy.workflow[i].what.unshift({
-        action: 'flag',
-        args: ['generated'],
-      });
-    }
-    return copy;
+    return addGeneratedFlags(workflow);
   };
 
   /**

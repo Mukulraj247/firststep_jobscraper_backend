@@ -19,7 +19,9 @@ services:
     name: scout-x-backend
     runtime: node
     plan: free
-    buildCommand: npm ci --include=dev && npm run build:server && npm run playwright:install
+    # Override NODE_OPTIONS during build — the service env caps Node at 192MB for
+    # runtime (so Chromium fits), but tsc needs more heap than that to compile.
+    buildCommand: NODE_OPTIONS='--max-old-space-size=768' npm ci --include=dev && NODE_OPTIONS='--max-old-space-size=768' npm run build:server && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.pw-browsers npx -y playwright@1.58.0 install chromium
     startCommand: npm run server
     envVars:
       - key: NODE_ENV

@@ -69,6 +69,8 @@ RobotSchema.index(
   { unique: true, name: 'robot_user_name_unique' }
 );
 
+RobotSchema.index({ 'recording_meta.id': 1 }, { name: 'robot_recording_meta_id' });
+
 const Robot = mongoose.models.Robot || mongoose.model<IRobot>('Robot', RobotSchema);
 
 export default Robot;

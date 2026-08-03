@@ -13,6 +13,7 @@ import { AuthenticatedRequest } from "../routes/record";
 import { formatRecording, formatRunResponse } from "./record/formatters";
 import {capture} from "../utils/analytics";
 import { Page } from "playwright-core";
+import { ownerIdFilter } from "../utils/ownerId";
 import { WorkflowFile } from "maxun-core";
 import { addGoogleSheetUpdateTask, processGoogleSheetUpdates } from "../workflow-management/integrations/gsheet";
 import { addAirtableUpdateTask, processAirtableUpdates } from "../workflow-management/integrations/airtable";
@@ -83,16 +84,36 @@ const router = Router();
  *                   type: string
  *                   example: "Failed to retrieve robots"
  */
-router.get("/robots", requireAPIKey, async (req: Request, res: Response) => {
+router.get("/robots", requireAPIKey, async (req: AuthenticatedRequest, res: Response) => {
     try {
-        const robots = await Robot.find().lean();
+        if (!req.user) {
+            return res.status(401).json({
+                statusCode: 401,
+                messageCode: "error",
+                message: "Unauthorized",
+            });
+        }
+
+        const rawPage = parseInt(String((req.query as any)?.page ?? '1'), 10);
+        const rawLimit = parseInt(String((req.query as any)?.limit ?? '50'), 10);
+        const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
+        const limit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
+        const skip = (page - 1) * limit;
+
+        const filter = ownerIdFilter(req.user.id);
+        const [totalCount, robots] = await Promise.all([
+            Robot.countDocuments(filter),
+            Robot.find(filter).sort({ _id: -1 }).skip(skip).limit(limit).lean(),
+        ]);
         const formattedRecordings = robots.map(formatRecording);
 
         const response = {
             statusCode: 200,
             messageCode: "success",
             robots: {
-                totalCount: formattedRecordings.length,
+                totalCount,
+                page,
+                limit,
                 items: formattedRecordings,
             },
         };

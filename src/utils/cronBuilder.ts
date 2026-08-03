@@ -82,11 +82,20 @@ export function computeNextRunRelative(
 ): { relative: string; absolute: string; nextDate: Date | null } {
   const next = computeNextRuns(cron, timezone, 1)[0] || null;
   if (!next) return { relative: '—', absolute: '—', nextDate: null };
+  return formatRelativeToNow(next, timezone);
+}
 
+/** Prefer server `nextRunAt` (interval-from-save) over recomputing wall-clock cron. */
+export function formatRelativeToNow(
+  next: Date,
+  timezone: string = 'UTC'
+): { relative: string; absolute: string; nextDate: Date } {
   const now = new Date();
   const diffMs = next.getTime() - now.getTime();
 
-  if (diffMs < 0) return { relative: '—', absolute: formatNextRun(next, timezone), nextDate: next };
+  if (diffMs < 0) {
+    return { relative: '—', absolute: formatNextRun(next, timezone), nextDate: next };
+  }
 
   const totalSeconds = Math.floor(diffMs / 1000);
   const days = Math.floor(totalSeconds / 86400);

@@ -842,8 +842,25 @@ export const BrowserWindow = () => {
           if (listSelector !== activeStep.listSelector) {
             setListSelector(activeStep.listSelector);
           }
-          if (JSON.stringify(fields) !== JSON.stringify(activeStep.fields)) {
-            setFields(activeStep.fields);
+          const nextFields = activeStep.fields;
+          if (fields !== nextFields) {
+            const prevKeys = Object.keys(fields);
+            const nextKeys = Object.keys(nextFields);
+            const fieldsChanged =
+              prevKeys.length !== nextKeys.length ||
+              prevKeys.some((key) => {
+                const prev = fields[key];
+                const next = nextFields[key];
+                return (
+                  !next ||
+                  prev.id !== next.id ||
+                  prev.label !== next.label ||
+                  prev.selectorObj?.selector !== next.selectorObj?.selector
+                );
+              });
+            if (fieldsChanged) {
+              setFields(nextFields);
+            }
           }
           if (activeStep.pagination?.selector && paginationSelector !== activeStep.pagination.selector) {
             setPaginationSelector(activeStep.pagination.selector);

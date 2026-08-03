@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "types": ["chrome"]
   },
-  "include": ["src"]
+  "include": ["src", "../src/helpers/**/*.ts", "../src/constants/scheduleOptions.ts"]
 }

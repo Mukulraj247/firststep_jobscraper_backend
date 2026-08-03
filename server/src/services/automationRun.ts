@@ -24,16 +24,31 @@ export async function reenqueueStalePendingScraperRuns(options?: ReenqueuePendin
     const maxRuns = options?.maxRuns ?? 40;
     const runs = await Run.find({ status: 'pending' }).limit(maxRuns).lean();
     const now = Date.now();
-    let ensured = 0;
-    for (const run of runs) {
+
+    const eligible = runs.filter((run) => {
       const started = new Date(run.startedAt).getTime();
       if (Number.isNaN(started) || now - started < minAgeMs) {
-        continue;
+        return false;
       }
       if (run.runByUserId === null || run.runByUserId === undefined) {
-        continue;
+        return false;
       }
-      const robot: any = await Robot.findOne({ 'recording_meta.id': run.robotMetaId }).lean();
+      return !!run.robotMetaId;
+    });
+
+    if (eligible.length === 0) {
+      return;
+    }
+
+    const robotIds = [...new Set(eligible.map((run) => run.robotMetaId))];
+    const robots = await Robot.find({ 'recording_meta.id': { $in: robotIds } }).lean();
+    const robotsByMetaId = new Map(
+      robots.map((robot: any) => [robot.recording_meta?.id, robot])
+    );
+
+    let ensured = 0;
+    for (const run of eligible) {
+      const robot: any = robotsByMetaId.get(run.robotMetaId);
       if (!robot) {
         continue;
       }

@@ -2,7 +2,8 @@ import { createContext, useContext, useState } from "react";
 import { AlertSnackbarProps } from "../components/ui/AlertSnackbar";
 import { WhereWhatPair } from "maxun-core";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getStoredRuns, getStoredRecordings } from "../api/storage";
+import { getStoredRecordings } from "../api/storage";
+import { listSaasRuns } from "../api/automation";
 
 const createDataCacheClient = () => new QueryClient({
   defaultOptions: {
@@ -150,18 +151,39 @@ const globalInfoContext = createContext<GlobalInfo>(globalInfoStore as GlobalInf
 
 export const useGlobalInfoStore = () => useContext(globalInfoContext);
 
-export const useCachedRuns = () => {
+export const useCachedRuns = (params?: {
+  page?: number;
+  limit?: number;
+  robotMetaId?: string | null;
+}) => {
+  const page = params?.page ?? 1;
+  const limit = params?.limit ?? 25;
+  const robotMetaId = params?.robotMetaId?.trim() || undefined;
+
   return useQuery({
-    queryKey: dataCacheKeys.runs,
+    queryKey: [...dataCacheKeys.runs, page, limit, robotMetaId || 'all'] as const,
     queryFn: async () => {
-      const runs = await getStoredRuns();
-      if (!runs) throw new Error('Failed to fetch runs data');
-      return runs.map((run: any, index: number) => ({ id: index, ...run }));
+      const result = await listSaasRuns({ page, limit, robotMetaId });
+      const runs = (result.runs || []).map((run: any, index: number) => ({
+        id: index,
+        ...run,
+        name: run.name || 'Run',
+        duration: run.duration ?? run.durationMs ?? null,
+        log: typeof run.log === 'string' ? run.log : '',
+        serializableOutput: run.serializableOutput || {},
+        binaryOutput: run.binaryOutput || {},
+        browserId: run.browserId || '',
+      }));
+      return {
+        runs,
+        pagination: result.pagination || { page, limit, total: runs.length, totalPages: 1 },
+      };
     },
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 2,
     refetchOnMount: 'always',
+    placeholderData: (previousData) => previousData,
   });
 };
 
@@ -177,23 +199,57 @@ export const useCacheInvalidation = () => {
   };
 
   const addOptimisticRun = (newRun: any) => {
-    queryClient.setQueryData(dataCacheKeys.runs, (oldData: any) => {
-      if (!oldData) return [{ id: 0, ...newRun }];
-      return [{ id: oldData.length, ...newRun }, ...oldData];
+    queryClient.setQueriesData({ queryKey: dataCacheKeys.runs }, (oldData: any) => {
+      if (!oldData) {
+        return {
+          runs: [{ id: 0, ...newRun }],
+          pagination: { page: 1, limit: 25, total: 1, totalPages: 1 },
+        };
+      }
+      if (Array.isArray(oldData)) {
+        return [{ id: oldData.length, ...newRun }, ...oldData];
+      }
+      const runs = Array.isArray(oldData.runs) ? oldData.runs : [];
+      return {
+        ...oldData,
+        runs: [{ id: runs.length, ...newRun }, ...runs],
+        pagination: {
+          ...oldData.pagination,
+          total: (oldData.pagination?.total ?? runs.length) + 1,
+        },
+      };
     });
   };
 
   const addOptimisticRobot = (newRobot: any) => {
-    queryClient.setQueryData(dataCacheKeys.recordings, (oldData: any) => {
-      if (!oldData) return [newRobot];
-      return [newRobot, ...oldData];
+    queryClient.setQueriesData({ queryKey: dataCacheKeys.recordings }, (oldData: any) => {
+      if (!oldData) {
+        return { robots: [newRobot], total: 1, page: 1, limit: 10 };
+      }
+      if (Array.isArray(oldData)) {
+        return [newRobot, ...oldData];
+      }
+      const robots = Array.isArray(oldData.robots) ? oldData.robots : [];
+      return {
+        ...oldData,
+        robots: [newRobot, ...robots],
+        total: (oldData.total ?? robots.length) + 1,
+      };
     });
   };
 
   const removeOptimisticRobot = (tempId: string) => {
-    queryClient.setQueryData(dataCacheKeys.recordings, (oldData: any) => {
-      if (!oldData) return [];
-      return oldData.filter((robot: any) => robot.id !== tempId);
+    queryClient.setQueriesData({ queryKey: dataCacheKeys.recordings }, (oldData: any) => {
+      if (!oldData) return { robots: [], total: 0, page: 1, limit: 10 };
+      if (Array.isArray(oldData)) {
+        return oldData.filter((robot: any) => robot.id !== tempId);
+      }
+      const robots = (oldData.robots || []).filter((robot: any) => robot.id !== tempId);
+      return {
+        ...oldData,
+        robots,
+        total: Math.max(0, (oldData.total ?? robots.length) - 1),
+      };
     });
   };
 
@@ -212,17 +268,18 @@ export const useCacheInvalidation = () => {
   };
 };
 
-export const useCachedRecordings = () => {
+export const useCachedRecordings = (params: { page: number; limit: number; q?: string }) => {
   return useQuery({
-    queryKey: dataCacheKeys.recordings,
+    queryKey: [...dataCacheKeys.recordings, params.page, params.limit, params.q || ''],
     queryFn: async () => {
-      const recordings = await getStoredRecordings();
+      const recordings = await getStoredRecordings(params);
       if (!recordings) throw new Error('Failed to fetch recordings data');
       return recordings;
     },
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 2,
+    placeholderData: (prev) => prev,
   });
 };
 

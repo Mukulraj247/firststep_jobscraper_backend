@@ -11,8 +11,7 @@ import Run from '../models/Run';
 import { AuthenticatedRequest } from './record';
 import { computeNextRun } from '../utils/schedule';
 import { capture } from "../utils/analytics";
-import { encrypt, decrypt } from '../utils/auth';
-import { WorkflowFile } from 'maxun-core';
+import { encrypt } from '../utils/auth';
 import { cancelScheduledWorkflow, scheduleWorkflow } from '../storage/schedule';
 import { enqueueScraperRun, enqueueAbortRun, enqueueExecuteRun } from '../queue/scraperQueue';
 import { getAutomationConfig } from '../services/automation';
@@ -23,14 +22,21 @@ import {
   SCRAPE_OUTPUT_FORMAT_OPTIONS,
   OutputFormat,
 } from '../constants/output-formats';
+import { processWorkflowActions } from '../utils/workflowHelpers';
+import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
+import { buildRobotListSummary, pickLatestRun } from '../utils/robotListSummary';
+import {
+  clampCrawlLimit,
+  clampSearchLimit,
+  assertCrawlFormatsAllowed,
+} from '../constants/robotCreateLimits';
 
 export const router = Router();
+export { processWorkflowActions };
 
 async function isRobotNameTaken(name: string, userId: number | string, excludeId?: string): Promise<boolean> {
   const normalised = name.trim().toLowerCase();
-  const robots = await Robot.find({
-    userId,
-  }).lean();
+  const robots = await Robot.find(ownerIdFilter(userId)).lean();
   
   const matching = robots.filter((r: any) => {
     const robotName = r.recording_meta?.name?.trim().toLowerCase();
@@ -44,44 +50,6 @@ async function isRobotNameTaken(name: string, userId: number | string, excludeId
   return true;
 }
 
-export const processWorkflowActions = async (workflow: any[], checkLimit: boolean = false): Promise<any[]> => {
-  const processedWorkflow = JSON.parse(JSON.stringify(workflow));
-
-  processedWorkflow.forEach((pair: any) => {
-    pair.what.forEach((action: any) => {
-      // Handle limit validation for scrapeList action
-      if (action.action === 'scrapeList' && checkLimit && Array.isArray(action.args) && action.args.length > 0) {
-        const scrapeConfig = action.args[0];
-        if (scrapeConfig && typeof scrapeConfig === 'object' && 'limit' in scrapeConfig) {
-          if (typeof scrapeConfig.limit === 'number' && scrapeConfig.limit > 5) {
-            scrapeConfig.limit = 5;
-          }
-        }
-      }
-
-      // Handle decryption for type and press actions
-      if ((action.action === 'type' || action.action === 'press') && Array.isArray(action.args) && action.args.length > 1) {
-        try {
-          const encryptedValue = action.args[1];
-          if (typeof encryptedValue === 'string') {
-            const decryptedValue = decrypt(encryptedValue);
-            action.args[1] = decryptedValue;
-          } else {
-            logger.log('error', 'Encrypted value is not a string');
-            action.args[1] = '';
-          }
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.log('error', `Failed to decrypt input value: ${errorMessage}`);
-          action.args[1] = '';
-        }
-      }
-    });
-  });
-
-  return processedWorkflow;
-}
-
 /**
  * Logs information about recordings API.
  */
@@ -90,30 +58,101 @@ router.all('/', requireSignIn, (req, res, next) => {
   next() // pass control to the next handler
 })
 
+const DEFAULT_RECORDINGS_LIMIT = 100;
+const MAX_RECORDINGS_LIMIT = 200;
+const DEFAULT_RUNS_LIMIT = 50;
+const MAX_RUNS_LIMIT = 100;
+
+function parsePagination(query: any, defaultLimit: number, maxLimit: number) {
+  const rawPage = parseInt(String(query?.page ?? '1'), 10);
+  const rawLimit = parseInt(String(query?.limit ?? String(defaultLimit)), 10);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
+  const limit = Math.min(maxLimit, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : defaultLimit));
+  const skip = (page - 1) * limit;
+  return { page, limit, skip };
+}
+
 /**
- * GET endpoint for getting an array of all stored recordings.
+ * GET lean paginated robot summaries for the Job boards list.
+ * Default: { robots, total, page, limit } without workflow payloads.
+ * Escape hatch: ?full=1 returns the legacy bare array of full documents.
  */
-router.get('/recordings', requireSignIn, async (req, res) => {
+router.get('/recordings', requireSignIn, async (req: AuthenticatedRequest, res) => {
   try {
-    const data = await Robot.find();
-    return res.send(data);
+    if (!req.user) {
+      return res.status(401).send({ error: 'Unauthorized' });
+    }
+
+    if (String((req.query as any).full || '') === '1') {
+      logger.log('warn', 'GET /recordings?full=1 is deprecated');
+      const data = await Robot.find(ownerIdFilter(req.user.id)).sort({ _id: -1 }).lean();
+      return res.send(data);
+    }
+
+    const { page, limit, skip } = parsePagination(
+      {
+        page: (req.query as any).page ?? '1',
+        limit: (req.query as any).limit ?? '10',
+      },
+      10,
+      MAX_RECORDINGS_LIMIT
+    );
+    const q = String((req.query as any).q || '').trim();
+    const filter: any = { ...ownerIdFilter(req.user.id) };
+    if (q) {
+      filter['recording_meta.name'] = {
+        $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        $options: 'i',
+      };
+    }
+
+    const [total, robots] = await Promise.all([
+      Robot.countDocuments(filter),
+      Robot.find(filter)
+        .select({ recording_meta: 1, schedule: 1, userId: 1 })
+        .sort({ _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    const metaIds = robots.map((r: any) => r.recording_meta?.id).filter(Boolean);
+    const latestRuns = metaIds.length
+      ? await Run.aggregate([
+          { $match: { robotMetaId: { $in: metaIds } } },
+          { $sort: { startedAt: -1, _id: -1 } },
+          { $group: { _id: '$robotMetaId', doc: { $first: '$$ROOT' } } },
+        ])
+      : [];
+    const runByMeta = new Map(latestRuns.map((x: any) => [x._id, x.doc]));
+
+    const summaries = robots.map((r: any) => {
+      const latest = runByMeta.get(r.recording_meta?.id);
+      return buildRobotListSummary(r, pickLatestRun(latest ? [latest] : []));
+    });
+
+    return res.send({ robots: summaries, total, page, limit });
   } catch (e) {
-    logger.log('info', 'Error while reading robots');
-    return res.send(null);
+    logger.log('info', `Error while reading robots: ${e}`);
+    return res.status(500).send({ error: 'Failed to retrieve robots' });
   }
 });
 
 /**
  * GET endpoint for getting a recording.
  */
-router.get('/recordings/:id', requireSignIn, async (req, res) => {
+router.get('/recordings/:id', requireSignIn, async (req: AuthenticatedRequest, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).send({ error: 'Unauthorized' });
+    }
     const data: any = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
       'recording_meta.id': req.params.id,
     }).lean();
 
     if (data?.recording?.workflow) {
-      data.recording.workflow = await processWorkflowActions(
+      data.recording.workflow = processWorkflowActions(
         data.recording.workflow,
       );
     }
@@ -125,17 +164,54 @@ router.get('/recordings/:id', requireSignIn, async (req, res) => {
   }
 })
 
-router.get(('/recordings/:id/runs'), requireSignIn, async (req, res) => {
+router.get(('/recordings/:id/runs'), requireSignIn, async (req: AuthenticatedRequest, res) => {
   try {
-    const runs = await Run.find({
-      robotMetaId: req.params.id
-    }).lean();
+    if (!req.user) {
+      return res.status(401).json({
+        statusCode: 401,
+        messageCode: "error",
+        message: "Unauthorized",
+      });
+    }
+
+    const robot = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': req.params.id,
+    })
+      .select('_id')
+      .lean();
+
+    if (!robot) {
+      return res.status(404).json({
+        statusCode: 404,
+        messageCode: "error",
+        message: "Recording not found",
+      });
+    }
+
+    const { page, limit, skip } = parsePagination(
+      req.query,
+      DEFAULT_RUNS_LIMIT,
+      MAX_RUNS_LIMIT
+    );
+
+    const [totalCount, runs] = await Promise.all([
+      Run.countDocuments({ robotMetaId: req.params.id }),
+      Run.find({ robotMetaId: req.params.id })
+        .sort({ _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
     const formattedRuns = runs.map(formatRunResponse);
     const response = {
       statusCode: 200,
       messageCode: "success",
       runs: {
-        totalCount: formattedRuns.length,
+        totalCount,
+        page,
+        limit,
         items: formattedRuns,
       },
     };
@@ -498,7 +574,7 @@ router.post('/recordings/scrape', requireSignIn, async (req: AuthenticatedReques
     const robotId = uuid();
 
     const newRobot = await Robot.create({
-      userId: req.user.id,
+      userId: normalizeOwnerIdForWrite(req.user.id),
       recording_meta: {
         name: robotName,
         id: robotId,
@@ -641,7 +717,7 @@ router.post('/recordings/:id/duplicate', requireSignIn, async (req: Authenticate
     const currentTimestamp = new Date().toLocaleString();
 
     const newRobot = await Robot.create({
-      userId: originalRobot.userId,
+      userId: normalizeOwnerIdForWrite(originalRobot.userId),
       recording_meta: {
         ...originalRobot.recording_meta,
         id: uuid(),
@@ -691,13 +767,27 @@ router.get('/runs', requireSignIn, async (req: AuthenticatedRequest, res) => {
     if (!req.user) {
       return res.status(401).send({ error: 'Unauthorized' });
     }
-    const robots = await Robot.find({ userId: req.user.id }).lean();
-    const allowedRobotIds = new Set(robots.map((r: any) => r.recording_meta?.id));
-    const data = await Run.find({ robotMetaId: { $in: Array.from(allowedRobotIds) } }).lean();
+    const robots = await Robot.find(ownerIdFilter(req.user.id))
+      .select('recording_meta.id')
+      .lean();
+    const allowedRobotIds = robots
+      .map((r: any) => r.recording_meta?.id)
+      .filter(Boolean);
+
+    // Production safety: never dump full outputs/logs for list views.
+    // Cap results; prefer GET /api/runs for paginated SaaS UI.
+    const rawLimit = parseInt(String((req.query as any)?.limit ?? '100'), 10);
+    const limit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 100));
+
+    const data = await Run.find({ robotMetaId: { $in: allowedRobotIds } })
+      .select('-serializableOutput -binaryOutput -log')
+      .sort({ _id: -1 })
+      .limit(limit)
+      .lean();
     return res.send(data);
   } catch (e) {
     logger.log('info', 'Error while reading runs');
-    return res.send(null);
+    return res.status(500).send({ error: 'Failed to fetch runs' });
   }
 });
 
@@ -828,17 +918,6 @@ router.get('/runs/run/:id', requireSignIn, async (req, res) => {
     return res.send(null);
   }
 });
-
-function AddGeneratedFlags(workflow: WorkflowFile) {
-  const copy = JSON.parse(JSON.stringify(workflow));
-  for (let i = 0; i < workflow.workflow.length; i++) {
-    copy.workflow[i].what.unshift({
-      action: 'flag',
-      args: ['generated'],
-    });
-  }
-  return copy;
-};
 
 /**
  * PUT endpoint for finishing a run and saving it to the storage.
@@ -1373,11 +1452,19 @@ router.post('/recordings/crawl', requireSignIn, async (req: AuthenticatedRequest
       ? requestedFormats
       : [...DEFAULT_OUTPUT_FORMATS];
 
+    const limit = clampCrawlLimit(crawlConfig?.limit);
+    try {
+      assertCrawlFormatsAllowed(crawlFormats, limit);
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+    const cappedCrawlConfig = { ...crawlConfig, limit };
+
     const currentTimestamp = new Date().toLocaleString('en-US');
     const robotId = uuid();
 
     const newRobot = await Robot.create({
-      userId: req.user.id,
+      userId: normalizeOwnerIdForWrite(req.user.id),
       recording_meta: {
         name: robotName,
         id: robotId,
@@ -1397,7 +1484,7 @@ router.post('/recordings/crawl', requireSignIn, async (req: AuthenticatedRequest
               { action: 'flag', args: ['generated'] },
               {
                 action: 'crawl',
-                args: [crawlConfig],
+                args: [cappedCrawlConfig],
                 name: 'Crawl'
               }
             ]
@@ -1507,11 +1594,16 @@ router.post('/recordings/search', requireSignIn, async (req: AuthenticatedReques
       searchFormats = requestedFormats.length > 0 ? requestedFormats : [...DEFAULT_OUTPUT_FORMATS];
     }
 
+    const cappedSearchConfig = {
+      ...searchConfig,
+      limit: clampSearchLimit(searchConfig.limit),
+    };
+
     const currentTimestamp = new Date().toLocaleString('en-US');
     const robotId = uuid();
 
     const newRobot = await Robot.create({
-      userId: req.user.id,
+      userId: normalizeOwnerIdForWrite(req.user.id),
       recording_meta: {
         name: robotName,
         id: robotId,
@@ -1528,7 +1620,7 @@ router.post('/recordings/search', requireSignIn, async (req: AuthenticatedReques
             where: { url: 'about:blank' },
             what: [{
               action: 'search',
-              args: [searchConfig],
+              args: [cappedSearchConfig],
               name: 'Search'
             }]
           }

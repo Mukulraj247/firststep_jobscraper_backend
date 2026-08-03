@@ -14,6 +14,13 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
       '@content': resolve(__dirname, 'src/content'),
       '@background': resolve(__dirname, 'src/background'),
+      '@maxun-helpers': resolve(__dirname, '../src/helpers'),
+    },
+  },
+  server: {
+    fs: {
+      // Allow importing canonical helpers from the monorepo web app.
+      allow: [resolve(__dirname, '..')],
     },
   },
   build: {

@@ -9,7 +9,7 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TablePagination from '@mui/material/TablePagination';
 import TableRow from '@mui/material/TableRow';
-import { Accordion, AccordionSummary, AccordionDetails, Typography, Box, TextField, Tooltip, CircularProgress } from '@mui/material';
+import { Accordion, AccordionSummary, AccordionDetails, Typography, Box, TextField, Tooltip, CircularProgress, Alert, Button } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SearchIcon from '@mui/icons-material/Search';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -93,27 +93,42 @@ export const RunsTable: React.FC<RunsTableProps> = ({
   const location = useLocation();
 
   const getUrlParams = () => {
-    const match = location.pathname.match(/\/runs\/([^\/]+)(?:\/run\/([^\/]+))?/);
+    // Normalize accidental double slashes from bad navigations (`/runs//uuid`).
+    const path = location.pathname.replace(/\/{2,}/g, '/');
+    const match = path.match(/\/runs\/([^\/]+)(?:\/run\/([^\/]+))?/);
+    const robotMetaId = match?.[1]?.trim() || null;
+    const urlRunId = match?.[2]?.trim() || null;
+    // Ignore empty / placeholder segments
     return {
-      robotMetaId: match?.[1] || null,
-      urlRunId: match?.[2] || null
+      robotMetaId: robotMetaId && robotMetaId !== 'undefined' ? robotMetaId : null,
+      urlRunId: urlRunId && urlRunId !== 'undefined' ? urlRunId : null,
     };
   };
 
   const { robotMetaId: urlRobotMetaId, urlRunId } = getUrlParams();
 
-  const isAccordionExpanded = useCallback((currentRobotMetaId: string) => {
-    return currentRobotMetaId === urlRobotMetaId;
-  }, [urlRobotMetaId]);
-
-  const [accordionPage, setAccordionPage] = useState(0);
-  const [accordionsPerPage, setAccordionsPerPage] = useState(10);
+  const [listPage, setListPage] = useState(0); // 0-based for MUI TablePagination
+  const [rowsPerPage, setRowsPerPage] = useState(25);
   const [accordionSortConfigs, setAccordionSortConfigs] = useState<AccordionSortConfig>({});
+
+  const {
+    data: runsPage,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  } = useCachedRuns({
+    page: listPage + 1,
+    limit: rowsPerPage,
+    robotMetaId: urlRobotMetaId,
+  });
+  const rows = runsPage?.runs ?? [];
+  const serverPagination = runsPage?.pagination;
 
   const handleSort = useCallback((columnId: keyof Data, robotMetaId: string) => {
     setAccordionSortConfigs(prevConfigs => {
       const currentConfig = prevConfigs[robotMetaId] || { field: null, direction: 'none' };
-      const newDirection: SortDirection = 
+      const newDirection: SortDirection =
         currentConfig.field !== columnId ? 'asc' :
         currentConfig.direction === 'none' ? 'asc' :
         currentConfig.direction === 'asc' ? 'desc' : 'none';
@@ -128,7 +143,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
     });
   }, []);
 
-  const translatedColumns = useMemo(() => 
+  const translatedColumns = useMemo(() =>
     columns.map(column => ({
       ...column,
       label: t(`runstable.${column.id}`, column.label)
@@ -137,7 +152,6 @@ export const RunsTable: React.FC<RunsTableProps> = ({
   );
 
   const { notify, rerenderRuns, setRerenderRuns } = useGlobalInfoStore();
-  const { data: rows = [], isLoading: isFetching, error, refetch } = useCachedRuns();
   const { invalidateRuns } = useCacheInvalidation();
   
   const activeSocketsRef = useRef<Map<string, Socket>>(new Map());
@@ -148,6 +162,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
   const [expandedAccordions, setExpandedAccordions] = useState<Set<string>>(new Set());
 
   const handleAccordionChange = useCallback((robotMetaId: string, isExpanded: boolean) => {
+    if (!robotMetaId) return;
     setExpandedAccordions(prev => {
       const newSet = new Set(prev);
       if (isExpanded) {
@@ -162,6 +177,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
   }, [navigate]);
 
   const handleRowExpand = useCallback((runId: string, robotMetaId: string, shouldExpand: boolean) => {
+    if (!runId || !robotMetaId) return;
     setExpandedRows(prev => {
       const newSet = new Set(prev);
       if (shouldExpand) {
@@ -172,7 +188,6 @@ export const RunsTable: React.FC<RunsTableProps> = ({
       return newSet;
     });
     
-    // Update URL navigation
     navigate(
       shouldExpand 
         ? `/runs/${robotMetaId}/run/${runId}`
@@ -216,14 +231,19 @@ export const RunsTable: React.FC<RunsTableProps> = ({
     }
   }, [runId, runningRecordingName, rows]);
 
-  const handleAccordionPageChange = useCallback((event: unknown, newPage: number) => {
-    setAccordionPage(newPage);
+  const handleAccordionPageChange = useCallback((_event: unknown, newPage: number) => {
+    setListPage(newPage);
   }, []);
   
   const handleAccordionsPerPageChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    setAccordionsPerPage(+event.target.value);
-    setAccordionPage(0); 
+    setRowsPerPage(+event.target.value);
+    setListPage(0);
   }, []);
+
+  // Reset page when deep-link robot changes
+  useEffect(() => {
+    setListPage(0);
+  }, [urlRobotMetaId]);
 
   const handleChangePage = useCallback((robotMetaId: string, newPage: number) => {
     setPaginationStates(prev => ({
@@ -239,7 +259,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
     setPaginationStates(prev => ({
       ...prev,
       [robotMetaId]: {
-        page: 0, // Reset to first page when changing rows per page
+        page: 0,
         rowsPerPage: newRowsPerPage
       }
     }));
@@ -271,7 +291,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
   const handleSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const debouncedSetSearch = debouncedSearch((value: string) => {
       setSearchTerm(value);
-      setAccordionPage(0);
+      setListPage(0);
       setPaginationStates(prev => {
         const reset = Object.keys(prev).reduce((acc, robotId) => ({
           ...acc,
@@ -296,66 +316,36 @@ export const RunsTable: React.FC<RunsTableProps> = ({
   useEffect(() => {
     if (!rows || rows.length === 0) return;
 
-    const activeRuns = rows.filter((row: Data) => 
+    const activeRuns = rows.filter((row: Data) =>
       row.status === 'running' && row.browserId && row.browserId.trim() !== ''
     );
 
-    activeRuns.forEach((run: Data) => {
-      const { browserId, runId: currentRunId, name } = run;
-      
-      if (activeSocketsRef.current.has(browserId)) {
-        return;
-      }
+    const MAX_LIVE_SOCKETS = 3;
+    const capped = activeRuns.slice(0, MAX_LIVE_SOCKETS);
 
-      console.log(`[RunsTable] Connecting to browser socket: ${browserId} for run: ${currentRunId}`);
+    capped.forEach((run: Data) => {
+      const { browserId, name } = run;
+      if (activeSocketsRef.current.has(browserId)) return;
 
       try {
         const socket = io(`${apiUrl}/${browserId}`, {
           transports: ['websocket', 'polling'],
-          rejectUnauthorized: false
-        });
-
-        socket.on('connect', () => {
-          console.log(`[RunsTable] Connected to browser ${browserId}`);
-        });
-
-        socket.on('debugMessage', (msg: string) => {
-          console.log(`[RunsTable] Debug message for ${browserId}:`, msg);
-          // Optionally update logs in real-time here
+          rejectUnauthorized: false,
         });
 
         socket.on('run-completed', (data: any) => {
-          console.log(`[RunsTable] Run completed for ${browserId}:`, data);
-          
-          // Invalidate cache to show updated run status
           invalidateRuns();
           setRerenderRuns(true);
-          
-          // Show notification
           if (data.status === 'success') {
             notify('success', t('main_page.notifications.interpretation_success', { name: data.robotName || name }));
           } else {
             notify('error', t('main_page.notifications.interpretation_failed', { name: data.robotName || name }));
           }
-          
           socket.disconnect();
           activeSocketsRef.current.delete(browserId);
         });
 
-        socket.on('urlChanged', (url: string) => {
-          console.log(`[RunsTable] URL changed for ${browserId}:`, url);
-        });
-
-        socket.on('dom-snapshot-loading', () => {
-          console.log(`[RunsTable] DOM snapshot loading for ${browserId}`);
-        });
-
-        socket.on('connect_error', (error: Error) => {
-          console.error(`[RunsTable] Connection error for browser ${browserId}:`, error.message);
-        });
-
-        socket.on('disconnect', (reason: string) => {
-          console.log(`[RunsTable] Disconnected from browser ${browserId}:`, reason);
+        socket.on('disconnect', () => {
           activeSocketsRef.current.delete(browserId);
         });
 
@@ -365,11 +355,9 @@ export const RunsTable: React.FC<RunsTableProps> = ({
       }
     });
 
-    // Disconnect from sockets for runs that are no longer active
-    const activeBrowserIds = new Set(activeRuns.map((run: Data) => run.browserId));
+    const activeBrowserIds = new Set(capped.map((run: Data) => run.browserId));
     activeSocketsRef.current.forEach((socket, browserId) => {
       if (!activeBrowserIds.has(browserId)) {
-        console.log(`[RunsTable] Disconnecting from inactive browser: ${browserId}`);
         socket.disconnect();
         activeSocketsRef.current.delete(browserId);
       }
@@ -391,12 +379,13 @@ export const RunsTable: React.FC<RunsTableProps> = ({
     refetch();
   }, [notify, t, refetch]);
 
-  // Filter rows based on search term
+  // Filter rows based on search term (within the current server page)
   const filteredRows = useMemo(() => {
-    let result = rows.filter((row) =>
-      row.name.toLowerCase().includes(searchTerm.toLowerCase())
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return rows;
+    return rows.filter((row) =>
+      String(row.name || '').toLowerCase().includes(term)
     );
-    return result;
   }, [rows, searchTerm]);
 
   const parseDateString = (dateStr: string): Date => {
@@ -509,6 +498,11 @@ export const RunsTable: React.FC<RunsTableProps> = ({
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h6" component="h2">
           {t('runstable.runs', 'Runs')}
+          {serverPagination?.total != null ? (
+            <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1.5 }}>
+              ({serverPagination.total})
+            </Typography>
+          ) : null}
         </Typography>
         <TextField
           size="small"
@@ -521,12 +515,26 @@ export const RunsTable: React.FC<RunsTableProps> = ({
         />
       </Box>
 
-      {isFetching ? (
+      {error ? (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => refetch()}>
+              Retry
+            </Button>
+          }
+          sx={{ mb: 2 }}
+        >
+          {t('runstable.load_error', 'Failed to load runs. Please try again.')}
+        </Alert>
+      ) : null}
+
+      {isLoading && !runsPage ? (
         <Box
           display="flex"
           justifyContent="center"
           alignItems="center"
-          sx={{ 
+          sx={{
             minHeight: '60vh',
             width: '100%'
           }}
@@ -539,17 +547,17 @@ export const RunsTable: React.FC<RunsTableProps> = ({
           flexDirection="column"
           alignItems="center"
           justifyContent="center"
-          sx={{ 
-            minHeight: 300, 
+          sx={{
+            minHeight: 300,
             textAlign: 'center',
-            color: 'text.secondary' 
+            color: 'text.secondary'
           }}
         >
           <Typography variant="h6" gutterBottom>
             {searchTerm ? t('runstable.placeholder.search') : t('runstable.placeholder.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {searchTerm 
+            {searchTerm
               ? t('recordingtable.search_criteria')
               : t('runstable.placeholder.body')
             }
@@ -557,21 +565,30 @@ export const RunsTable: React.FC<RunsTableProps> = ({
         </Box>
       ) : (
         <>
+          {isFetching && !isLoading ? (
+            <Box display="flex" justifyContent="flex-end" mb={1}>
+              <CircularProgress size={18} />
+            </Box>
+          ) : null}
           <TableContainer component={Paper} sx={{ width: '100%', overflow: 'hidden' }}>
-            {Object.entries(groupedRows)
-              .slice(
-                accordionPage * accordionsPerPage,
-                accordionPage * accordionsPerPage + accordionsPerPage
-              )
-              .map(([robotMetaId, data]) => (
-                <Accordion 
+            {Object.entries(groupedRows).map(([robotMetaId, data]) => (
+                <Accordion
                   key={robotMetaId}
-                  expanded={expandedAccordions.has(robotMetaId)}
-                  onChange={(event, isExpanded) => handleAccordionChange(robotMetaId, isExpanded)}
-                  TransitionProps={{ unmountOnExit: true }} // Optimize accordion rendering
+                  expanded={
+                    urlRobotMetaId
+                      ? expandedAccordions.has(robotMetaId) || robotMetaId === urlRobotMetaId
+                      : expandedAccordions.has(robotMetaId)
+                  }
+                  onChange={(_event, isExpanded) => handleAccordionChange(robotMetaId, isExpanded)}
+                  TransitionProps={{ unmountOnExit: true }}
                 >
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography variant="h6">{data[data.length - 1].name}</Typography>
+                    <Typography variant="h6">
+                      {(data[0]?.name || data[data.length - 1]?.name || 'Automation')}
+                      <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+                        ({data.length} on this page)
+                      </Typography>
+                    </Typography>
                   </AccordionSummary>
                   <AccordionDetails>
                     <Table stickyHeader aria-label="sticky table">
@@ -582,7 +599,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
                             <TableCell
                               key={column.id}
                               align={column.align}
-                              style={{ 
+                              style={{
                                 minWidth: column.minWidth,
                                 cursor: column.id === 'startedAt' || column.id === 'finishedAt' ? 'pointer' : 'default'
                               }}
@@ -592,16 +609,16 @@ export const RunsTable: React.FC<RunsTableProps> = ({
                                 }
                               }}
                             >
-                              <Tooltip 
+                              <Tooltip
                                 title={
                                   (column.id === 'startedAt' || column.id === 'finishedAt')
                                     ? t('runstable.sort_tooltip')
                                     : ''
                                 }
                               >
-                                <Box sx={{ 
-                                  display: 'flex', 
-                                  alignItems: 'center', 
+                                <Box sx={{
+                                  display: 'flex',
+                                  alignItems: 'center',
                                   gap: 1,
                                   '&:hover': {
                                     '& .sort-icon': {
@@ -610,7 +627,7 @@ export const RunsTable: React.FC<RunsTableProps> = ({
                                   }
                                 }}>
                                   {column.label}
-                                  <Box className="sort-icon" sx={{ 
+                                  <Box className="sort-icon" sx={{
                                     display: 'flex',
                                     alignItems: 'center',
                                     opacity: accordionSortConfigs[robotMetaId]?.field === column.id ? 1 : 0.3,
@@ -637,7 +654,10 @@ export const RunsTable: React.FC<RunsTableProps> = ({
                       onPageChange={(_, newPage) =>
                         handleChangePage(robotMetaId, newPage)
                       }
-                      rowsPerPageOptions={[]}
+                      onRowsPerPageChange={(e) =>
+                        handleChangeRowsPerPage(robotMetaId, parseInt(e.target.value, 10))
+                      }
+                      rowsPerPageOptions={[5, 10, 25]}
                     />
                   </AccordionDetails>
                 </Accordion>
@@ -646,11 +666,13 @@ export const RunsTable: React.FC<RunsTableProps> = ({
 
           <TablePagination
             component="div"
-            count={Object.keys(groupedRows).length}
-            page={accordionPage}
-            rowsPerPage={accordionsPerPage}
+            count={serverPagination?.total ?? filteredRows.length}
+            page={listPage}
+            rowsPerPage={rowsPerPage}
             onPageChange={handleAccordionPageChange}
-            rowsPerPageOptions={[]}
+            onRowsPerPageChange={handleAccordionsPerPageChange}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+            labelRowsPerPage={t('runstable.rows_per_page', 'Runs per page')}
           />
         </>
       )}

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import * as React from "react";
 import TableRow from "@mui/material/TableRow";
 import TableCell from "@mui/material/TableCell";
-import { Box, Collapse, IconButton, Typography, Chip, TextField } from "@mui/material";
+import { Box, Collapse, IconButton, Typography, Chip, TextField, CircularProgress } from "@mui/material";
 import { Button } from "@mui/material";
 import { DeleteForever, KeyboardArrowDown, KeyboardArrowUp, Settings } from "@mui/icons-material";
 import { deleteRunFromStorage } from "../../api/storage";
+import { getSaasRun } from "../../api/automation";
 import { columns, Data } from "./RunsTable";
 import { RunContent } from "./RunContent";
 import { GenericModal } from "../ui/GenericModal";
@@ -96,6 +97,8 @@ export const CollapsibleRow = ({ row, handleDelete, isOpen, onToggleExpanded, cu
   const [isDeleteOpen, setDeleteOpen] = useState(false);
   const [openSettingsModal, setOpenSettingsModal] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [detailRow, setDetailRow] = useState<Data>(row);
+  const [detailLoading, setDetailLoading] = useState(false);
   const runByLabel = row.runByScheduleId
     ?  `${row.runByScheduleId}`
       : row.runByUserId
@@ -113,6 +116,61 @@ export const CollapsibleRow = ({ row, handleDelete, isOpen, onToggleExpanded, cu
     total: number;
     percentage: number;
   } | null>(null);
+
+  // Keep list metadata in sync; detail payload is loaded on expand.
+  useEffect(() => {
+    setDetailRow((prev) => ({
+      ...prev,
+      ...row,
+      serializableOutput: prev.serializableOutput && Object.keys(prev.serializableOutput).length
+        ? prev.serializableOutput
+        : row.serializableOutput,
+      binaryOutput: prev.binaryOutput && Object.keys(prev.binaryOutput).length
+        ? prev.binaryOutput
+        : row.binaryOutput,
+      log: prev.log || row.log || '',
+    }));
+  }, [row]);
+
+  // Lazy-load full run (outputs/logs) only when the row is expanded.
+  useEffect(() => {
+    if (!isOpen || !row.runId) return;
+    const hasOutput =
+      (row.serializableOutput && Object.keys(row.serializableOutput).length > 0) ||
+      (detailRow.serializableOutput && Object.keys(detailRow.serializableOutput).length > 0);
+    if (hasOutput && detailRow.log) return;
+
+    let cancelled = false;
+    setDetailLoading(true);
+    getSaasRun(row.runId)
+      .then((data: any) => {
+        if (cancelled || !data?.run) return;
+        setDetailRow((prev) => ({
+          ...prev,
+          ...data.run,
+          id: prev.id,
+          duration: data.run.durationMs ?? data.run.duration ?? prev.duration,
+          log:
+            typeof data.run.log === 'string'
+              ? data.run.log
+              : Array.isArray(data.logs)
+                ? data.logs.join('\n')
+                : prev.log || '',
+          serializableOutput: data.run.serializableOutput || {},
+          binaryOutput: data.run.binaryOutput || {},
+        }));
+      })
+      .catch(() => {
+        /* list row remains usable without detail */
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, row.runId]);
 
   // Subscribe to progress updates using module-level socket cache
   useEffect(() => {
@@ -297,9 +355,20 @@ export const CollapsibleRow = ({ row, handleDelete, isOpen, onToggleExpanded, cu
       <TableRow>
         <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={7}>
           <Collapse in={isOpen} timeout="auto" unmountOnExit>
-            <RunContent row={row} abortRunHandler={handleAbort} currentLog={currentLog}
-              logEndRef={logEndRef} interpretationInProgress={runningRecordingName === row.name}
-              workflowProgress={workflowProgress} />
+            {detailLoading ? (
+              <Box display="flex" justifyContent="center" py={3}>
+                <CircularProgress size={28} />
+              </Box>
+            ) : (
+              <RunContent
+                row={detailRow}
+                abortRunHandler={handleAbort}
+                currentLog={currentLog}
+                logEndRef={logEndRef}
+                interpretationInProgress={runningRecordingName === row.name}
+                workflowProgress={workflowProgress}
+              />
+            )}
           </Collapse>
         </TableCell>
       </TableRow>

@@ -24,11 +24,21 @@ const MAX_ATTEMPTS = Math.max(1, parseInt(process.env.SCRAPER_MAX_ATTEMPTS || '3
  * launch (see `requiresCustomLocalLaunch`), which OOM-kills small instances
  * (e.g. Render free 512MB). Retries then just rotate proxy/user-agent instead.
  */
-const DISABLE_VISIBLE_BROWSER_RETRY = process.env.DISABLE_VISIBLE_BROWSER_RETRY === 'true';
+const DISABLE_VISIBLE_BROWSER_RETRY =
+  process.env.DISABLE_VISIBLE_BROWSER_RETRY === 'true' || isLowMemoryMode();
 /** Deploy-tunable anti-bot wait budgets. Defaults keep prior behaviour; shrink these on free tier so a single challenge wait can't exceed SCRAPER_JOB_TIMEOUT_MS. */
-const CLOUDFLARE_WAIT_MS = parseInt(process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || '45000', 10);
-const AMAZON_WAIT_MS = parseInt(process.env.AMAZON_CHALLENGE_WAIT_MS || '90000', 10);
-const MICROSOFT_WAIT_MS = parseInt(process.env.MICROSOFT_CHALLENGE_WAIT_MS || '60000', 10);
+const CLOUDFLARE_WAIT_MS = parseInt(
+  process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || (isLowMemoryMode() ? '20000' : '45000'),
+  10
+);
+const AMAZON_WAIT_MS = parseInt(
+  process.env.AMAZON_CHALLENGE_WAIT_MS || (isLowMemoryMode() ? '30000' : '90000'),
+  10
+);
+const MICROSOFT_WAIT_MS = parseInt(
+  process.env.MICROSOFT_CHALLENGE_WAIT_MS || (isLowMemoryMode() ? '25000' : '60000'),
+  10
+);
 /** Cap run.log size so repeated saves don't balloon mongoose docs / Atlas payloads. */
 const RUN_LOG_MAX_CHARS = parseInt(process.env.RUN_LOG_MAX_CHARS || (isLowMemoryMode() ? '8000' : '50000'), 10);
 const RUN_LOG_FLUSH_EVERY = parseInt(process.env.RUN_LOG_FLUSH_EVERY || (isLowMemoryMode() ? '4' : '1'), 10);

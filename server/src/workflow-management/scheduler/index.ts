@@ -9,7 +9,6 @@ import Robot from "../../models/Robot";
 import Run from "../../models/Run";
 import { BinaryOutputService } from "../../storage/binaryOutputService";
 import { capture } from "../../utils/analytics";
-import { WorkflowFile } from "maxun-core";
 import { Page } from "playwright-core";
 import { sendWebhook } from "../../routes/webhook";
 import { addAirtableUpdateTask, airtableUpdateTasks, processAirtableUpdates } from "../integrations/airtable";
@@ -22,6 +21,7 @@ import {
   getUnblockOptionsFromRuntimeConfig,
   attachCloudflareWaitOnNavigation,
 } from "../../services/unblocker";
+import { AddGeneratedFlags, withTimeout } from "../../utils/workflowHelpers";
 
 async function createWorkflowAndStoreMetadata(id: string, userId: string) {
   try {
@@ -93,15 +93,6 @@ async function createWorkflowAndStoreMetadata(id: string, userId: string) {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
-    )
-  ]);
-}
-
 async function triggerIntegrationUpdates(runId: string, robotMetaId: string): Promise<void> {
   try {
     addGoogleSheetUpdateTask(runId, {
@@ -127,17 +118,6 @@ async function triggerIntegrationUpdates(runId: string, robotMetaId: string): Pr
     logger.log('error', `Failed to update integrations for run: ${runId}: ${err.message}`);
   }
 }
-
-function AddGeneratedFlags(workflow: WorkflowFile) {
-  const copy = JSON.parse(JSON.stringify(workflow));
-  for (let i = 0; i < workflow.workflow.length; i++) {
-    copy.workflow[i].what.unshift({
-      action: 'flag',
-      args: ['generated'],
-    });
-  }
-  return copy;
-};
 
 async function executeRun(id: string, userId: string) {
   let browser: any = null;

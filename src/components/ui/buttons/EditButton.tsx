@@ -1,17 +1,15 @@
-import { IconButton } from "@mui/material";
-import { Edit } from "@mui/icons-material";
-import React, { FC } from "react";
+import { FC } from 'react';
+import { IconButton } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
 
 interface EditButtonProps {
   handleClick: () => void;
-  size?: "small" | "medium" | "large";
+  size?: 'small' | 'medium' | 'large';
 }
 
-export const EditButton: FC<EditButtonProps> = ({ handleClick, size }) => {
-  return (
-    <IconButton aria-label="add" size={size || "small"} onClick={handleClick}
-      sx={{ color: 'inherit', '&:hover': { color: '#1976d2', backgroundColor: 'transparent' } }}>
-      <Edit />
-    </IconButton>
-  );
-};
+/** Restored for legacy recorder UI imports. */
+export const EditButton: FC<EditButtonProps> = ({ handleClick, size = 'small' }) => (
+  <IconButton aria-label="edit" size={size} onClick={handleClick}>
+    <EditIcon fontSize="inherit" />
+  </IconButton>
+);

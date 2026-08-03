@@ -38,7 +38,7 @@ import { useGlobalInfoStore } from '../context/globalInfo';
 import { useSocketStore } from '../context/socket';
 import { ScheduleModal } from '../components/robot/ScheduleModal';
 import { getScheduleLabel } from '../constants/scheduleOptions';
-import { computeNextRunRelative } from '../utils/cronBuilder';
+import { computeNextRunRelative, formatRelativeToNow } from '../utils/cronBuilder';
 
 const statusColor = (status: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
   switch (status) {
@@ -198,11 +198,11 @@ export const DashboardPage = () => {
     return () => clearInterval(id);
   }, []);
 
-  // Background stale check (no auto repaint): periodically compare a lightweight snapshot and let
-  // users decide when to refresh the dashboard.
+  // Background stale check: lightweight — reuse same endpoint but avoid stacking
+  // refreshes while a manual refresh is already in flight.
   useEffect(() => {
     const id = setInterval(() => {
-      if (document.hidden || isLoading || isRefreshing) return;
+      if (document.hidden || isLoading || isRefreshing || hasBackgroundUpdates) return;
       getDashboardAutomations({ page: page + 1, limit: rowsPerPage })
         .then((fresh) => {
           const freshSig = buildDashboardListSignature({
@@ -217,9 +217,9 @@ export const DashboardPage = () => {
         .catch(() => {
           // Keep this silent to avoid noisy toasts for background checks.
         });
-    }, 90000);
+    }, 180000);
     return () => clearInterval(id);
-  }, [buildDashboardListSignature, isLoading, isRefreshing, page, rowsPerPage]);
+  }, [buildDashboardListSignature, hasBackgroundUpdates, isLoading, isRefreshing, page, rowsPerPage]);
 
   useEffect(() => {
     if (searchParams.get('extension') === '1' && extensionCardRef.current) {
@@ -597,7 +597,13 @@ export const DashboardPage = () => {
                 <TableCell sx={{ fontSize: 13 }}>
                   {automation.schedule?.enabled && automation.schedule?.cron ? (() => {
                     const tz = (automation.schedule as any)?.timezone || 'UTC';
-                    const { relative, absolute } = computeNextRunRelative(automation.schedule.cron, tz);
+                    const serverNext = (automation.schedule as any)?.nextRunAt
+                      ? new Date((automation.schedule as any).nextRunAt)
+                      : null;
+                    const { relative, absolute } =
+                      serverNext && !Number.isNaN(serverNext.getTime())
+                        ? formatRelativeToNow(serverNext, tz)
+                        : computeNextRunRelative(automation.schedule.cron, tz);
                     return (
                       <Tooltip title={absolute} arrow>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -674,7 +680,9 @@ export const DashboardPage = () => {
                     <Button
                       size="small"
                       variant="outlined"
-                      onClick={() => navigate(`/runs/${automation.id}`)}
+                      onClick={() => {
+                        if (automation.id) navigate(`/runs/${automation.id}`);
+                      }}
                       sx={{ color: 'text.secondary', borderColor: 'divider' }}
                     >
                       Run History

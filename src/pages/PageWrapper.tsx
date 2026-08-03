@@ -18,6 +18,7 @@ import { Box } from '@mui/material';
 import { AutomationDataPage } from './AutomationDataPage';
 import { AutomationConfigPage } from './AutomationConfigPage';
 import { RunDetailsPage } from './RunDetailsPage';
+import { AdminPage } from './AdminPage';
 
 export const PageWrapper = () => {
   const [open, setOpen] = useState(false);
@@ -109,14 +110,15 @@ export const PageWrapper = () => {
 
   const isAuthPage = location.pathname === '/login' || location.pathname === '/register';
   const isRecordingPage = location.pathname === '/recording';
+  const isAdminPage = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
 
   return (
     <div>
       <AuthProvider>
         <SocketProvider>
           <React.Fragment>
-            {/* Show NavBar only for main app pages, not for recording pages */}
-            {!isRecordingPage && (
+            {/* Show NavBar only for main app pages, not for recording or admin pages */}
+            {!isRecordingPage && !isAdminPage && (
               <Box sx={{
                 position: 'sticky',
                 top: 0,
@@ -128,7 +130,7 @@ export const PageWrapper = () => {
             )}
             <Box sx={{
               display: 'block',
-              minHeight: isAuthPage ? '100vh' : 'calc(100vh - 64px)'
+              minHeight: isAuthPage || isAdminPage ? '100vh' : 'calc(100vh - 64px)'
             }}>
               <Routes>
                 <Route element={<UserRoute />}>
@@ -159,8 +161,9 @@ export const PageWrapper = () => {
                 />
                 <Route
                   path="/recording-setup"
-                  element={<div />}
+                  element={null}
                 />
+                <Route path="/admin" element={<AdminPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </Box>

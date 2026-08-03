@@ -4,7 +4,12 @@ import { getAgenda, scheduleRecurringTrigger, cancelScheduledTrigger, ScheduleTr
 import { createQueuedAutomationRun } from './automationRun';
 import { Job } from 'agenda';
 import moment from 'moment-timezone';
-import { computeNextRun } from '../utils/schedule';
+import {
+  computeNextRun,
+  computeNextRunFromInterval,
+  humanIntervalFromMs,
+  intervalMsFromCron,
+} from '../utils/schedule';
 
 type StoredSchedule = {
   enabled?: boolean;
@@ -48,7 +53,12 @@ export function resolveEffectiveScheduleState(robot: any): StoredSchedule {
   return fromRoot;
 }
 
-export async function syncAutomationSchedule(robot: any, userId: number, timezone: string = 'UTC'): Promise<StoredSchedule> {
+export async function syncAutomationSchedule(
+  robot: any,
+  userId: number,
+  timezone: string = 'UTC',
+  options?: { preserveNextRunAt?: boolean }
+): Promise<StoredSchedule> {
   const rawNextSchedule = robot?.recording_meta?.saasConfig?.schedule ?? robot?.schedule;
   const nextSchedule = buildAutomationScheduleState(rawNextSchedule);
   const jobId = getScheduleJobId(robot.recording_meta.id);
@@ -86,29 +96,54 @@ export async function syncAutomationSchedule(robot: any, userId: number, timezon
   // so the save upserts in place. No pre-cancel needed — that would be two Mongo ops (delete +
   // insert) instead of one (upsert) and leaves a brief window where the trigger is missing.
   const cronExpr = nextSchedule.cron || '';
+  const everyMs =
+    (typeof nextSchedule.every === 'number' && nextSchedule.every > 0
+      ? nextSchedule.every
+      : null) ?? intervalMsFromCron(cronExpr);
+  const humanInterval = everyMs ? humanIntervalFromMs(everyMs) : null;
 
-  await scheduleRecurringTrigger(
+  const agendaNextRunAt = await scheduleRecurringTrigger(
     robot.recording_meta.id,
     String(userId),
     cronExpr,
     finalTz,
-    jobId
+    jobId,
+    humanInterval && everyMs
+      ? {
+          everyMs,
+          humanInterval,
+          preserveNextRunAt: !!options?.preserveNextRunAt,
+        }
+      : undefined
   );
 
-  const scheduleType = nextSchedule.every ? `every ${nextSchedule.every}ms` : `cron ${cronExpr}`;
+  const scheduleType =
+    everyMs && humanInterval
+      ? `interval ${humanInterval} (from save/last-run)`
+      : `cron ${cronExpr}`;
   logger.log('info', `Scheduled automation ${robot.recording_meta.id} with ${scheduleType} in timezone ${finalTz}`);
 
-  // Compute nextRunAt for the return value
-  const computedNextRunAt = cronExpr ? computeNextRun(cronExpr, finalTz) : null;
+  // Prefer Agenda's nextRunAt (may be preserved across rehydrate). Else interval-from-now or cron tick.
+  const computedNextRunAt =
+    agendaNextRunAt ||
+    (everyMs && humanInterval
+      ? computeNextRunFromInterval(everyMs)
+      : cronExpr
+        ? computeNextRun(cronExpr, finalTz)
+        : null);
+
+  // Preserve lastRunAt across rehydrate when present on the robot.
+  const existingLast =
+    robot?.schedule?.lastRunAt != null ? new Date(robot.schedule.lastRunAt) : null;
 
   return {
     enabled: true,
     cron: cronExpr,
-    every: nextSchedule.every,
+    every: everyMs || undefined,
     jobId,
     timezone: finalTz,
     updatedAt: new Date().toISOString(),
-    lastRunAt: null,
+    lastRunAt: options?.preserveNextRunAt ? existingLast : null,
     nextRunAt: computedNextRunAt,
   };
 }
@@ -164,7 +199,14 @@ async function processScheduledRun(job: Job<ScheduleTriggerData>) {
   const tz = deprecatedTimezones[rawTz] || rawTz;
   const cronExpr = schedule.cron || '';
   const lastRunAt = new Date();
-  const nextRunAt = cronExpr ? computeNextRun(cronExpr, tz) : null;
+  const everyMs =
+    (typeof schedule.every === 'number' && schedule.every > 0 ? schedule.every : null) ??
+    intervalMsFromCron(cronExpr);
+  const nextRunAt = everyMs
+    ? computeNextRunFromInterval(everyMs, lastRunAt)
+    : cronExpr
+      ? computeNextRun(cronExpr, tz)
+      : null;
 
   await Robot.updateOne(
     { _id: (robot as any)._id },
@@ -172,6 +214,7 @@ async function processScheduledRun(job: Job<ScheduleTriggerData>) {
       $set: {
         'schedule.lastRunAt': lastRunAt,
         'schedule.nextRunAt': nextRunAt,
+        ...(everyMs ? { 'schedule.every': everyMs } : {}),
       },
     }
   );
@@ -201,33 +244,47 @@ export async function stopAutomationScheduleWorker() {
 
 export async function rehydrateAutomationSchedules() {
   await registerScheduleProcessor();
-  const robots: any[] = await Robot.find().lean();
-  for (const robot of robots) {
-    const schedule = buildAutomationScheduleState(robot.schedule);
-    const saasSchedule = buildAutomationScheduleState(robot.recording_meta?.saasConfig?.schedule);
-    const activeSchedule = schedule.enabled ? schedule : saasSchedule;
-    if (!activeSchedule.enabled) {
-      continue;
-    }
+  // Only load robots that may have an enabled schedule — avoid full-collection scan.
+  const robots: any[] = await Robot.find({
+    $or: [
+      { 'schedule.enabled': true },
+      { 'recording_meta.saasConfig.schedule.enabled': true },
+    ],
+  }).lean();
 
-    try {
-      // Prefer robot.schedule over saasConfig.schedule since saasConfig may not always be populated
-      const sourceSchedule = schedule.enabled ? robot.schedule : robot.recording_meta?.saasConfig?.schedule;
-      const synced = await syncAutomationSchedule(
-        { ...robot, schedule: sourceSchedule },
-        robot.userId,
-        activeSchedule.timezone || 'UTC'
-      );
-      // Only update DB if schedule was successfully synced (enabled: true)
-      // Avoid overwriting valid schedule data with disabled state
-      if (synced.enabled) {
-        await Robot.updateOne(
-          { _id: robot._id },
-          { $set: { schedule: synced } }
-        );
-      }
-    } catch (error: any) {
-      logger.log('error', `Failed to rehydrate automation schedule ${robot.recording_meta?.id}: ${error.message}`);
-    }
+  const REHYDRATE_BATCH = 8;
+  for (let i = 0; i < robots.length; i += REHYDRATE_BATCH) {
+    const batch = robots.slice(i, i + REHYDRATE_BATCH);
+    await Promise.all(
+      batch.map(async (robot) => {
+        const schedule = buildAutomationScheduleState(robot.schedule);
+        const saasSchedule = buildAutomationScheduleState(robot.recording_meta?.saasConfig?.schedule);
+        const activeSchedule = schedule.enabled ? schedule : saasSchedule;
+        if (!activeSchedule.enabled) {
+          return;
+        }
+
+        try {
+          // Prefer robot.schedule over saasConfig.schedule since saasConfig may not always be populated
+          const sourceSchedule = schedule.enabled ? robot.schedule : robot.recording_meta?.saasConfig?.schedule;
+          const synced = await syncAutomationSchedule(
+            { ...robot, schedule: sourceSchedule },
+            robot.userId,
+            activeSchedule.timezone || 'UTC',
+            { preserveNextRunAt: true }
+          );
+          // Only update DB if schedule was successfully synced (enabled: true)
+          // Avoid overwriting valid schedule data with disabled state
+          if (synced.enabled) {
+            await Robot.updateOne(
+              { _id: robot._id },
+              { $set: { schedule: synced } }
+            );
+          }
+        } catch (error: any) {
+          logger.log('error', `Failed to rehydrate automation schedule ${robot.recording_meta?.id}: ${error.message}`);
+        }
+      })
+    );
   }
 }

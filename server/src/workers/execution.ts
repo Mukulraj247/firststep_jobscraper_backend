@@ -4,7 +4,6 @@
  */
 import { Job as AgendaJob } from 'agenda';
 import { Page } from 'playwright-core';
-import { WorkflowFile } from 'maxun-core';
 import logger from '../logger';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
@@ -23,6 +22,7 @@ import {
   attachCloudflareWaitOnNavigation,
 } from '../services/unblocker';
 import { destroyRemoteBrowser } from '../browser-management/controller';
+import { AddGeneratedFlags, withTimeout } from '../utils/workflowHelpers';
 
 export interface ExecuteRunData {
   userId: string;
@@ -54,24 +54,6 @@ function emitRunEvent(
 ) {
   emitToBrowserNamespace(browserId, event, payload);
   emitToQueuedRunUser(userId, event, payload);
-}
-
-
-function AddGeneratedFlags(workflow: WorkflowFile) {
-  const copy = JSON.parse(JSON.stringify(workflow));
-  for (let i = 0; i < workflow.workflow.length; i++) {
-    copy.workflow[i].what.unshift({ action: 'flag', args: ['generated'] });
-  }
-  return copy;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
-    ),
-  ]);
 }
 
 async function triggerIntegrationUpdates(runId: string, robotMetaId: string): Promise<void> {
