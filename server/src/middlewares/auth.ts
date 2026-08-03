@@ -82,10 +82,15 @@ export function signAdminToken(): string | null {
     return sign({ role: "admin", typ: "admin" }, secret, { expiresIn: ADMIN_TOKEN_TTL_SEC });
 }
 
-export function adminCookieOptions(isProduction: boolean, sameSite: "none" | "lax") {
+/**
+ * Admin cookie flags. `secure` must follow HTTPS (not merely NODE_ENV=production),
+ * otherwise browsers drop the cookie on plain http://IP:port Droplet deploys and
+ * /admin appears to "log in then immediately expire".
+ */
+export function adminCookieOptions(secure: boolean, sameSite: "none" | "lax") {
     return {
         httpOnly: true,
-        secure: isProduction,
+        secure,
         sameSite,
         path: "/",
         maxAge: ADMIN_TOKEN_TTL_SEC * 1000,

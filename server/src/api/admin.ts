@@ -29,7 +29,10 @@ import {
 const router = Router();
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const cookieSameSite: 'none' | 'lax' = IS_PRODUCTION ? 'none' : 'lax';
+/** Secure + SameSite=None only work on HTTPS. HTTP Droplet must use lax + secure:false. */
+const cookieSecure = (process.env.PUBLIC_URL || '').trim().toLowerCase().startsWith('https:');
+const cookieSameSite: 'none' | 'lax' =
+  IS_PRODUCTION && cookieSecure ? 'none' : 'lax';
 
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -177,7 +180,7 @@ router.post('/admin/login', adminLoginLimiter, async (req: Request, res: Respons
       return res.status(500).json({ error: 'Server misconfigured (JWT_SECRET)' });
     }
 
-    res.cookie(ADMIN_COOKIE, token, adminCookieOptions(IS_PRODUCTION, cookieSameSite));
+    res.cookie(ADMIN_COOKIE, token, adminCookieOptions(cookieSecure, cookieSameSite));
     logger.log('info', 'Admin session started');
     return res.json({ success: true, expiresInSeconds: 60 * 60 * 12 });
   } catch (error: any) {
@@ -187,7 +190,11 @@ router.post('/admin/login', adminLoginLimiter, async (req: Request, res: Respons
 });
 
 router.post('/admin/logout', (_req: Request, res: Response) => {
-  res.clearCookie(ADMIN_COOKIE, { path: '/' });
+  res.clearCookie(ADMIN_COOKIE, {
+    path: '/',
+    secure: cookieSecure,
+    sameSite: cookieSameSite,
+  });
   return res.json({ success: true });
 });
 
