@@ -65,17 +65,17 @@
         "integrate": "Integrieren",
         "settings": "Einstellungen",
         "options": "Optionen",
-        "heading": "My job board scrapers",
+        "heading": "Scrapers",
         "new": "Create scraper",
-        "create_page_title": "Create job board scraper",
-        "extract_intro": "Open a job board or careers site, record each click, then run the same scrape on a schedule. Everything is defined by your recording—no AI.",
+        "create_page_title": "Create scraper",
+        "extract_intro": "Open a careers site or listing page, record each click, then run the same scrape on a schedule. Everything is defined by your recording—no AI.",
         "extract_url_placeholder": "Example: https://careers.example.com/jobs",
         "extract_url_label": "Job site URL",
         "scrape_intro": "Capture Markdown, HTML, or screenshots from a listing or detail page for your pipeline.",
         "search_criteria": "Versuchen Sie, Ihre Suchkriterien anzupassen",
         "placeholder": {
             "title": "Alles bereit für den Start",
-            "body": "Scrapers you create will appear here. Click \"Create scraper\" to record a job board workflow.",
+            "body": "Scrapers you create will appear here. Click \"Create scraper\" to record an extraction workflow.",
             "search": "No scrapers match your search"
         },
         "modal": {
@@ -104,12 +104,45 @@
         }
     },
     "mainmenu": {
-        "recordings": "Job boards",
+        "recordings": "Scrapers",
+        "jobs": "Job board",
         "runs": "Ausführungen",
         "proxy": "Proxy",
         "apikey": "API-Schlüssel",
         "feedback": "Maxun Cloud beitreten",
         "apidocs": "Website zu API"
+    },
+    "jobboard": {
+        "heading": "Job board",
+        "heading_subtitle": "{{count}} jobs from your scrapers",
+        "heading_subtitle_empty": "Jobs extracted by your scrapers will appear here",
+        "search": "Search jobs...",
+        "filter_company": "Company",
+        "filter_category": "Category",
+        "filter_scraper": "Scraper",
+        "filter_all": "All",
+        "empty_title": "No jobs yet",
+        "empty_body": "Create a scraper and run it to start filling your job board.",
+        "empty_cta": "Go to Scrapers",
+        "apply": "Apply",
+        "open_listing": "Open listing",
+        "view_scraper_data": "View scraper data",
+        "posted": "Posted",
+        "scraped": "Scraped",
+        "location": "Location",
+        "salary": "Salary",
+        "employment_type": "Employment",
+        "remote_type": "Remote",
+        "category": "Category",
+        "company": "Company",
+        "experience": "Experience",
+        "industry": "Industry",
+        "status": "Status",
+        "job_id": "Job ID",
+        "description": "Description",
+        "no_description": "No description available.",
+        "load_error": "Failed to load jobs",
+        "years": "{{count}}+ yrs"
     },
     "runstable": {
         "runs": "Alle Ausführungen",
@@ -548,7 +581,7 @@
             "abort_initiated": "Interpretation des Roboters {{name}} wird abgebrochen"
         },
         "menu": {
-            "recordings": "Job boards",
+            "recordings": "Scrapers",
             "runs": "Ausführungen",
             "proxy": "Proxy",
             "apikey": "API-Schlüssel"

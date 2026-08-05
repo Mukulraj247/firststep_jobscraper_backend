@@ -30,6 +30,18 @@ describe('applyLegacyJobAliases', () => {
     });
     expect(out.companyName).toBe('KeepMe');
   });
+  it('fills location, salary, employment, and remote from legacy keys', () => {
+    const out = applyLegacyJobAliases({
+      city: 'Austin, TX',
+      salary: '$120k–$150k',
+      job_type: 'Full-time',
+      remote_type: 'Hybrid',
+    });
+    expect(out.location).toBe('Austin, TX');
+    expect(out.salaryRange).toBe('$120k–$150k');
+    expect(out.employmentType).toBe('Full-time');
+    expect(out.remoteType).toBe('Hybrid');
+  });
 });
 
 describe('buildCanonicalJobDataSync', () => {
@@ -57,7 +69,28 @@ describe('buildCanonicalJobDataSync', () => {
     expect(row.jobTitle).toBe('');
     expect(row.jobExperience).toBe(0);
     expect(row.isFlagged).toBe(false);
+    expect(row.location).toBe('');
+    expect(row.salaryRange).toBe('');
+    expect(row.employmentType).toBe('');
+    expect(row.remoteType).toBe('');
     expect(row.job_creation_type).toBe(CANONICAL_JOB_CREATION_TYPE);
+  });
+
+  it('persists location and salaryRange when present', () => {
+    const row = buildCanonicalJobDataSync(
+      {
+        jobTitle: 'SDE',
+        location: 'Remote',
+        salary: '$180k',
+        employment_type: 'Full-time',
+        remote_type: 'Remote',
+      } as Record<string, unknown>,
+      { createdAt: created, jobId: 'SE01FE004', insertDefaults: true }
+    );
+    expect(row.location).toBe('Remote');
+    expect(row.salaryRange).toBe('$180k');
+    expect(row.employmentType).toBe('Full-time');
+    expect(row.remoteType).toBe('Remote');
   });
 });
 

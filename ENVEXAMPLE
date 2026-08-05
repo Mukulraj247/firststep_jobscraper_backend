@@ -17,12 +17,14 @@ ADMIN_PASSWORD=change-me-admin-password
 # DIGITALOCEAN_DROPLET_IDS=auto
 
 # Optional: ZeptoMail ops digest every 6 hours (runs passed/failed + compute summary).
-# Token = Send Mail Token from your ZeptoMail Agent (SMTP/API tab).
+# Token = Send Mail Token from your ZeptoMail Agent (SMTP/API tab), NOT the SMTP password.
+# Zoho India accounts must use the .in host or sending returns Access Denied / SERR_157.
 # ZEPTOMAIL_TOKEN=
 # ZEPTOMAIL_FROM_ADDRESS=noreply@yourdomain.com
 # ZEPTOMAIL_FROM_NAME=Scout-X Ops
 # OPS_DIGEST_EMAIL_TO=you@example.com
 # OPS_DIGEST_ENABLED=true
+# ZEPTOMAIL_API_URL=https://api.zeptomail.in/v1.1/email
 
 # MongoDB (required): Mongoose models, Agenda job queue (agendaJobs collection), express-session store, Socket.IO session data.
 # Use MongoDB Atlas in production: create a cluster → Connect → Drivers → copy URI.

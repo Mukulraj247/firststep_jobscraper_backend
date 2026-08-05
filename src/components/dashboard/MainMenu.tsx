@@ -4,7 +4,7 @@ import Tab from '@mui/material/Tab';
 import Box from '@mui/material/Box';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Paper, useTheme, Typography } from "@mui/material";
-import { AutoAwesome, Usb, PlayArrow, Dashboard } from "@mui/icons-material";
+import { AutoAwesome, Usb, PlayArrow, Dashboard, WorkOutline } from "@mui/icons-material";
 import { useTranslation } from 'react-i18next';
 
 interface MainMenuProps {
@@ -27,6 +27,13 @@ export const MainMenu = ({ value = 'robots', handleChangeContent }: MainMenuProp
     if (location.pathname !== '/robots') {
       navigate('/robots');
       handleChangeContent('robots');
+    }
+  };
+
+  const handleJobsClick = () => {
+    if (location.pathname !== '/jobs') {
+      navigate('/jobs');
+      handleChangeContent('jobs');
     }
   };
 
@@ -96,6 +103,15 @@ export const MainMenu = ({ value = 'robots', handleChangeContent }: MainMenuProp
             iconPosition="start"
             disableRipple={true}
             sx={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '16px' }}
+          />
+          <Tab
+            value="jobs"
+            label={t('mainmenu.jobs')}
+            icon={<WorkOutline sx={{ fontSize: 20 }} />}
+            iconPosition="start"
+            disableRipple={true}
+            sx={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '16px' }}
+            onClick={handleJobsClick}
           />
           <Tab
             value="robots"

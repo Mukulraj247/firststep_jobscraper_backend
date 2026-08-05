@@ -6,6 +6,7 @@ import { Recordings } from "../components/robot/Recordings";
 import { Runs } from "../components/run/Runs";
 import ProxyForm from '../components/proxy/ProxyForm';
 import { DashboardPage } from './DashboardPage';
+import { JobBoardPage } from '../components/jobs/JobBoardPage';
 import { useGlobalInfoStore, useCacheInvalidation } from "../context/globalInfo";
 import { createAndRunRecording, createRunForStoredRecording, CreateRunResponseWithQueue, interpretStoredRecording, notifyAboutAbort, scheduleStoredRecording } from "../api/storage";
 import { io, Socket } from "socket.io-client";
@@ -310,6 +311,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
           setRecordingInfo={setRecordingInfo}
           handleScheduleRecording={handleScheduleRecording}
         />;
+      case 'jobs':
+        return <JobBoardPage />;
       case 'runs':
         return <Runs
           currentInterpretationLog={currentInterpretationLog}

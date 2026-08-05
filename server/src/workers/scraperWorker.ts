@@ -9,7 +9,8 @@ import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, persistExtract
 import { runListExtraction } from '../services/listExtractor';
 import { detectCaptcha, detectCloudflareChallenge, waitForCloudflareToClear, applyHumanDelay, simulateHumanMouse, detectAmazonChallengeAndWait, detectMicrosoftChallengeAndWait } from '../services/unblocker';
 import { CaptchaEncounteredError, describe as describeCaptcha } from '../services/scraping/captchaGate';
-import { resolveProxyPool, selectRotatedProxy } from '../services/proxyManager';
+import { resolveProxyPool, selectRotatedProxy, type ProxyProfile } from '../services/proxyManager';
+import { normalizeProxyServer } from '../services/proxyConfig';
 import { selectRotatedUserAgent } from '../services/userAgentManager';
 import { getSessionStatePath, sessionStateExists } from '../storage/sessionState';
 import { acquirePooledPage, releasePooledPage, evictBrowserFromPool } from '../services/browserReusePool';
@@ -18,14 +19,6 @@ import { getDefaultMaxPagesPerBrowser, isLowMemoryMode } from '../utils/memoryMo
 const EXECUTION_TIMEOUT_MS = parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10);
 /** Total attempts per run (1 = no retries). Lower on constrained/free instances to avoid retry storms. */
 const MAX_ATTEMPTS = Math.max(1, parseInt(process.env.SCRAPER_MAX_ATTEMPTS || '3', 10));
-/**
- * When `true`, retries on known anti-bot hosts do NOT escalate to a visible
- * (headless:false) browser. Visible mode forces a heavyweight LOCAL Chromium
- * launch (see `requiresCustomLocalLaunch`), which OOM-kills small instances
- * (e.g. Render free 512MB). Retries then just rotate proxy/user-agent instead.
- */
-const DISABLE_VISIBLE_BROWSER_RETRY =
-  process.env.DISABLE_VISIBLE_BROWSER_RETRY === 'true' || isLowMemoryMode();
 /** Deploy-tunable anti-bot wait budgets. Defaults keep prior behaviour; shrink these on free tier so a single challenge wait can't exceed SCRAPER_JOB_TIMEOUT_MS. */
 const CLOUDFLARE_WAIT_MS = parseInt(
   process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || (isLowMemoryMode() ? '20000' : '45000'),
@@ -62,6 +55,23 @@ const isAntiBotTarget = (url?: string): boolean => {
   } catch {
     return false;
   }
+};
+
+/** Prefer Camoufox residential proxy, then DEFAULT_PROXY_URL — used when escalating after CAPTCHA/blocks. */
+const getEnvFallbackProxy = (): ProxyProfile | null => {
+  const camoufoxServer = normalizeProxyServer(process.env.CAMOUFOX_PROXY_SERVER);
+  if (camoufoxServer) {
+    return {
+      server: camoufoxServer,
+      username: String(process.env.CAMOUFOX_PROXY_USERNAME || '').trim() || undefined,
+      password: String(process.env.CAMOUFOX_PROXY_PASSWORD || '').trim() || undefined,
+    };
+  }
+  const defaultServer = normalizeProxyServer(process.env.DEFAULT_PROXY_URL);
+  if (defaultServer) {
+    return { server: defaultServer };
+  }
+  return null;
 };
 
 const appendRunLog = async (run: any, message: string, opts?: { flush?: boolean }) => {
@@ -257,7 +267,7 @@ async function persistSessionStateForRun(userId: string, automationId: string, b
 
 async function buildIdentityProfile(userId: string, automationId: string, config: Record<string, any>, attemptsMade: number) {
   const proxyPool = await resolveProxyPool(String(userId), config);
-  const selectedProxy = selectRotatedProxy(proxyPool, attemptsMade);
+  let selectedProxy = selectRotatedProxy(proxyPool, attemptsMade);
   const userAgent = config?.userAgent || selectRotatedUserAgent(attemptsMade, config?.userAgentPool);
   const shouldReuseSession = config?.reuseSession !== false;
   const targetUrl = config?.targetUrl;
@@ -269,28 +279,30 @@ async function buildIdentityProfile(userId: string, automationId: string, config
   let browserType = config?.browserType;
   let headless = config?.headless !== false;
   let useStealth = config?.useStealth !== false;
-  let identityStrategy = 'baseline';
+  let identityStrategy = antiBotTarget ? 'baseline-antibot' : 'baseline';
+  let poolIsolationKey: string | undefined;
 
-  // Adaptive strategy: retries should not repeat the same browser profile.
-  // For known anti-bot job boards, progressively switch engine/mode.
-  if (antiBotTarget) {
-    if (DISABLE_VISIBLE_BROWSER_RETRY) {
-      // Memory-constrained mode: keep headless remote browser and only rotate
-      // proxy/user-agent (done above) across attempts. Avoids the heavyweight
-      // local Chromium launch that visible mode forces.
-      identityStrategy = attemptsMade === 0 ? 'baseline-antibot' : 'retry-headless-rotated';
-    } else if (attemptsMade === 1) {
-      browserType = 'camoufox';
-      headless = false;
-      useStealth = true;
-      identityStrategy = 'retry-camoufox-visible';
-    } else if (attemptsMade >= 2) {
-      browserType = 'playwright';
-      headless = false;
-      useStealth = true;
-      identityStrategy = 'retry-playwright-visible';
-    } else {
-      identityStrategy = 'baseline-antibot';
+  // Attempt 0: keep DEFAULT_BROWSER_TYPE / config (usually Playwright).
+  // Attempt 1+: always escalate to Camoufox so CAPTCHA / soft-blocks don't
+  // repeat the same Playwright + datacenter fingerprint (was previously only
+  // applied for a small hardcoded anti-bot host list — e.g. JHU never switched).
+  if (attemptsMade >= 1) {
+    browserType = 'camoufox';
+    // Always headless via Camoufox sidecar — visible/local launches OOM small hosts
+    // and `headless:false` forces a non-sidecar path in browserConnection.
+    headless = true;
+    useStealth = true;
+    identityStrategy =
+      attemptsMade === 1 ? 'retry-camoufox-after-block' : 'retry-camoufox-rotated';
+    poolIsolationKey = `camoufox-escalate-${attemptsMade}`;
+    if (!selectedProxy) {
+      selectedProxy = getEnvFallbackProxy();
+      if (selectedProxy) {
+        logger.log(
+          'info',
+          `CAPTCHA/block escalate: using env proxy ${selectedProxy.server} for Camoufox attempt ${attemptsMade + 1}`
+        );
+      }
     }
   }
 
@@ -304,6 +316,7 @@ async function buildIdentityProfile(userId: string, automationId: string, config
     proxy: selectedProxy,
     browserType,
     identityStrategy,
+    poolIsolationKey,
   };
 }
 
@@ -529,7 +542,10 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
       }
 
       if (hasRemainingAttempts) {
-        await appendRunLog(latestRun, `CAPTCHA encountered — retrying with alternate browser strategy (${attemptsMade + 2}/${MAX_ATTEMPTS})`);
+        await appendRunLog(
+          latestRun,
+          `CAPTCHA encountered — retrying with Camoufox (+ residential proxy if configured) (${attemptsMade + 2}/${MAX_ATTEMPTS})`
+        );
         latestRun.status = 'pending';
         latestRun.errorMessage = `CAPTCHA encountered on attempt ${attemptsMade + 1}: ${message}`;
         latestRun.retryCount = attemptsMade + 1;

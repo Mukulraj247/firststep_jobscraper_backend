@@ -76,7 +76,7 @@ export function App() {
       setError(null);
       const url = backendUrlDraft.trim();
       if (!url) {
-        setError('API base URL is required (e.g. https://firststep-jobscraper-backend.onrender.com/api)');
+        setError('API base URL is required (e.g. http://174.138.34.210:8080/api)');
         return;
       }
       await sendMessage(MSG.SET_EXTENSION_SETTINGS, {
@@ -130,7 +130,7 @@ export function App() {
               style={styles.settingsInput}
               value={backendUrlDraft}
               onChange={(e) => setBackendUrlDraft(e.target.value)}
-              placeholder="https://firststep-jobscraper-backend.onrender.com/api"
+              placeholder="http://174.138.34.210:8080/api"
               autoComplete="off"
             />
           </label>

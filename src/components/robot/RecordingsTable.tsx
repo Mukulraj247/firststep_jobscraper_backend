@@ -437,7 +437,7 @@ export const RecordingsTable = ({
       ) : (
         <>
           <TableContainer component={Paper} sx={{ width: '100%', overflow: 'hidden', mt: 1.5 }} variant="outlined">
-            <Table stickyHeader size="small" aria-label="job board scrapers">
+            <Table stickyHeader size="small" aria-label="scrapers">
               <TableHead>
                 <TableRow>
                   {columns.map((column) => (

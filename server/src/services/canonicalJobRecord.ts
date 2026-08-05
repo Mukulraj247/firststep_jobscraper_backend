@@ -18,6 +18,10 @@ export const CANONICAL_JOB_FIELD_ORDER = [
   'jobExperience',
   'sectorIndustry',
   'f500',
+  'location',
+  'salaryRange',
+  'employmentType',
+  'remoteType',
 ] as const;
 
 export type CanonicalJobData = Record<(typeof CANONICAL_JOB_FIELD_ORDER)[number], string | Date | boolean | number>;
@@ -52,6 +56,10 @@ export const applyLegacyJobAliases = (data: Record<string, unknown>): Record<str
   fill('companyName', ['company', 'employer', 'company_name']);
   fill('jobDescription', ['description', 'summary', 'job_description']);
   fill('jobCategory', ['department', 'job_category']);
+  fill('location', ['job_location', 'city', 'work_location']);
+  fill('salaryRange', ['salary', 'salary_range', 'compensation', 'pay']);
+  fill('employmentType', ['employment_type', 'job_type', 'jobType']);
+  fill('remoteType', ['remote_type', 'workplace_type', 'work_arrangement']);
 
   return out;
 };
@@ -95,6 +103,18 @@ export const buildCanonicalJobDataSync = (
   const jobCategory = str(data.jobCategory ?? data.department ?? data.job_category);
   const sectorIndustry = str(data.sectorIndustry);
   const f500 = str(data.f500);
+  const location = str(
+    data.location ?? data.job_location ?? data.city ?? data.work_location
+  );
+  const salaryRange = str(
+    data.salaryRange ?? data.salary ?? data.salary_range ?? data.compensation ?? data.pay
+  );
+  const employmentType = str(
+    data.employmentType ?? data.employment_type ?? data.job_type ?? data.jobType
+  );
+  const remoteType = str(
+    data.remoteType ?? data.remote_type ?? data.workplace_type ?? data.work_arrangement
+  );
 
   const date = pickPostedDateFromRow(data, createdAt);
 
@@ -127,6 +147,10 @@ export const buildCanonicalJobDataSync = (
     jobExperience,
     sectorIndustry,
     f500,
+    location,
+    salaryRange,
+    employmentType,
+    remoteType,
   };
 };
 

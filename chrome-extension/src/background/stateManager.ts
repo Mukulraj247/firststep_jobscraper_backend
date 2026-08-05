@@ -7,11 +7,21 @@ import { buildEmptyState, defaultCloudScheduleDraft, type ExtensionState } from 
 
 const STORAGE_KEY = 'maxunExtensionState';
 
-/** Previous shipped default; migrate stored state to current `buildEmptyState().backendUrl`. */
-const LEGACY_DEFAULT_BACKEND_URL = 'https://scoutx-backend.onrender.com/api';
+/** Previous shipped defaults; migrate stored state to current `buildEmptyState().backendUrl`. */
+const LEGACY_DEFAULT_BACKEND_URLS = [
+  'https://scoutx-backend.onrender.com/api',
+  'https://firststep-jobscraper-backend.onrender.com/api',
+];
 
 function normalizeApiBase(url: string): string {
   return url.trim().replace(/\/+$/, '');
+}
+
+function isLegacyDefaultBackendUrl(url: string): boolean {
+  const normalized = normalizeApiBase(url);
+  return LEGACY_DEFAULT_BACKEND_URLS.some(
+    (legacy) => normalizeApiBase(legacy) === normalized
+  );
 }
 
 /**
@@ -28,7 +38,7 @@ export async function getState(): Promise<ExtensionState> {
   }
 
   let backendUrl = raw.backendUrl?.trim() || defaults.backendUrl;
-  if (normalizeApiBase(backendUrl) === normalizeApiBase(LEGACY_DEFAULT_BACKEND_URL)) {
+  if (isLegacyDefaultBackendUrl(backendUrl)) {
     backendUrl = defaults.backendUrl;
   }
 

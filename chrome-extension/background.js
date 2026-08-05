@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE = "https://firststep-jobscraper-backend.onrender.com/api";
+const DEFAULT_API_BASE = "http://174.138.34.210:8080/api";
 const DEFAULT_FIELD_TYPES = ["title", "price", "link", "image"];
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

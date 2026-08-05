@@ -55,6 +55,7 @@ const adAndAnalyticsPatterns = [
 
 const buildPoolKey = (profile?: AcquirePooledPageOptions['profile']) =>
   JSON.stringify({
+    browserType: profile?.browserType || 'playwright',
     headless: profile?.headless ?? true,
     useStealth: profile?.useStealth ?? true,
     proxyServer: profile?.proxy?.server || '',

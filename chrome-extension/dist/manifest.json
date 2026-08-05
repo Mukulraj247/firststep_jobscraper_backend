@@ -35,7 +35,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/index.ts-loader-AwE3czGR.js"
+        "assets/index.ts-loader-CJlf_ozQ.js"
       ],
       "matches": [
         "http://*/*",
@@ -71,7 +71,7 @@
       ],
       "resources": [
         "assets/messages-JPremtjR.js",
-        "assets/index.ts-CZExc3By.js"
+        "assets/index.ts-BsM2YKGp.js"
       ],
       "use_dynamic_url": false
     }

@@ -25,7 +25,7 @@ type CreateMode = 'extract' | 'scrape' | 'crawl' | 'search';
 const MODE_META: Record<CreateMode, { label: string; description: string }> = {
   extract: {
     label: 'Extract',
-    description: 'Record clicks on a job board — no AI',
+    description: 'Record clicks on a careers site — no AI',
   },
   scrape: {
     label: 'Scrape',
