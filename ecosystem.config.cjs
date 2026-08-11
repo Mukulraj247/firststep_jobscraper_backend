@@ -57,17 +57,18 @@ module.exports = {
       cwd: __dirname,
       instances: 1,
       autorestart: true,
-      // Must exceed SCRAPE_DRAIN_MS (default 90s) + child/browser cleanup buffer.
-      kill_timeout: 120000,
-      max_memory_restart: '700M',
       env: {
         NODE_ENV: 'production',
         // Schedules live in scoutx-scheduler — keep Chromium process scrape-only.
         SCHEDULER_ENABLED: 'false',
         LOW_MEMORY_MODE: 'true',
         SCRAPER_WORKER_CONCURRENCY: '1',
-        SCRAPER_JOB_TIMEOUT_MS: '60000',
+        // Do NOT hardcode SCRAPER_JOB_TIMEOUT_MS here — it overrides /opt/scout-x/.env
+        // (use .env, e.g. 180000–300000 for Oracle/Meta boards).
       },
+      // Must exceed longest SCRAPER_JOB_TIMEOUT_MS + drain buffer when stopping PM2.
+      kill_timeout: 360000,
+      max_memory_restart: '700M',
     },
     {
       name: 'scoutx-enrichment',
