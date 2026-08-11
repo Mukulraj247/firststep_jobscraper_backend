@@ -7,7 +7,7 @@ import path from 'path';
 import { promisify } from 'util';
 import logger from '../logger';
 import Run from '../models/Run';
-import { killUntrackedPlaywrightChromium } from '../services/browserProcess';
+import { killUntrackedPlaywrightChromium, setOrphanReaperScrapeChildrenCheck } from '../services/browserProcess';
 import type { ScraperJobData } from '../queue/scraperQueue';
 import type { QueuedRunSocketIpcMessage } from './scrapeSocket';
 
@@ -15,6 +15,12 @@ const execFileAsync = promisify(execFile);
 
 /** Active scrape child PIDs — killed on parent drain/shutdown. */
 const activeScrapeChildPids = new Set<number>();
+
+setOrphanReaperScrapeChildrenCheck(() => activeScrapeChildPids.size > 0);
+
+export function getActiveScrapeChildCount(): number {
+  return activeScrapeChildPids.size;
+}
 
 export class ScraperJobTimeoutError extends Error {
   readonly runId: string;
@@ -79,7 +85,8 @@ export async function killChildTree(pid: number): Promise<void> {
     }
   }
 
-  await killUntrackedPlaywrightChromium().catch(() => {});
+  // Safe after SIGKILL of this job's tree — sweep leftover chrome from that child only.
+  await killUntrackedPlaywrightChromium({ force: true }).catch(() => {});
 }
 
 /** SIGKILL every tracked scrape child (and Chromium trees). Safe to call repeatedly. */
@@ -90,10 +97,6 @@ export async function killAllActiveScrapeChildren(): Promise<number> {
   await Promise.all(pids.map((pid) => killChildTree(pid).catch(() => {})));
   activeScrapeChildPids.clear();
   return pids.length;
-}
-
-export function getActiveScrapeChildCount(): number {
-  return activeScrapeChildPids.size;
 }
 
 async function forwardSocketMessage(msg: QueuedRunSocketIpcMessage): Promise<void> {

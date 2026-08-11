@@ -3,6 +3,10 @@
  *
  * Job timeouts only reject a Node Promise.race — Chromium keeps running unless we
  * explicitly close/kill it. Track local browser PIDs and SIGKILL leftovers.
+ *
+ * IMPORTANT: With SCRAPE_JOB_CHILD_PROCESS, Chromium runs inside forked children.
+ * The parent process has an empty pool + empty trackedPids — a naive reaper would
+ * SIGKILL the child's browsers mid-job ("Target page, context or browser has been closed").
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -19,6 +23,8 @@ const REAPER_ENABLED = process.env.CHROMIUM_ORPHAN_REAPER !== 'false';
 
 let reaperTimer: NodeJS.Timeout | null = null;
 let poolEmptyCheck: (() => boolean) | null = null;
+/** Return true when scrape child processes may own live Chromium (parent must not reap). */
+let scrapeChildrenActiveCheck: (() => boolean) | null = null;
 
 type BrowserWithProcess = Browser & {
   process?: () => { pid?: number } | null;
@@ -47,6 +53,10 @@ export function getTrackedBrowserPids(): number[] {
 
 export function setOrphanReaperPoolEmptyCheck(fn: () => boolean): void {
   poolEmptyCheck = fn;
+}
+
+export function setOrphanReaperScrapeChildrenCheck(fn: () => boolean): void {
+  scrapeChildrenActiveCheck = fn;
 }
 
 /** Close gracefully, then SIGKILL the local Chromium process if still alive. */
@@ -87,15 +97,42 @@ export async function forceCloseBrowser(
   }
 }
 
+export type KillOrphanOptions = {
+  /** After we already SIGKILL'd a scrape child tree — allow sweeping leftovers. */
+  force?: boolean;
+};
+
 /**
  * Kill chrome-headless-shell PIDs that we did not launch (or lost track of).
  * Only safe when no pooled / active browsers remain — otherwise child renderers
  * of a live browser would be killed mid-job.
  */
-export async function killUntrackedPlaywrightChromium(): Promise<number> {
+export async function killUntrackedPlaywrightChromium(
+  options: KillOrphanOptions = {}
+): Promise<number> {
   if (process.platform === 'win32') return 0;
-  if (trackedPids.size > 0) return 0;
-  if (poolEmptyCheck && !poolEmptyCheck()) return 0;
+  if (!options.force) {
+    if (trackedPids.size > 0) return 0;
+    if (poolEmptyCheck && !poolEmptyCheck()) return 0;
+    // Parent scraper + child isolation: Chromium lives in forked children.
+    if (scrapeChildrenActiveCheck?.()) {
+      return 0;
+    }
+    // Extra guard: never reap from parent while child-isolation is on unless forced.
+    const inChild = process.env.SCRAPE_JOB_CHILD === '1';
+    const childIsolationFlag = String(process.env.SCRAPE_JOB_CHILD_PROCESS ?? 'true')
+      .trim()
+      .toLowerCase();
+    const childIsolationOn = !(
+      childIsolationFlag === 'false' ||
+      childIsolationFlag === '0' ||
+      childIsolationFlag === 'no' ||
+      childIsolationFlag === 'off'
+    );
+    if (!inChild && childIsolationOn) {
+      return 0;
+    }
+  }
 
   let stdout = '';
   try {
@@ -135,12 +172,31 @@ export async function killUntrackedPlaywrightChromium(): Promise<number> {
 
 export function startOrphanChromiumReaper(): void {
   if (!REAPER_ENABLED || reaperTimer || process.platform === 'win32') return;
+
+  // Parent with child isolation must not run the periodic reaper — children own Chromium.
+  const inChild = process.env.SCRAPE_JOB_CHILD === '1';
+  const childIsolationFlag = String(process.env.SCRAPE_JOB_CHILD_PROCESS ?? 'true')
+    .trim()
+    .toLowerCase();
+  const childIsolationOn = !(
+    childIsolationFlag === 'false' ||
+    childIsolationFlag === '0' ||
+    childIsolationFlag === 'no' ||
+    childIsolationFlag === 'off'
+  );
+  if (!inChild && childIsolationOn) {
+    logger.log(
+      'info',
+      'Chromium orphan reaper skipped in parent (SCRAPE_JOB_CHILD_PROCESS) — children own browsers'
+    );
+    return;
+  }
+
   reaperTimer = setInterval(() => {
     void killUntrackedPlaywrightChromium().catch((error: any) => {
       logger.log('warn', `Orphan Chromium reaper error: ${error?.message || error}`);
     });
   }, REAPER_INTERVAL_MS);
-  // Don't keep the event loop alive solely for the reaper
   if (typeof reaperTimer.unref === 'function') reaperTimer.unref();
   logger.log('info', `Chromium orphan reaper started (every ${REAPER_INTERVAL_MS}ms)`);
 }
