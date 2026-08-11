@@ -15,6 +15,8 @@ import { encrypt } from '../utils/auth';
 import { cancelScheduledWorkflow, scheduleWorkflow } from '../storage/schedule';
 import { enqueueScraperRun, enqueueAbortRun, enqueueExecuteRun } from '../queue/scraperQueue';
 import { getAutomationConfig } from '../services/automation';
+import { recoverOrphanedRuns } from '../services/orphanRunRecovery';
+export { recoverOrphanedRuns };
 import {
   DEFAULT_OUTPUT_FORMATS,
   parseOutputFormats,
@@ -1318,93 +1320,6 @@ async function processQueuedRuns() {
     }
 
     logger.log('error', `Error processing queued runs (${consecutiveDbErrors}/${MAX_CONSECUTIVE_ERRORS}): ${error.message}`);
-  }
-}
-
-/**
- * Recovers orphaned runs that were left in "running" status due to instance crashes
- * This function runs on server startup to ensure data reliability
- */
-export async function recoverOrphanedRuns() {
-  try {
-    logger.log('info', 'Starting recovery of orphaned runs...');
-
-    // Recover runs that were mid-flight when the server died. Exclude `pending` — those are
-    // waiting on the Agenda scraper queue (placeholder browserId, no real browser yet) and are
-    // not crash orphans; treating them here bumped retryCount on every restart.
-    const orphanedRuns = await Run.find({
-      status: { $in: ['running', 'scheduled'] },
-    }).sort({ startedAt: 1 });
-
-    if (orphanedRuns.length === 0) {
-      logger.log('info', 'No orphaned runs found');
-      return;
-    }
-
-    logger.log('info', `Found ${orphanedRuns.length} orphaned runs to recover`);
-
-    for (const run of orphanedRuns) {
-      try {
-        const runData = run.toJSON();
-        logger.log('info', `Recovering orphaned run: ${runData.runId} (status=${runData.status})`);
-
-        const browser = browserPool.getRemoteBrowser(runData.browserId);
-
-        if (!browser) {
-          const retryCount = runData.retryCount || 0;
-
-          if (retryCount < 3) {
-            // Reset state and create a scraper job so the worker picks it up
-            run.status = 'pending';
-            run.retryCount = retryCount + 1;
-            run.serializableOutput = {};
-            run.binaryOutput = {};
-            run.browserId = '';
-            run.errorMessage = null;
-            run.log = runData.log
-              ? `${runData.log}\n[RETRY ${retryCount + 1}/3] Re-queuing due to server crash`
-              : `[RETRY ${retryCount + 1}/3] Re-queuing due to server crash`;
-            await run.save();
-
-            // Create the Agenda scraper job so the worker picks it up
-            const scraperJob = await enqueueScraperRun({
-              automationId: runData.robotMetaId,
-              runId: runData.runId,
-              userId: String(runData.runByUserId || ''),
-              config: runData.interpreterSettings?.runtimeConfig || {},
-            });
-
-            logger.log('info', `Re-queued crashed run ${runData.runId} as scraper job ${scraperJob.attrs._id} (retry ${retryCount + 1}/3)`);
-          } else {
-            const crashRecoveryMessage = `Max retries exceeded (3/3) - Run failed after multiple server crashes.`;
-
-            run.status = 'failed';
-            run.finishedAt = new Date().toLocaleString();
-            run.log = runData.log ? `${runData.log}\n${crashRecoveryMessage}` : crashRecoveryMessage;
-            await run.save();
-
-            logger.log('warn', `Max retries reached for run ${runData.runId}, marked as permanently failed`);
-          }
-
-          if (runData.browserId) {
-            try {
-              browserPool.deleteRemoteBrowser(runData.browserId);
-              logger.log('info', `Cleaned up stale browser reference: ${runData.browserId}`);
-            } catch (cleanupError: any) {
-              logger.log('warn', `Failed to cleanup browser reference ${runData.browserId}: ${cleanupError.message}`);
-            }
-          }
-        } else {
-          logger.log('info', `Run ${runData.runId} browser still active, not orphaned`);
-        }
-      } catch (runError: any) {
-        logger.log('error', `Failed to recover run ${run.runId}: ${runError.message}`);
-      }
-    }
-
-    logger.log('info', `Orphaned run recovery completed. Processed ${orphanedRuns.length} runs.`);
-  } catch (error: any) {
-    logger.log('error', `Failed to recover orphaned runs: ${error.message}`);
   }
 }
 

@@ -8,12 +8,12 @@
  */
 import path from 'path';
 import dotenv from 'dotenv';
-import { setServers as setDnsServers } from 'dns';
+import { applyConfiguredDnsServers } from '../utils/dnsConfig';
 
-/** Same as server/src/storage/db.ts — avoids `querySrv ECONNREFUSED` on some Windows/resolver setups for Atlas SRV. */
+/** Optional DNS_SERVERS after dotenv — avoids Atlas SRV failures only when you opt into public resolvers. */
 dotenv.config();
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
-setDnsServers(['8.8.8.8', '1.1.1.1']);
+applyConfiguredDnsServers();
 
 import mongoose from 'mongoose';
 import ExtractedData from '../models/ExtractedData';

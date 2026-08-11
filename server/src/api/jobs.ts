@@ -1,67 +1,271 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { requireSignInOrApiKey } from '../middlewares/auth';
-import Robot from '../models/Robot';
-import ExtractedData from '../models/ExtractedData';
+import JobBoardListing from '../models/JobBoardListing';
 import logger from '../logger';
+import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import {
-  applyReadPipelineToExtractedData,
-  getAutomationConfig,
-} from '../services/automation';
-import { ownerIdFilter } from '../utils/ownerId';
+  decodeHtmlEntities,
+  pickBestDescription,
+  sanitizeCompanyName,
+  normalizeJobDescription,
+  normalizeSalaryRange,
+  normalizeLocation,
+  deriveFieldsFromDescription,
+  descriptionQualityScore,
+  isBoardQualityPass,
+  isGenericJobTitle,
+  preferJobUrlTitle,
+  titleFromJobUrl,
+} from '../services/jobPageParser';
 
 const router = Router();
 
 router.use(requireSignInOrApiKey);
 
-type OwnedRobot = {
-  recording_meta: { id: string; name?: string; saasConfig?: Record<string, any> };
+type FacetCacheEntry = {
+  expiresAt: number;
+  companies: string[];
+  categories: string[];
 };
 
-async function loadOwnedRobots(userId: unknown): Promise<OwnedRobot[]> {
-  return Robot.find(ownerIdFilter(userId))
-    .select('recording_meta.id recording_meta.name recording_meta.saasConfig')
-    .lean();
-}
+type CountCacheEntry = {
+  expiresAt: number;
+  total: number;
+};
+
+const FACET_TTL_MS = 5 * 60 * 1000;
+const COUNT_TTL_MS = 30 * 1000;
+const MIN_DETAIL_DESC_CHARS = 60;
+const facetCache = new Map<string, FacetCacheEntry>();
+const countCache = new Map<string, CountCacheEntry>();
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function mapJobRow(
-  row: any,
-  robotById: Map<string, OwnedRobot>
-): {
-  id: string;
-  runId: string;
-  robotMetaId: string;
-  scraperName: string;
-  source: string;
-  createdAt: Date;
-  data: Record<string, any>;
-} {
-  const robot = robotById.get(row.robotMetaId);
-  const cfg = robot ? getAutomationConfig(robot as any) : { columnOverrides: {}, rowContext: {} };
+/** Expand short brands so "JPMC" still matches enriched "JPMorgan Chase". */
+function companyNameMatchers(company: string): RegExp[] {
+  const raw = company.trim();
+  if (!raw) return [];
+  const key = raw.toLowerCase();
+  const aliasMap: Record<string, string[]> = {
+    jpmc: ['JPMC', 'JPMorgan Chase', 'JPMorgan', 'J\\.P\\. Morgan', 'Chase'],
+    'jpmorgan chase': ['JPMC', 'JPMorgan Chase', 'JPMorgan', 'J\\.P\\. Morgan', 'Chase'],
+    jpmorgan: ['JPMC', 'JPMorgan Chase', 'JPMorgan', 'J\\.P\\. Morgan'],
+    chase: ['Chase', 'JPMC', 'JPMorgan Chase'],
+    oraclecloud: ['JPMorgan Chase', 'JPMC', 'JPMorgan'],
+  };
+  const names = aliasMap[key] || [escapeRegex(raw)];
+  return names.map((n) => new RegExp(`^${n}$`, 'i'));
+}
+
+function companyFilterClause(company: string): Record<string, any> | null {
+  const matchers = companyNameMatchers(company);
+  if (matchers.length === 0) return null;
   return {
-    id: row._id?.toString?.() || String(row.id),
-    runId: row.runId,
-    robotMetaId: row.robotMetaId,
-    scraperName: robot?.recording_meta?.name || 'Unknown scraper',
-    source: row.source,
-    createdAt: row.createdAt,
-    data: applyReadPipelineToExtractedData(
-      row.data,
-      row.createdAt ? new Date(row.createdAt) : new Date(),
-      cfg.columnOverrides,
-      cfg.rowContext
-    ),
+    $or: matchers.flatMap((re) => [
+      { companyName: re },
+      { 'listSnapshot.companyName': re },
+    ]),
   };
 }
 
-/**
- * GET /api/jobs — paginated jobs across all scrapers owned by the caller.
- * Query: page, limit, q, company, category, robotMetaId
- */
+/** Prefer detail enrichment, but list-complete rows are allowed when description is usable. */
+function boardMatch(ownerId: string): Record<string, any> {
+  return {
+    ownerId,
+    status: { $in: ['ready', 'partial'] },
+    'enrichment.method': { $in: ['ats', 'scrape.do', 'list', 'llm'] },
+    $or: [
+      {
+        jobDescription: { $exists: true, $type: 'string', $ne: '' },
+        $expr: {
+          $gte: [{ $strLenCP: { $ifNull: ['$jobDescription', ''] } }, MIN_DETAIL_DESC_CHARS],
+        },
+      },
+      {
+        'listSnapshot.jobDescription': { $exists: true, $type: 'string', $ne: '' },
+        $expr: {
+          $gte: [
+            { $strLenCP: { $ifNull: ['$listSnapshot.jobDescription', ''] } },
+            MIN_DETAIL_DESC_CHARS,
+          ],
+        },
+      },
+    ],
+  };
+}
+
+function mapListingToJob(row: any, opts?: { fullDescription?: boolean }) {
+  const list = row.listSnapshot || {};
+  let title = decodeHtmlEntities(row.jobTitle || list.jobTitle || '');
+  const jobUrl = row.jobUrl || '';
+  title = preferJobUrlTitle(title, jobUrl || row.applyUrl || '');
+  const company =
+    sanitizeCompanyName(row.companyName || '') ||
+    sanitizeCompanyName(list.companyName || '') ||
+    '';
+  const description = normalizeJobDescription(
+    pickBestDescription(row.jobDescription || '', list.jobDescription || '')
+  );
+  if (
+    !isBoardQualityPass({
+      title,
+      description,
+      jobUrl: jobUrl || row.applyUrl || '',
+    })
+  ) {
+    return null;
+  }
+  // List cards need structured preview (keep newlines) so UI can extract quals/benefits.
+  // Full JD still loads on detail GET.
+  const CARD_PREVIEW_CHARS = 6500;
+  const snippet = opts?.fullDescription
+    ? description
+    : description.length <= CARD_PREVIEW_CHARS
+      ? description
+      : `${description.slice(0, CARD_PREVIEW_CHARS).trim()}…`;
+  const location = normalizeLocation(
+    decodeHtmlEntities(row.location || list.location || '')
+  );
+  const category = decodeHtmlEntities(row.jobCategory || list.jobCategory || '');
+  const salary = normalizeSalaryRange(
+    decodeHtmlEntities(row.salaryRange || list.salaryRange || ''),
+    { location }
+  );
+  const employment = decodeHtmlEntities(row.employmentType || list.employmentType || '');
+  const remote = decodeHtmlEntities(row.remoteType || list.remoteType || '');
+  const industry = decodeHtmlEntities(row.sectorIndustry || list.sectorIndustry || '');
+  const jobId = String(row.jobId || '').trim();
+  const applyUrl = row.applyUrl || jobUrl;
+  const date = row.date || list.date || row.createdAt;
+  const logo = String(row.companyLogoUrl || '').trim();
+  const descScore = descriptionQualityScore(description);
+  const derived =
+    descScore > 0
+      ? deriveFieldsFromDescription(description)
+      : { jobExperience: 0, employmentType: '', remoteType: '' };
+  const jobExperience =
+    (typeof row.jobExperience === 'number' && row.jobExperience > 0 ? row.jobExperience : 0) ||
+    (typeof list.jobExperience === 'number' && list.jobExperience > 0 ? list.jobExperience : 0) ||
+    derived.jobExperience ||
+    0;
+  const employmentFinal = employment || derived.employmentType;
+  const remoteFinal = remote || (descScore > 0 ? derived.remoteType : '');
+
+  const asStringList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
+
+  const about = decodeHtmlEntities(String(row.about || '').trim());
+  const minimumQualifications = asStringList(row.minimumQualifications);
+  const preferredQualifications = asStringList(row.preferredQualifications);
+  const responsibilities = asStringList(row.responsibilities);
+  const benefits = asStringList(row.benefits);
+  const skills = asStringList(row.skills);
+
+  return {
+    id: row._id?.toString?.() || String(row.id),
+    createdAt: row.createdAt || row.lastSeenAt,
+    data: {
+      jobId,
+      jobUrl,
+      applyUrl,
+      jobTitle: title,
+      companyName: company,
+      jobDescription: snippet,
+      jobCategory: category,
+      date,
+      location,
+      salaryRange: salary,
+      employmentType: employmentFinal,
+      remoteType: remoteFinal,
+      jobExperience,
+      sectorIndustry: industry,
+      f500: row.f500 || list.f500 || '',
+      companyLogoUrl: logo,
+      status: row.status,
+      enrichmentMethod: row.enrichment?.method || '',
+      lastEnrichedAt: row.enrichment?.lastEnrichedAt || null,
+      ...(about ? { about } : {}),
+      ...(minimumQualifications.length ? { minimumQualifications } : {}),
+      ...(preferredQualifications.length ? { preferredQualifications } : {}),
+      ...(responsibilities.length ? { responsibilities } : {}),
+      ...(benefits.length ? { benefits } : {}),
+      ...(skills.length ? { skills } : {}),
+    },
+  };
+}
+
+async function getFacets(ownerId: string): Promise<{ companies: string[]; categories: string[] }> {
+  const cached = facetCache.get(ownerId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { companies: cached.companies, categories: cached.categories };
+  }
+
+  const match = boardMatch(ownerId);
+
+  const [companyFacets, categoryFacets] = await Promise.all([
+    JobBoardListing.aggregate([
+      { $match: match },
+      {
+        $project: {
+          companyName: {
+            $cond: [
+              { $and: [{ $ne: ['$companyName', null] }, { $ne: ['$companyName', ''] }] },
+              '$companyName',
+              { $ifNull: ['$listSnapshot.companyName', ''] },
+            ],
+          },
+        },
+      },
+      { $group: { _id: '$companyName', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: 40 },
+    ]),
+    JobBoardListing.aggregate([
+      { $match: match },
+      {
+        $project: {
+          jobCategory: {
+            $cond: [
+              { $and: [{ $ne: ['$jobCategory', null] }, { $ne: ['$jobCategory', ''] }] },
+              '$jobCategory',
+              { $ifNull: ['$listSnapshot.jobCategory', ''] },
+            ],
+          },
+        },
+      },
+      { $group: { _id: '$jobCategory', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: 40 },
+    ]),
+  ]);
+
+  const companies = [
+    ...new Set(
+      companyFacets
+        .map((f: any) => sanitizeCompanyName(String(f._id || '')))
+        .filter(Boolean)
+    ),
+  ];
+  const categories = categoryFacets
+    .map((f: any) => decodeHtmlEntities(String(f._id || '')))
+    .filter(Boolean);
+  facetCache.set(ownerId, { expiresAt: Date.now() + FACET_TTL_MS, companies, categories });
+  return { companies, categories };
+}
+
+async function getCachedCount(cacheKey: string, match: Record<string, any>): Promise<number> {
+  const cached = countCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.total;
+  const total = await JobBoardListing.countDocuments(match);
+  countCache.set(cacheKey, { expiresAt: Date.now() + COUNT_TTL_MS, total });
+  return total;
+}
+
 router.get('/jobs', async (req: any, res: any) => {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
@@ -70,87 +274,87 @@ router.get('/jobs', async (req: any, res: any) => {
     const q = String(req.query.q || '').trim();
     const company = String(req.query.company || '').trim();
     const category = String(req.query.category || '').trim();
-    const robotMetaIdFilter = String(req.query.robotMetaId || '').trim();
+    const ownerId = normalizeOwnerIdForWrite(req.user.id);
 
-    const robots = await loadOwnedRobots(req.user.id);
-    const allowedIds = robots.map((r) => r.recording_meta.id).filter(Boolean);
-    const robotById = new Map(robots.map((r) => [r.recording_meta.id, r]));
+    const match: Record<string, any> = boardMatch(ownerId);
 
-    if (allowedIds.length === 0) {
-      return res.json({
-        pagination: { page, limit, total: 0, totalPages: 1 },
-        jobs: [],
-        filters: { companies: [], categories: [], scrapers: [] },
-      });
-    }
-
-    if (robotMetaIdFilter && !robotById.has(robotMetaIdFilter)) {
-      return res.status(404).json({ error: 'Scraper not found' });
-    }
-
-    const match: Record<string, any> = {
-      robotMetaId: robotMetaIdFilter
-        ? robotMetaIdFilter
-        : { $in: allowedIds },
-    };
-
-    const andClauses: Record<string, any>[] = [];
-    if (q) {
-      const re = new RegExp(escapeRegex(q), 'i');
-      andClauses.push({
-        $or: [
-          { 'data.jobTitle': re },
-          { 'data.companyName': re },
-          { 'data.location': re },
-          { 'data.jobDescription': re },
-        ],
-      });
-    }
     if (company) {
-      andClauses.push({ 'data.companyName': new RegExp(`^${escapeRegex(company)}$`, 'i') });
+      const clause = companyFilterClause(company);
+      if (clause) {
+        match.$and = [...(match.$and || []), clause];
+      }
     }
     if (category) {
-      andClauses.push({ 'data.jobCategory': new RegExp(`^${escapeRegex(category)}$`, 'i') });
-    }
-    if (andClauses.length > 0) {
-      match.$and = andClauses;
+      match.$and = [
+        ...(match.$and || []),
+        {
+          $or: [
+            { jobCategory: new RegExp(`^${escapeRegex(category)}$`, 'i') },
+            { 'listSnapshot.jobCategory': new RegExp(`^${escapeRegex(category)}$`, 'i') },
+          ],
+        },
+      ];
     }
 
-    const facetMatch = {
-      robotMetaId: { $in: allowedIds },
+    if (q) {
+      if (q.length >= 3) {
+        match.$text = { $search: q };
+      } else {
+        const re = new RegExp(escapeRegex(q), 'i');
+        match.$and = [
+          ...(match.$and || []),
+          {
+            $or: [
+              { jobTitle: re },
+              { companyName: re },
+              { location: re },
+              { 'listSnapshot.jobTitle': re },
+            ],
+          },
+        ];
+      }
+    }
+
+    const countKey = JSON.stringify({ ownerId, company, category, q, v: 7 });
+    const useText = q.length >= 3;
+    const projection: Record<string, any> = {
+      jobUrl: 1,
+      applyUrl: 1,
+      jobId: 1,
+      jobTitle: 1,
+      companyName: 1,
+      jobDescription: 1,
+      descriptionSnippet: 1,
+      jobCategory: 1,
+      location: 1,
+      salaryRange: 1,
+      employmentType: 1,
+      remoteType: 1,
+      jobExperience: 1,
+      sectorIndustry: 1,
+      f500: 1,
+      date: 1,
+      status: 1,
+      enrichment: 1,
+      companyLogoUrl: 1,
+      listSnapshot: 1,
+      createdAt: 1,
+      lastSeenAt: 1,
     };
+    if (useText) projection.score = { $meta: 'textScore' };
 
-    const [total, rows, companyFacets, categoryFacets] = await Promise.all([
-      ExtractedData.countDocuments(match),
-      ExtractedData.find(match)
-        .select('runId robotMetaId source createdAt data')
-        .sort({ createdAt: -1 })
-        .skip(offset)
-        .limit(limit)
-        .lean(),
-      ExtractedData.aggregate([
-        { $match: facetMatch },
-        { $group: { _id: '$data.companyName', count: { $sum: 1 } } },
-        { $match: { _id: { $nin: [null, ''] } } },
-        { $sort: { count: -1 } },
-        { $limit: 40 },
-      ]),
-      ExtractedData.aggregate([
-        { $match: facetMatch },
-        { $group: { _id: '$data.jobCategory', count: { $sum: 1 } } },
-        { $match: { _id: { $nin: [null, ''] } } },
-        { $sort: { count: -1 } },
-        { $limit: 40 },
-      ]),
+    let query = JobBoardListing.find(match).select(projection);
+    if (useText) {
+      query = query.sort({ score: { $meta: 'textScore' }, date: -1 });
+    } else {
+      query = query.sort({ date: -1, createdAt: -1 });
+    }
+
+    const [total, rows, facets] = await Promise.all([
+      getCachedCount(countKey, match),
+      query.skip(offset).limit(limit).lean(),
+      getFacets(ownerId),
     ]);
-
-    const jobs = rows.map((row) => mapJobRow(row, robotById));
-    const scrapers = robots
-      .map((r) => ({
-        id: r.recording_meta.id,
-        name: r.recording_meta.name || r.recording_meta.id,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
 
     return res.json({
       pagination: {
@@ -159,11 +363,12 @@ router.get('/jobs', async (req: any, res: any) => {
         total,
         totalPages: total === 0 ? 1 : Math.ceil(total / limit),
       },
-      jobs,
+      jobs: rows
+        .map((row) => mapListingToJob(row, { fullDescription: false }))
+        .filter(Boolean),
       filters: {
-        companies: companyFacets.map((f: any) => String(f._id)).filter(Boolean),
-        categories: categoryFacets.map((f: any) => String(f._id)).filter(Boolean),
-        scrapers,
+        companies: facets.companies,
+        categories: facets.categories,
       },
     });
   } catch (error: any) {
@@ -172,9 +377,6 @@ router.get('/jobs', async (req: any, res: any) => {
   }
 });
 
-/**
- * GET /api/jobs/:id — single extracted job row with ownership check.
- */
 router.get('/jobs/:id', async (req: any, res: any) => {
   try {
     const id = String(req.params.id || '').trim();
@@ -182,27 +384,27 @@ router.get('/jobs/:id', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const row: any = await ExtractedData.findById(id)
-      .select('runId robotMetaId source createdAt data')
+    const ownerId = normalizeOwnerIdForWrite(req.user.id);
+    const row: any = await JobBoardListing.findOne({
+      _id: id,
+      ownerId,
+      status: { $in: ['ready', 'partial'] },
+    })
+      .select(
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl listSnapshot createdAt lastSeenAt'
+      )
       .lean();
 
     if (!row) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const robot: any = await Robot.findOne({
-      ...ownerIdFilter(req.user.id),
-      'recording_meta.id': row.robotMetaId,
-    })
-      .select('recording_meta.id recording_meta.name recording_meta.saasConfig')
-      .lean();
-
-    if (!robot) {
+    const job = mapListingToJob(row, { fullDescription: true });
+    if (!job) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const robotById = new Map<string, OwnedRobot>([[robot.recording_meta.id, robot]]);
-    return res.json({ job: mapJobRow(row, robotById) });
+    return res.json({ job });
   } catch (error: any) {
     logger.log('error', `Failed to fetch job ${req.params.id}: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch job' });

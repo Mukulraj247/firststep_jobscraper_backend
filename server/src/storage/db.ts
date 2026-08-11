@@ -1,21 +1,28 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import { setServers as setDnsServers } from 'dns';
+import { applyConfiguredDnsServers } from '../utils/dnsConfig';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
 import ExtractedData from '../models/ExtractedData';
 import JobIdCounter from '../models/JobIdCounter';
 
-setDnsServers(['8.8.8.8', '1.1.1.1']);
-
 dotenv.config();
+applyConfiguredDnsServers();
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/maxun';
 
+/** Cap per-process pool so N PM2 workers cannot exhaust Atlas connection limits. */
+const MONGODB_MAX_POOL_SIZE = Math.max(
+  1,
+  parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10', 10) || 10
+);
+
 export const connectDB = async () => {
     try {
-        await mongoose.connect(MONGODB_URI);
-        console.log('MongoDB connected successfully');
+        await mongoose.connect(MONGODB_URI, {
+            maxPoolSize: MONGODB_MAX_POOL_SIZE,
+        });
+        console.log(`MongoDB connected successfully (maxPoolSize=${MONGODB_MAX_POOL_SIZE})`);
     } catch (error) {
         console.error('Unable to connect to MongoDB:', error);
     }

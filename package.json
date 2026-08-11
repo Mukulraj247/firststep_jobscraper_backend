@@ -7,6 +7,7 @@
     "@cliqz/adblocker-playwright": "^1.30.0",
     "@emotion/react": "^11.9.0",
     "@emotion/styled": "^11.8.1",
+    "@google/genai": "^2.16.0",
     "@mui/icons-material": "^5.5.1",
     "@mui/lab": "^5.0.0-alpha.80",
     "@mui/material": "^5.6.2",
@@ -84,9 +85,13 @@
     "start": "npm run build:server && concurrently -k \"npm run server\" \"npm run client\"",
     "server": "node --expose-gc server/dist/server/src/server.js",
     "worker": "node --expose-gc server/dist/server/src/worker.js",
+    "worker:scheduler": "node --expose-gc server/dist/server/src/schedule-worker.js",
+    "worker:enrichment": "cross-env UV_THREADPOOL_SIZE=8 NODE_OPTIONS=--max-old-space-size=512 node --expose-gc server/dist/server/src/enrichmentWorker.js",
     "start:dev": "concurrently -k \"npm run server:dev\" \"npm run client\"",
     "server:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/server.ts",
     "worker:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/worker.ts",
+    "worker:scheduler:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/schedule-worker.ts",
+    "worker:enrichment:dev": "cross-env UV_THREADPOOL_SIZE=8 NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/enrichmentWorker.ts",
     "client": "vite",
     "build": "vite build",
     "install:ci": "npm ci --include=dev",
@@ -104,7 +109,9 @@
     "camoufox:server": "python server/src/services/camoufox-server.py",
     "camoufox:server:win": "py -3 server/src/services/camoufox-server.py",
     "playwright:install": "npx playwright@1.58.0 install chromium",
-    "migrate:extracted": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/migrateExtractedCanonical.ts"
+    "migrate:extracted": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/migrateExtractedCanonical.ts",
+    "backfill:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/backfillJobBoardFromExtracted.ts",
+    "repair:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/repairJobBoardDescriptions.ts"
   },
   "overrides": {
     "playwright-core": "1.58.0"

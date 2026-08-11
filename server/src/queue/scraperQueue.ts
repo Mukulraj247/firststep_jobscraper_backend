@@ -8,9 +8,8 @@
  *   run `npm run worker` (see `server/src/worker.ts`) so jobs are not left stuck in `pending`.
  * - `SCRAPER_WORKER_CONCURRENCY` controls how many `scraper-jobs` may run in parallel per
  *   process (wired in `scraperWorker.ts` via `agenda.define` options).
+ * - DNS: use system resolver by default; optional `DNS_SERVERS` is applied in `storage/db.ts`.
  */
-import { setServers as setDnsServers } from 'dns';
-setDnsServers(['8.8.8.8', '1.1.1.1']);
 import Agenda, { AgendaConfig, Job } from 'agenda';
 import logger from '../logger';
 
@@ -48,15 +47,33 @@ export interface AbortJobData {
 /** Max concurrent `scraper-jobs` per API/worker process (Agenda `define` concurrency). */
 export const SCRAPER_JOB_CONCURRENCY = parseInt(process.env.SCRAPER_WORKER_CONCURRENCY || '3', 10);
 
+/** Drain window before force-unlock (default 90s). Keep below PM2 kill_timeout. */
+export function getScrapeDrainMs(): number {
+  const fromEnv = parseInt(process.env.SCRAPE_DRAIN_MS || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
+  return 90_000;
+}
+
+/** Per-job Agenda lock: job timeout + 60s grace (hard crashes recover sooner than 10m default). */
+export function computeScraperLockLifetimeMs(
+  jobTimeoutMs = parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10)
+): number {
+  const timeout = Number.isNaN(jobTimeoutMs) || jobTimeoutMs <= 0 ? 120_000 : jobTimeoutMs;
+  return timeout + 60_000;
+}
+
 let agendaInstance: Agenda | null = null;
 
 function getAgendaConfig(): AgendaConfig {
   const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/maxun';
   const processEvery = process.env.AGENDA_PROCESS_EVERY || '10 seconds';
+  // Local vs hosted workers sharing one Atlas URI will race on the same collection.
+  // Set AGENDA_COLLECTION=agendaJobs_local (API + worker) so dashboard Runs stay on your machine.
+  const collection = String(process.env.AGENDA_COLLECTION || 'agendaJobs').trim() || 'agendaJobs';
   return {
     db: {
       address: mongoUri,
-      collection: 'agendaJobs',
+      collection,
     },
     processEvery,
     defaultLockLifetime: 10 * 60 * 1000,
@@ -71,6 +88,8 @@ export async function getAgenda(): Promise<Agenda> {
 
   const config = getAgendaConfig();
   agendaInstance = new Agenda(config);
+  const collection = (config.db as { collection?: string })?.collection || 'agendaJobs';
+  logger.log('info', `Agenda using collection "${collection}" on shared Mongo (set AGENDA_COLLECTION to isolate local vs hosted workers)`);
 
   // Note: processors are registered by workers after getAgenda() returns.
   // Define call signature: agenda.define(name, options, processor).
@@ -98,14 +117,26 @@ export async function getAgenda(): Promise<Agenda> {
   return agendaInstance;
 }
 
-export async function enqueueScraperRun(jobData: ScraperJobData): Promise<Job> {
+export async function enqueueScraperRun(
+  jobData: ScraperJobData,
+  opts?: { delayMs?: number }
+): Promise<Job> {
   const agenda = await getAgenda();
   const job = await agenda.create<ScraperJobData>('scraper-jobs', jobData);
   // One Agenda document per run. `saveJob` merges `name` into the unique query; match `data.runId`
   // so repeat enqueue / recovery is idempotent (insertOnly).
   job.unique({ 'data.runId': jobData.runId }, { insertOnly: true });
+  const delayMs = opts?.delayMs && opts.delayMs > 0 ? Math.floor(opts.delayMs) : 0;
+  if (delayMs > 0) {
+    job.schedule(new Date(Date.now() + delayMs));
+  }
   await job.save();
-  logger.log('info', `Enqueued scraper job for run ${jobData.runId}`);
+  logger.log(
+    'info',
+    delayMs > 0
+      ? `Enqueued scraper job for run ${jobData.runId} (delay ${delayMs}ms)`
+      : `Enqueued scraper job for run ${jobData.runId}`
+  );
   return job;
 }
 
@@ -120,10 +151,12 @@ export async function enqueueScraperRun(jobData: ScraperJobData): Promise<Job> {
  * the delete and enqueue — avoiding a race where we yank the doc out from under a live worker.
  * The caller can pass `force: true` when they know the lock is about to be released (e.g. the
  * worker's own catch handler calling requeue right before it throws out of the job function).
+ *
+ * `delayMs`: schedule the retry in the future (backoff). 0 / omitted = immediate.
  */
 export async function requeueScraperRun(
   jobData: ScraperJobData,
-  opts?: { force?: boolean }
+  opts?: { force?: boolean; delayMs?: number }
 ): Promise<Job | null> {
   const agenda = await getAgenda();
   const collection: any = (agenda as any)._collection;
@@ -144,7 +177,7 @@ export async function requeueScraperRun(
     await agenda.cancel({ name: 'scraper-jobs', 'data.runId': jobData.runId });
   }
 
-  return enqueueScraperRun(jobData);
+  return enqueueScraperRun(jobData, { delayMs: opts?.delayMs });
 }
 
 export async function enqueueScheduleTrigger(automationId: string, userId: string, jobId: string): Promise<Job> {
@@ -223,6 +256,11 @@ export async function scheduleRecurringTrigger(
      * realign every interval job to "now + interval".
      */
     preserveNextRunAt?: boolean;
+    /**
+     * Explicit first fire time (already packed / user-preferred). When set on
+     * interval schedules, overrides skipImmediate default and hash stagger.
+     */
+    forcedNextRunAt?: Date | null;
   }
 ): Promise<Date | null> {
   const agenda = await getAgenda();
@@ -260,7 +298,7 @@ export async function scheduleRecurringTrigger(
       // so existing automations stagger after deploy.
       const wasAlreadyInterval =
         typeof prevInterval === 'string' &&
-        /(minute|hour|day)s?/i.test(prevInterval) &&
+        /(minute|hour|day|week)s?/i.test(prevInterval) &&
         !prevInterval.includes('*');
       if (wasAlreadyInterval && prev && new Date(prev).getTime() > Date.now()) {
         previousNextRunAt = new Date(prev);
@@ -275,10 +313,17 @@ export async function scheduleRecurringTrigger(
 
   const human = options?.humanInterval;
   const everyMs = options?.everyMs;
+  const forced =
+    options?.forcedNextRunAt && !Number.isNaN(new Date(options.forcedNextRunAt).getTime())
+      ? new Date(options.forcedNextRunAt)
+      : null;
+
   if (human && everyMs && everyMs > 0) {
     job.repeatEvery(human, { skipImmediate: true });
     if (previousNextRunAt) {
       job.attrs.nextRunAt = previousNextRunAt;
+    } else if (forced && forced.getTime() > Date.now()) {
+      job.attrs.nextRunAt = forced;
     } else if (options?.preserveNextRunAt) {
       // Migrating old wall-clock cron jobs on rehydrate: spread first fires across
       // the interval so a server restart does not pile every automation at now+15m.
@@ -290,6 +335,9 @@ export async function scheduleRecurringTrigger(
     }
   } else {
     job.repeatEvery(cronExpression, { timezone });
+    if (forced && forced.getTime() > Date.now() && !previousNextRunAt) {
+      job.attrs.nextRunAt = forced;
+    }
   }
 
   job.unique({ 'data.automationId': automationId });
@@ -314,11 +362,50 @@ export async function cancelScheduledTrigger(automationId: string): Promise<void
   }
 }
 
-export async function closeAgenda(): Promise<void> {
-  if (agendaInstance) {
-    await agendaInstance.stop();
-    await agendaInstance.close();
-    agendaInstance = null;
-    logger.log('info', 'Agenda queue closed');
+/**
+ * Stop polling, wait for in-flight Agenda jobs up to drainMs, then unlock + close.
+ * Agenda 5.0.0 `drain()` has no built-in timeout — wrap with Promise.race.
+ */
+export async function drainAndCloseAgenda(options?: { drainMs?: number }): Promise<{ drained: boolean }> {
+  if (!agendaInstance) {
+    return { drained: true };
   }
+
+  const agenda = agendaInstance;
+  const drainMs = options?.drainMs ?? getScrapeDrainMs();
+  let drained = true;
+
+  try {
+    await Promise.race([
+      (agenda as any).drain(),
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error(`Agenda drain timed out after ${drainMs}ms`)), drainMs);
+      }),
+    ]);
+    logger.log('info', `Agenda drained within ${drainMs}ms`);
+  } catch (error: any) {
+    drained = false;
+    logger.log('warn', `Agenda drain incomplete: ${error?.message || error}`);
+  }
+
+  try {
+    await agenda.stop();
+  } catch (error: any) {
+    logger.log('warn', `Agenda stop failed: ${error?.message || error}`);
+  }
+
+  try {
+    await agenda.close();
+  } catch (error: any) {
+    logger.log('warn', `Agenda close failed: ${error?.message || error}`);
+  }
+
+  agendaInstance = null;
+  logger.log('info', 'Agenda queue closed');
+  return { drained };
+}
+
+/** Immediate stop + close (no drain wait). Prefer drainAndCloseAgenda on SIGTERM. */
+export async function closeAgenda(): Promise<void> {
+  await drainAndCloseAgenda({ drainMs: getScrapeDrainMs() });
 }

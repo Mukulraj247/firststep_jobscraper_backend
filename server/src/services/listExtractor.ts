@@ -27,8 +27,10 @@ import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
 
 const SMART_EXTRACTOR_SCRIPT_PATH = path.join(__dirname, '../workflow-management/scripts/smartJobExtractor.js');
 
+export type FieldSelectorSpec = string | string[];
+
 export interface ListExtractionFieldMap {
-  [fieldName: string]: string;
+  [fieldName: string]: FieldSelectorSpec;
 }
 
 export interface ListExtractionPaginationConfig {
@@ -47,7 +49,8 @@ export interface ListExtractionPaginationConfig {
 }
 
 export interface ListExtractionConfig {
-  itemSelector: string;
+  /** Primary item selector, or ranked list tried until matches exist. */
+  itemSelector: string | string[];
   fields: ListExtractionFieldMap;
   uniqueKey?: string;
   maxItems?: number;
@@ -61,11 +64,26 @@ export interface ListExtractionConfig {
   captcha?: CaptchaGateOptions;
 }
 
+export interface SelectorPromotion {
+  field: string;
+  from: string;
+  to: string;
+  winRatio: number;
+}
+
+export interface ListExtractionResult {
+  rows: Record<string, any>[];
+  /** Field selectors promoted to index 0 after a successful fallback win. */
+  selectorPromotions: SelectorPromotion[];
+  /** Item selector that actually matched (when ranked). */
+  winningItemSelector?: string;
+}
+
 const DEFAULT_SCROLL_DELAY_MS = 1200;
 const DEFAULT_SCROLL_ITERATIONS = 10;
 const DEFAULT_PAGE_LIMIT = 10;
 const DEFAULT_MAX_ITEMS = 10_000;
-const DEFAULT_ITEM_SELECTOR_TIMEOUT_MS = 18_000;
+const DEFAULT_ITEM_SELECTOR_TIMEOUT_MS = 45_000;
 const DEFAULT_SPINNER_BUDGET_MS = 8_000;
 const DEFAULT_LOAD_MORE_WAIT_MS = 12_000;
 const EMPTY_STRIKE_LIMIT = 3;
@@ -118,25 +136,97 @@ const cleanRow = (row: Record<string, any>): Record<string, any> => {
   }, {});
 };
 
+/** Normalize a field map value to a ranked non-empty selector list. */
+export const normalizeFieldSelectorList = (selectorSpec: FieldSelectorSpec | null | undefined): string[] => {
+  const raw = Array.isArray(selectorSpec) ? selectorSpec : [selectorSpec];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const normalized = normalizeSelector(typeof entry === 'string' ? entry : '');
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+};
+
 const sanitizeFields = (fields: ListExtractionFieldMap = {}): ListExtractionFieldMap => {
   return Object.entries(fields).reduce<ListExtractionFieldMap>((acc, [fieldName, selectorSpec]) => {
-    const normalized = normalizeSelector(selectorSpec);
-    if (!normalized) {
+    const ranked = normalizeFieldSelectorList(selectorSpec);
+    if (ranked.length === 0) {
       logger.log('warn', `List extractor skipped field "${fieldName}" because its selector is empty`);
       return acc;
     }
-    acc[fieldName] = normalized;
+    acc[fieldName] = ranked.length === 1 ? ranked[0] : ranked;
     return acc;
   }, {});
 };
 
+const sanitizeItemSelectors = (itemSelector: string | string[] | null | undefined): string[] => {
+  return normalizeFieldSelectorList(itemSelector as FieldSelectorSpec);
+};
+
+/** First / primary selector string for APIs that need a single CSS selector. */
+export const primaryItemSelector = (itemSelector: string | string[] | null | undefined): string => {
+  return sanitizeItemSelectors(itemSelector)[0] || '';
+};
+
+/** Query keys that are 0-based row/item offsets (SuccessFactors `startrow`, etc.). */
+const LIST_OFFSET_QUERY_KEYS = new Set(['startrow', 'offset', 'from']);
+/** Query keys that are 1-based page numbers. */
+const LIST_PAGE_QUERY_KEYS = ['pg', 'page', 'p'];
+
+/**
+ * Reset pagination query params so cloud scrapes start on page 1 (or configured
+ * startPage) even when the robot URL was saved after the user paged in the extension.
+ * Offset-style params (`startrow` / `offset` / `from`) reset to **0**, not 1.
+ */
+export function normalizeListStartUrl(
+  startUrl: string,
+  pagination?: ListExtractionPaginationConfig
+): string {
+  try {
+    const u = new URL(startUrl);
+    const preferred = String(pagination?.pageParam || '').trim().toLowerCase();
+    const startPage = Math.max(1, Number(pagination?.startPage) || 1);
+    let changed = false;
+
+    const resetKey = (key: string) => {
+      if (!u.searchParams.has(key)) return false;
+      const value = LIST_OFFSET_QUERY_KEYS.has(key.toLowerCase()) ? '0' : String(startPage);
+      u.searchParams.set(key, value);
+      return true;
+    };
+
+    if (preferred) {
+      changed = resetKey(preferred) || changed;
+    }
+    // Always clear offset params (SF `startrow`, etc.). A preferred pageParam like
+    // `page` must not leave a saved `startrow=50` untouched — that scrapes only the last page.
+    for (const key of LIST_OFFSET_QUERY_KEYS) {
+      if (resetKey(key)) changed = true;
+    }
+    if (!changed) {
+      for (const key of LIST_PAGE_QUERY_KEYS) {
+        if (resetKey(key)) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    return changed ? u.toString() : startUrl;
+  } catch {
+    return startUrl;
+  }
+}
+
 const sanitizeExtractionConfig = (config: ListExtractionConfig): ListExtractionConfig => {
-  const itemSelector = normalizeSelector(config.itemSelector);
+  const itemSelectors = sanitizeItemSelectors(config.itemSelector);
   const nextButtonSelector = normalizeSelector(config.pagination?.nextButtonSelector);
 
   return {
     ...config,
-    itemSelector,
+    itemSelector: itemSelectors.length <= 1 ? itemSelectors[0] || '' : itemSelectors,
     fields: sanitizeFields(config.fields),
     pagination: config.pagination
       ? {
@@ -145,6 +235,65 @@ const sanitizeExtractionConfig = (config: ListExtractionConfig): ListExtractionC
         }
       : undefined,
   };
+};
+
+/** Flatten field map to Record<field, string[]> for in-page extraction. */
+const fieldsAsRankedLists = (fields: ListExtractionFieldMap): Record<string, string[]> => {
+  return Object.entries(fields).reduce<Record<string, string[]>>((acc, [name, spec]) => {
+    const ranked = normalizeFieldSelectorList(spec);
+    if (ranked.length) acc[name] = ranked;
+    return acc;
+  }, {});
+};
+
+/**
+ * If a non-primary ranked selector wins for ≥50% of non-empty extractions,
+ * recommend promoting it to index 0.
+ */
+export const computeSelectorPromotions = (
+  fields: ListExtractionFieldMap,
+  winCounts: Record<string, number[]>
+): SelectorPromotion[] => {
+  const promotions: SelectorPromotion[] = [];
+  for (const [field, ranked] of Object.entries(fieldsAsRankedLists(fields))) {
+    if (ranked.length < 2) continue;
+    const counts = winCounts[field] || [];
+    const total = counts.reduce((a, b) => a + b, 0);
+    if (total <= 0) continue;
+    let bestIdx = 0;
+    let bestCount = counts[0] || 0;
+    for (let i = 1; i < ranked.length; i += 1) {
+      const c = counts[i] || 0;
+      if (c > bestCount) {
+        bestCount = c;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx === 0) continue;
+    const winRatio = bestCount / total;
+    if (winRatio < 0.5) continue;
+    promotions.push({
+      field,
+      from: ranked[0],
+      to: ranked[bestIdx],
+      winRatio,
+    });
+  }
+  return promotions;
+};
+
+export const applySelectorPromotions = (
+  fields: ListExtractionFieldMap,
+  promotions: SelectorPromotion[]
+): ListExtractionFieldMap => {
+  if (!promotions.length) return fields;
+  const next: ListExtractionFieldMap = { ...fields };
+  for (const promo of promotions) {
+    const ranked = normalizeFieldSelectorList(next[promo.field]);
+    const without = ranked.filter((s) => s !== promo.to);
+    next[promo.field] = [promo.to, ...without];
+  }
+  return next;
 };
 
 /**
@@ -206,45 +355,111 @@ export const autoScrollPage = async (
   }
 };
 
+/**
+ * Wait for async career widgets (Findly/CWS and similar) to hydrate job cards.
+ * Succeeds when the item selector attaches, live-results count is > 0, or common
+ * job-card markup appears.
+ */
+export async function waitForAsyncListHydration(
+  page: Page,
+  itemSelector: string | undefined,
+  timeoutMs: number = DEFAULT_ITEM_SELECTOR_TIMEOUT_MS
+): Promise<boolean> {
+  const selector = String(itemSelector || '').trim();
+  const deadline = Date.now() + Math.max(1_000, timeoutMs);
+
+  if (selector) {
+    try {
+      await page.waitForSelector(selector, {
+        state: 'attached',
+        timeout: timeoutMs,
+      });
+      return true;
+    } catch {
+      /* fall through to heuristic poll */
+    }
+  }
+
+  while (Date.now() < deadline) {
+    try {
+      const ready = await page.evaluate(() => {
+        const text = document.body?.innerText || '';
+        const live = text.match(/(\d+)\s+Live\s+Results/i);
+        if (live && Number(live[1]) > 0) return true;
+        if (
+          document.querySelectorAll(
+            'div.job.clearfix, li.job, .job-listing, [class*="job-card"], [data-job-id]'
+          ).length > 0
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (ready) return true;
+    } catch {
+      /* page navigated mid-wait */
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await page.waitForTimeout(Math.min(500, remaining));
+  }
+  return false;
+}
+
 export const extractListItemsFromPage = async (
   page: Page,
   config: ListExtractionConfig
-): Promise<Record<string, any>[]> => {
+): Promise<{
+  rows: Record<string, any>[];
+  fieldWinCounts: Record<string, number[]>;
+  winningItemSelector?: string;
+}> => {
   const safeConfig = sanitizeExtractionConfig(config);
+  const itemCandidates = sanitizeItemSelectors(safeConfig.itemSelector);
+  const rankedFields = fieldsAsRankedLists(safeConfig.fields);
 
-  if (!safeConfig.itemSelector) {
+  if (itemCandidates.length === 0) {
     logger.log('warn', 'extractListItemsFromPage: empty itemSelector; skipping $$eval');
-    return [];
+    return { rows: [], fieldWinCounts: {} };
   }
 
-  if (Object.keys(safeConfig.fields).length === 0) {
+  if (Object.keys(rankedFields).length === 0) {
     logger.log('warn', 'extractListItemsFromPage: no valid field selectors remain after sanitization');
-    return [];
+    return { rows: [], fieldWinCounts: {} };
   }
 
+  let winningItemSelector = '';
   let matchedCount = 0;
-  try {
-    await page.waitForSelector(safeConfig.itemSelector, {
-      state: 'attached',
-      timeout: DEFAULT_ITEM_SELECTOR_TIMEOUT_MS,
-    });
-    matchedCount = await page.locator(safeConfig.itemSelector).count();
-  } catch {
+  for (const candidate of itemCandidates) {
+    try {
+      await page.waitForSelector(candidate, {
+        state: 'attached',
+        timeout:
+          itemCandidates.length === 1
+            ? DEFAULT_ITEM_SELECTOR_TIMEOUT_MS
+            : Math.min(6000, DEFAULT_ITEM_SELECTOR_TIMEOUT_MS),
+      });
+      matchedCount = await page.locator(candidate).count();
+    } catch {
+      matchedCount = 0;
+    }
+    if (matchedCount > 0) {
+      winningItemSelector = candidate;
+      break;
+    }
+  }
+
+  if (!winningItemSelector || matchedCount === 0) {
     logger.log(
       'warn',
-      `extractListItemsFromPage: item selector not found within ${DEFAULT_ITEM_SELECTOR_TIMEOUT_MS}ms — continuing (may return 0 rows)`
+      `extractListItemsFromPage: no item selector matched (${itemCandidates.length} candidate(s))`
     );
+    return { rows: [], fieldWinCounts: {} };
   }
 
-  if (matchedCount === 0) {
-    // No point running $$eval when nothing matches — let the caller decide
-    // whether to fall back to smart extraction.
-    return [];
-  }
-
-  const rows = await page.$$eval(
-    safeConfig.itemSelector,
-    (elements, fields) => {
+  const evalResult = await page.$$eval(
+    winningItemSelector,
+    (elements, fields: Record<string, string[]>) => {
       const parseFieldSpecInner = (spec: string): { selector: string; attribute: string } => {
         const trimmed = spec.trim();
         const atIndex = trimmed.lastIndexOf('@');
@@ -493,24 +708,49 @@ export const extractListItemsFromPage = async (
         return target.getAttribute(attribute);
       };
 
-      return elements.map((element) => {
-        return Object.entries(fields).reduce<Record<string, any>>((acc, [fieldName, selectorSpec]) => {
-          // `fixed` attribute means the selector IS the literal value
-          // (used by extension for per-page "company: Amazon@fixed" patterns).
-          const spec = String(selectorSpec);
-          const atIndex = spec.lastIndexOf('@');
-          if (atIndex > 0 && spec.slice(atIndex + 1).trim().toLowerCase() === 'fixed') {
-            acc[fieldName] = spec.slice(0, atIndex);
-            return acc;
+      const meaningful = (value: unknown): boolean => {
+        if (value == null) return false;
+        if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim().length > 0;
+        return true;
+      };
+
+      const fieldWinCounts: Record<string, number[]> = {};
+      for (const [fieldName, ranked] of Object.entries(fields)) {
+        fieldWinCounts[fieldName] = (ranked || []).map(() => 0);
+      }
+
+      const rows = elements.map((element) => {
+        return Object.entries(fields).reduce<Record<string, any>>((acc, [fieldName, ranked]) => {
+          const list = Array.isArray(ranked) ? ranked : [String(ranked)];
+          for (let i = 0; i < list.length; i += 1) {
+            const spec = String(list[i] || '');
+            // `fixed` attribute means the selector IS the literal value
+            // (used by extension for per-page "company: Amazon@fixed" patterns).
+            const atIndex = spec.lastIndexOf('@');
+            if (atIndex > 0 && spec.slice(atIndex + 1).trim().toLowerCase() === 'fixed') {
+              acc[fieldName] = spec.slice(0, atIndex);
+              fieldWinCounts[fieldName][i] = (fieldWinCounts[fieldName][i] || 0) + 1;
+              return acc;
+            }
+            const value = extractValueInner(element, spec);
+            if (meaningful(value)) {
+              acc[fieldName] = value;
+              fieldWinCounts[fieldName][i] = (fieldWinCounts[fieldName][i] || 0) + 1;
+              return acc;
+            }
           }
-          acc[fieldName] = extractValueInner(element, spec);
+          acc[fieldName] = null;
           return acc;
         }, {});
       });
+
+      return { rows, fieldWinCounts };
     },
-    safeConfig.fields
+    rankedFields
   );
 
+  const rows = Array.isArray(evalResult?.rows) ? evalResult.rows : [];
+  const fieldWinCounts = evalResult?.fieldWinCounts || {};
   const cleaned = rows.map(cleanRow).filter((row) => Object.values(row).some((value) => isMeaningful(value)));
   if (cleaned.length === 0 && rows.length > 0) {
     logger.log(
@@ -518,7 +758,7 @@ export const extractListItemsFromPage = async (
       'extractListItemsFromPage: matched item nodes but every field was empty after extraction — check field selectors (use :scope > child, or a more specific sub-selector)'
     );
   }
-  return cleaned;
+  return { rows: cleaned, fieldWinCounts, winningItemSelector };
 };
 
 /**
@@ -839,9 +1079,10 @@ const advancePagination = async (
 ) => {
   const pagination = config.pagination || {};
   const spinnerBudget = pagination.scrollSpinnerBudgetMs || DEFAULT_SPINNER_BUDGET_MS;
+  const itemSel = primaryItemSelector(config.itemSelector);
   switch (pagination.mode) {
     case 'next-button':
-      return paginateByNextButton(page, pagination, currentPage, config.itemSelector);
+      return paginateByNextButton(page, pagination, currentPage, itemSel);
     case 'page-number-loop':
       return paginateByPageNumber(page, startUrl, pagination, currentPage);
     case 'infinite-scroll':
@@ -849,7 +1090,7 @@ const advancePagination = async (
         page,
         config.scrollDelayMs,
         pagination.maxScrollSteps || config.maxScrollIterations,
-        config.itemSelector,
+        itemSel,
         spinnerBudget
       );
       return false;
@@ -862,7 +1103,7 @@ export const runListExtraction = async (
   page: Page,
   startUrl: string,
   config: ListExtractionConfig
-): Promise<Record<string, any>[]> => {
+): Promise<ListExtractionResult> => {
   const safeConfig = sanitizeExtractionConfig(config);
   const pageLimit = config.pagination?.maxPages || DEFAULT_PAGE_LIMIT;
   const maxItemsCap = typeof safeConfig.maxItems === 'number' && safeConfig.maxItems > 0
@@ -873,16 +1114,50 @@ export const runListExtraction = async (
   const spinnerBudget =
     config.pagination?.scrollSpinnerBudgetMs || DEFAULT_SPINNER_BUDGET_MS;
   const allRows: Record<string, any>[] = [];
+  const aggregatedWins: Record<string, number[]> = {};
+  let winningItemSelector: string | undefined;
 
-  // Install global page guards: alert/confirm auto-dismiss + per-pass
-  // overlay/CAPTCHA hooks mirror the extension's runtime behaviour.
+  const mergeWins = (pageWins: Record<string, number[]>) => {
+    for (const [field, counts] of Object.entries(pageWins || {})) {
+      if (!aggregatedWins[field]) {
+        aggregatedWins[field] = counts.map((c) => c || 0);
+        continue;
+      }
+      for (let i = 0; i < counts.length; i += 1) {
+        aggregatedWins[field][i] = (aggregatedWins[field][i] || 0) + (counts[i] || 0);
+      }
+    }
+  };
+
   const disposeDialog = installDialogHandler(page, popupsOptions);
 
   try {
-    await gotoForListExtraction(page, startUrl);
-    // Dismiss any banner that appeared on the very first paint.
+    const effectiveStartUrl = normalizeListStartUrl(startUrl, safeConfig.pagination);
+    if (effectiveStartUrl !== startUrl) {
+      logger.log(
+        'info',
+        `List extractor reset start URL pagination: ${startUrl} → ${effectiveStartUrl}`
+      );
+    }
+    await gotoForListExtraction(page, effectiveStartUrl);
+    await dismissOverlays(page, popupsOptions);
+    // Findly / DXC-style widgets often paint after language confirm + XHR.
     await dismissOverlays(page, popupsOptions);
     await assertNoCaptcha(page, captchaOptions);
+
+    // Give async job widgets time to hydrate before the first extract pass.
+    const bootSelector = primaryItemSelector(safeConfig.itemSelector);
+    const hydrated = await waitForAsyncListHydration(
+      page,
+      bootSelector || undefined,
+      DEFAULT_ITEM_SELECTOR_TIMEOUT_MS
+    );
+    if (!hydrated && bootSelector) {
+      logger.log(
+        'warn',
+        `List extractor: item selector not ready after boot wait (${bootSelector})`
+      );
+    }
 
     const runSmartExtraction = async (): Promise<Record<string, any>[]> => {
       try {
@@ -904,16 +1179,16 @@ export const runListExtraction = async (
       return [];
     };
 
-    // SMART EXTRACTION FALLBACK: URL-only automation (no configured selector).
-    if (!safeConfig.itemSelector) {
-      logger.log('info', `No item selector provided for ${startUrl}. Attempting smart job extraction...`);
+    const activeItemSelector = () =>
+      winningItemSelector || primaryItemSelector(safeConfig.itemSelector);
+
+    if (!primaryItemSelector(safeConfig.itemSelector)) {
+      logger.log('info', `No item selector provided for ${effectiveStartUrl}. Attempting smart job extraction...`);
       const smart = await runSmartExtraction();
-      return smart.map(cleanRow);
+      return { rows: smart.map(cleanRow), selectorPromotions: [] };
     }
 
     for (let pageIndex = 0; pageIndex < pageLimit; pageIndex++) {
-      // Refresh guards between pages — SPA navigations can spawn new banners
-      // and occasionally present a CAPTCHA challenge mid-session.
       await dismissOverlays(page, popupsOptions);
       await assertNoCaptcha(page, captchaOptions);
 
@@ -922,57 +1197,76 @@ export const runListExtraction = async (
           page,
           safeConfig.scrollDelayMs,
           safeConfig.pagination?.maxScrollSteps || safeConfig.maxScrollIterations,
-          safeConfig.itemSelector,
+          activeItemSelector(),
           spinnerBudget
         );
       }
 
-      const pageRows = await extractListItemsFromPage(page, safeConfig);
-      allRows.push(...pageRows);
+      const pageResult = await extractListItemsFromPage(page, {
+        ...safeConfig,
+        itemSelector: winningItemSelector || safeConfig.itemSelector,
+      });
+      if (pageResult.winningItemSelector) {
+        winningItemSelector = pageResult.winningItemSelector;
+      }
+      mergeWins(pageResult.fieldWinCounts);
+      allRows.push(...pageResult.rows);
 
       const dedupedCount = dedupeRows(allRows, safeConfig.uniqueKey).length;
       logger.log(
         'info',
-        `List extractor gathered ${pageRows.length} rows on page ${pageIndex + 1} (${dedupedCount} unique rows total)`
+        `List extractor gathered ${pageResult.rows.length} rows on page ${pageIndex + 1} (${dedupedCount} unique rows total)`
       );
 
       if (dedupedCount >= maxItemsCap) {
         break;
       }
 
-      const advanced = await advancePagination(page, startUrl, safeConfig, pageIndex + 1);
+      const advanced = await advancePagination(
+        page,
+        effectiveStartUrl,
+        { ...safeConfig, itemSelector: activeItemSelector() },
+        pageIndex + 1
+      );
       if (!advanced) {
         break;
       }
     }
 
-    // FALLBACK: configured selector produced 0 rows across all pages — common
-    // cause is a stale/fragile selector recorded months ago against markup that
-    // has since changed. Try smart auto-discovery on the first page before
-    // giving up, so scheduled runs don't silently produce empty datasets.
     if (allRows.length === 0) {
       logger.log(
         'warn',
-        `Configured selector "${safeConfig.itemSelector}" produced 0 rows across ${pageLimit} page(s). Falling back to smart extraction on the landing page.`
+        `Configured selector "${primaryItemSelector(safeConfig.itemSelector)}" produced 0 rows across ${pageLimit} page(s). Falling back to smart extraction on the landing page.`
       );
       try {
-        await gotoForListExtraction(page, startUrl);
+        await gotoForListExtraction(page, effectiveStartUrl);
         await dismissOverlays(page, popupsOptions);
         const smartRows = await runSmartExtraction();
         if (smartRows.length > 0) {
           logger.log('info', `Smart extraction fallback yielded ${smartRows.length} rows.`);
-          return smartRows.map(cleanRow).slice(0, maxItemsCap);
+          return {
+            rows: smartRows.map(cleanRow).slice(0, maxItemsCap),
+            selectorPromotions: [],
+            winningItemSelector,
+          };
         }
       } catch (err: any) {
         logger.log('warn', `Smart extraction fallback failed: ${err.message}`);
       }
     }
 
-    const dedupedRows = dedupeRows(allRows, safeConfig.uniqueKey);
-    return dedupedRows.slice(0, maxItemsCap);
+    const dedupedRows = dedupeRows(allRows, safeConfig.uniqueKey).slice(0, maxItemsCap);
+    const selectorPromotions = computeSelectorPromotions(safeConfig.fields, aggregatedWins);
+    if (selectorPromotions.length) {
+      logger.log(
+        'info',
+        `Ranked selector promotions: ${selectorPromotions
+          .map((p) => `${p.field}: ${p.from} → ${p.to} (${Math.round(p.winRatio * 100)}%)`)
+          .join('; ')}`
+      );
+    }
+    return { rows: dedupedRows, selectorPromotions, winningItemSelector };
   } catch (error: any) {
-    // CaptchaEncounteredError must propagate to the worker so the run can be
-    // paused and a `captcha:required` socket event can be emitted.
     if (error instanceof CaptchaEncounteredError) {
       throw error;
     }

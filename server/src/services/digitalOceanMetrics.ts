@@ -48,7 +48,9 @@ export type DropletComputeSnapshot = {
     diskTotalBytes: number | null;
     bandwidthInboundMbps: MetricSeriesSummary;
     bandwidthOutboundMbps: MetricSeriesSummary;
+    /** DO disk_read values are megabytes/sec (MBps); field name kept for API stability. */
     diskReadMbps: MetricSeriesSummary;
+    /** DO disk_write values are megabytes/sec (MBps); field name kept for API stability. */
     diskWriteMbps: MetricSeriesSummary;
     load1: MetricSeriesSummary;
     empty: boolean;
@@ -118,7 +120,7 @@ function publicIpFromEnv(): string | null {
   return null;
 }
 
-type PromResult = {
+export type PromResult = {
   metric?: Record<string, string>;
   values?: Array<[number | string, string]>;
 };
@@ -141,44 +143,101 @@ function flattenPoints(series: PromResult[]): Array<{ t: number; v: number }> {
   return points;
 }
 
-function summarize(points: Array<{ t: number; v: number }>, maxPoints = 64): MetricSeriesSummary {
+function summarize(points: Array<{ t: number; v: number }>, maxPoints = 96): MetricSeriesSummary {
   if (!points.length) {
     return { latest: null, avg: null, max: null, points: [] };
   }
   const vals = points.map((p) => p.v);
-  const sum = vals.reduce((a, b) => a + b, 0);
   const step = Math.max(1, Math.ceil(points.length / maxPoints));
   const sampled = points.filter((_, i) => i % step === 0 || i === points.length - 1);
+
+  // Time-weighted average matches DO Insights "last hour" style summaries better
+  // than a plain mean of sparse samples (brief spikes were being under-weighted).
+  let weighted = 0;
+  let weight = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].t - points[i - 1].t;
+    if (dt <= 0) continue;
+    weighted += points[i].v * dt;
+    weight += dt;
+  }
+  const avg = weight > 0 ? weighted / weight : vals[vals.length - 1];
+
   return {
     latest: vals[vals.length - 1],
-    avg: sum / vals.length,
+    avg,
     max: Math.max(...vals),
     points: sampled,
   };
 }
 
-/** Busy % = 100 * (1 - idle/total) across CPU modes. */
-function cpuPercentFromModes(series: PromResult[]): Array<{ t: number; v: number }> {
-  const byTime = new Map<number, Record<string, number>>();
+/** Default bucket size for aligning per-mode CPU counter series from do-agent. */
+export const CPU_MODE_BUCKET_SEC = 60;
+
+/**
+ * DO CPU metrics are cumulative /proc/stat counters (seconds since boot), not
+ * instantaneous %. Busy % for an interval = 100 * (1 - Δidle / Δtotal).
+ *
+ * Modes often arrive on slightly different timestamps. Exact-key grouping then
+ * yields incomplete rows and a near-flat under-read vs DO Insights. We:
+ *  1) bucket samples (default 60s),
+ *  2) forward-fill modes across buckets,
+ *  3) require `idle` before emitting a utilization point.
+ */
+export function cpuPercentFromModes(
+  series: PromResult[],
+  bucketSec: number = CPU_MODE_BUCKET_SEC
+): Array<{ t: number; v: number }> {
+  const bucketSize = Math.max(15, Math.floor(bucketSec) || CPU_MODE_BUCKET_SEC);
+  const buckets = new Map<number, Record<string, number>>();
+
   for (const s of series) {
     const mode = String(s.metric?.mode || 'unknown').toLowerCase();
     for (const pair of s.values || []) {
       const t = Number(pair[0]);
       const v = Number(pair[1]);
       if (!Number.isFinite(t) || !Number.isFinite(v)) continue;
-      const row = byTime.get(t) || {};
-      row[mode] = (row[mode] || 0) + v;
-      byTime.set(t, row);
+      const b = Math.floor(t / bucketSize) * bucketSize;
+      const row = buckets.get(b) || {};
+      // Cumulative counters: keep the latest sample inside the bucket.
+      if (row[mode] == null || v >= row[mode]) row[mode] = v;
+      buckets.set(b, row);
     }
   }
-  const points: Array<{ t: number; v: number }> = [];
-  for (const [t, modes] of byTime) {
-    const total = Object.values(modes).reduce((a, b) => a + b, 0);
-    if (total <= 0) continue;
-    const idle = modes.idle ?? 0;
-    points.push({ t, v: Math.max(0, Math.min(100, (1 - idle / total) * 100)) });
+
+  const times = [...buckets.keys()].sort((a, b) => a - b);
+  let filled: Record<string, number> = {};
+  const filledBuckets: Array<{ t: number; modes: Record<string, number> }> = [];
+  for (const t of times) {
+    filled = { ...filled, ...buckets.get(t)! };
+    if (filled.idle == null) continue;
+    filledBuckets.push({ t, modes: { ...filled } });
   }
-  points.sort((a, b) => a.t - b.t);
+
+  const points: Array<{ t: number; v: number }> = [];
+  for (let i = 1; i < filledBuckets.length; i++) {
+    const prev = filledBuckets[i - 1].modes;
+    const curr = filledBuckets[i].modes;
+    const modes = new Set([...Object.keys(prev), ...Object.keys(curr)]);
+    let totalDelta = 0;
+    let idleDelta = 0;
+    let sawRealAdvance = false;
+    for (const mode of modes) {
+      if (prev[mode] == null || curr[mode] == null) continue;
+      const d = curr[mode]! - prev[mode]!;
+      if (d < 0) continue; // counter reset / reboot
+      if (d > 0) sawRealAdvance = true;
+      totalDelta += d;
+      // Match DO Insights-style "CPU usage": only pure idle is idle.
+      // iowait / irq / steal count as busy (already included via totalDelta).
+      if (mode === 'idle') idleDelta += d;
+    }
+    if (!sawRealAdvance || totalDelta <= 0) continue;
+    points.push({
+      t: filledBuckets[i].t,
+      v: Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100)),
+    });
+  }
   return points;
 }
 
@@ -401,14 +460,12 @@ async function fetchDropletMetrics(
   const sizePts = flattenPoints(fsSize);
   const diskUsedPts = usedPercentFromFree(freePts, sizePts);
 
-  const toMbps = (pts: Array<{ t: number; v: number }>) =>
-    pts.map((p) => ({ t: p.t, v: p.v / 1_000_000 }));
-
-  const inPts = toMbps(flattenPoints(bwIn));
-  const outPts = toMbps(flattenPoints(bwOut));
-  // disk_read / disk_write are typically bytes/s
-  const readPts = flattenPoints(diskRead).map((p) => ({ t: p.t, v: (p.v * 8) / 1_000_000 }));
-  const writePts = flattenPoints(diskWrite).map((p) => ({ t: p.t, v: (p.v * 8) / 1_000_000 }));
+  // DO bandwidth API values are already Mbps (not bits/s). Dividing by 1e6 made charts show ~0.
+  const inPts = flattenPoints(bwIn);
+  const outPts = flattenPoints(bwOut);
+  // DO disk_read / disk_write Insights/alerts are in MB/s (megabytes per second).
+  const readPts = flattenPoints(diskRead);
+  const writePts = flattenPoints(diskWrite);
   const loadPts = flattenPoints(load1);
 
   const empty =

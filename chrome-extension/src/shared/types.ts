@@ -83,6 +83,8 @@ export interface ListExtractionState {
   fields: Record<string, FieldConfig>;
   pagination: PaginationConfig;
   previewRows: ExtractedRow[];
+  /** Page URL captured when LIST_SELECTED preview was generated. */
+  previewUrl?: string;
   extractedRows: ExtractedRow[];
   currentPage: number;
   maxPages: number;
@@ -109,7 +111,10 @@ export interface RowContextDraft {
 
 export interface SavedAutomationInfo {
   id: string;
+  /** Parallel Scout-X scrape ID (SX12AB34). */
+  scoutId?: string | null;
   name?: string;
+  companyName?: string | null;
   /** Latest run status surfaced from the backend (completed/failed/running/queued/...). */
   lastRunStatus?: string | null;
   /** Latest run finishedAt/startedAt string. */
@@ -139,6 +144,8 @@ export interface FieldConfig {
   fromSchema?: boolean;
   /** For schema fields: the schema.org property name (e.g. "baseSalary", "hiringOrganization") */
   schemaField?: string;
+  /** Extra CSS selectors ranked after `selector` for backend fallback. */
+  fallbackSelectors?: string[];
 }
 
 export type SemanticType =

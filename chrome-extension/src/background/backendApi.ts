@@ -17,11 +17,15 @@ function buildAuthHeaders(state: { apiKey?: string }): Record<string, string> {
  */
 export async function saveConfigToBackend(payload: {
   automationId?: string;
+  /** Scout-X public ID (SX12AB34); optional on create / used for lookup. */
+  scoutId?: string;
   automationName?: string;
+  companyName?: string;
+  tags?: string[];
   startUrl?: string;
   webhookUrl?: string;
   listSelector: string;
-  fields: Record<string, { selector: string; attribute: string }>;
+  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[] }>;
   pagination?: {
     type: string;
     selector?: string | null;
@@ -45,10 +49,14 @@ export async function saveConfigToBackend(payload: {
     pauseOnDetect?: boolean;
   };
   previewRows?: Record<string, string>[];
+  /** Snapshot of the page URL when the preview was generated (filter survival). */
+  previewUrl?: string;
   /** Recurring schedule stored under `config.schedule` (POST/PUT automations). */
   schedule?: { enabled: boolean; cron: string | null; timezone: string };
   /** Per-automation metadata merged into every extracted row (sector/industry, F500). */
   rowContext?: { sectorIndustry?: string; f500?: boolean };
+  /** When true, only replace listExtraction / preview (layout-change recovery). */
+  elementsOnly?: boolean;
 }): Promise<any> {
   const state = await getState();
   const apiBase = state.backendUrl.replace(/\/+$/, '');
@@ -83,15 +91,26 @@ export async function saveConfigToBackend(payload: {
       }
     : undefined;
 
-  const body = {
+  const companyName =
+    typeof payload.companyName === 'string' ? payload.companyName.trim() : undefined;
+  const tags = Array.isArray(payload.tags) ? payload.tags : undefined;
+
+  const body: Record<string, unknown> = {
     name: (payload.automationName && String(payload.automationName).trim()) || defaultName,
-    startUrl: payload.startUrl || '',
+    startUrl: payload.startUrl || payload.previewUrl || '',
     webhookUrl: payload.webhookUrl || '',
+    ...(companyName !== undefined ? { companyName } : {}),
+    ...(tags !== undefined ? { tags } : {}),
+    ...(payload.scoutId ? { scoutId: String(payload.scoutId).trim().toUpperCase() } : {}),
+    ...(payload.elementsOnly ? { elementsOnly: true } : {}),
     config: {
       listExtraction,
       previewRows: payload.previewRows || [],
+      ...(payload.previewUrl ? { previewUrl: payload.previewUrl } : {}),
       ...(serverRowContext ? { rowContext: serverRowContext } : {}),
-      ...(payload.schedule ? { schedule: payload.schedule } : {}),
+      ...(payload.schedule && !payload.elementsOnly ? { schedule: payload.schedule } : {}),
+      ...(companyName !== undefined ? { companyName } : {}),
+      ...(tags !== undefined ? { tags } : {}),
     },
   };
 
@@ -106,7 +125,7 @@ export async function saveConfigToBackend(payload: {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(formatBackendFailure(response.status, text, 'Save automation'));
+      throwBackendFailure(response.status, text, 'Save automation');
     }
     return response.json();
   }
@@ -121,9 +140,79 @@ export async function saveConfigToBackend(payload: {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(formatBackendFailure(response.status, text, 'Save automation'));
+    throwBackendFailure(response.status, text, 'Save automation');
   }
   return response.json();
+}
+
+export type AutomationLookupResult = {
+  found: boolean;
+  automation: {
+    id: string;
+    scoutId?: string | null;
+    name?: string;
+    targetUrl?: string;
+    companyName?: string;
+  } | null;
+};
+
+/** Exact URL or Scout-X ID lookup for duplicate / update flows. */
+export async function lookupAutomation(params: {
+  url?: string;
+  scoutId?: string;
+}): Promise<AutomationLookupResult> {
+  const state = await getState();
+  const apiBase = state.backendUrl.replace(/\/+$/, '');
+  const qs = new URLSearchParams();
+  if (params.scoutId) qs.set('scoutId', String(params.scoutId).trim().toUpperCase());
+  else if (params.url) qs.set('url', params.url);
+  else throw new Error('url or scoutId is required');
+
+  const response = await fetch(`${apiBase}/automations/lookup?${qs.toString()}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: buildAuthHeaders(state),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throwBackendFailure(response.status, text, 'Lookup automation');
+  }
+  return response.json();
+}
+
+export class BackendApiError extends Error {
+  status: number;
+  code?: string;
+  automation?: any;
+  body?: any;
+
+  constructor(message: string, opts: { status: number; code?: string; automation?: any; body?: any }) {
+    super(message);
+    this.name = 'BackendApiError';
+    this.status = opts.status;
+    this.code = opts.code;
+    this.automation = opts.automation;
+    this.body = opts.body;
+  }
+}
+
+function throwBackendFailure(status: number, text: string, action: string): never {
+  let parsed: any = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  const msg =
+    (parsed && typeof parsed.error === 'string' && parsed.error) ||
+    formatBackendFailure(status, text, action);
+  throw new BackendApiError(msg, {
+    status,
+    code: parsed?.code,
+    automation: parsed?.automation,
+    body: parsed,
+  });
 }
 
 /**
@@ -241,15 +330,53 @@ function formatBackendFailure(status: number, bodyText: string, context: string)
   return base;
 }
 
-function buildFieldMap(fields: Record<string, { selector: string; attribute: string }>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [name, { selector, attribute }] of Object.entries(fields)) {
-    result[name] = attribute && attribute !== 'innerText' ? `${selector}@${attribute}` : selector;
+function withAttr(selector: string, attribute: string): string {
+  return attribute && attribute !== 'innerText' ? `${selector}@${attribute}` : selector;
+}
+
+/**
+ * Structural / Tailwind variants so the backend can try ranked fallbacks when
+ * career portals rotate hashed class names.
+ */
+function generateBackendSelectorVariants(selector: string): string[] {
+  if (!selector || typeof selector !== 'string') return [];
+  const variants: string[] = [selector.trim()];
+  const stripped = selector
+    .replace(/\.[a-zA-Z0-9_-]*__[a-zA-Z0-9_-]+/g, '') // CSS-modules hashed classes
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (stripped && stripped !== selector.trim()) variants.push(stripped);
+  const nthMatch = selector.match(/:nth-of-type\(\d+\)/);
+  if (nthMatch) {
+    const tagMatch = selector.match(/^([a-zA-Z][\w-]*)/);
+    if (tagMatch) variants.push(tagMatch[1] + nthMatch[0]);
+  }
+  // Attribute-ish job link fallback when selector looks like a link container.
+  if (/a[\s.#\[:]/i.test(selector) || selector.includes('href')) {
+    variants.push('a[href*="job"]', 'a[href*="/jobs/"]');
+  }
+  return [...new Set(variants.filter(Boolean))];
+}
+
+function buildFieldMap(
+  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[] }>
+): Record<string, string | string[]> {
+  const result: Record<string, string | string[]> = {};
+  for (const [name, { selector, attribute, fallbackSelectors }] of Object.entries(fields)) {
+    const primary = withAttr(selector, attribute);
+    const extras = [
+      ...(Array.isArray(fallbackSelectors) ? fallbackSelectors : []),
+      ...generateBackendSelectorVariants(selector).slice(1),
+    ].map((s) => withAttr(s, attribute));
+    const ranked = [...new Set([primary, ...extras].filter(Boolean))];
+    result[name] = ranked.length === 1 ? ranked[0] : ranked;
   }
   return result;
 }
 
-function getSuggestedUniqueKey(fields: Record<string, { selector: string; attribute: string }>): string {
+function getSuggestedUniqueKey(
+  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[] }>
+): string {
   if (fields.url) return 'url';
   if (fields.link) return 'link';
   if (fields.image) return 'image';

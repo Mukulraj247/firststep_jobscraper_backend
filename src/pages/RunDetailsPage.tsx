@@ -3,7 +3,7 @@ import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Chip, Linea
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AUTOMATION_ROW_CONTEXT_KEYS, getSaasRun } from '../api/automation';
+import { AUTOMATION_ROW_CONTEXT_KEYS, getSaasRun, updateRunFailureReason } from '../api/automation';
 
 const RUN_DETAIL_COLUMN_LABELS: Record<string, string> = {
   sectorIndustry: 'Sector / industry',
@@ -37,10 +37,27 @@ export const RunDetailsPage = () => {
       setData(result);
       return result;
     } catch (error: any) {
-      notify('error', error?.response?.data?.error || 'Failed to load run details');
+      if (error?.response?.status !== 429) {
+        notify('error', error?.response?.data?.error || 'Failed to load run details');
+      }
       return null;
     }
   }, [id, notify]);
+
+  const [failureBusy, setFailureBusy] = useState(false);
+
+  const handleFailureReason = async (payload: { failureReason: string | null; confirmed?: boolean }) => {
+    try {
+      setFailureBusy(true);
+      await updateRunFailureReason(id, payload);
+      notify('success', payload.failureReason ? 'Failure reason updated' : 'Failure reason cleared');
+      await loadRun();
+    } catch (error: any) {
+      notify('error', error?.response?.data?.error || 'Failed to update failure reason');
+    } finally {
+      setFailureBusy(false);
+    }
+  };
 
   // Initial load + polling while run is active
   useEffect(() => {
@@ -97,7 +114,9 @@ export const RunDetailsPage = () => {
         <Box>
           <Typography variant="h4" fontWeight={700}>Run Details</Typography>
           <Typography variant="body1" color="text.secondary">
-            {data.automation.name} on {data.automation.targetUrl}
+            {data.automation.name}
+            {data.automation.scoutId ? ` · ${data.automation.scoutId}` : ''}
+            {data.automation.companyName ? ` · ${data.automation.companyName}` : ''}
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
@@ -113,6 +132,81 @@ export const RunDetailsPage = () => {
         <Paper sx={{ p: 2, minWidth: 180 }}>
           <Typography variant="overline">Status</Typography>
           <Typography variant="h6"><Chip label={data.run.status} color={data.run.status === 'success' || data.run.status === 'completed' ? 'success' : data.run.status === 'failed' ? 'error' : data.run.status === 'pending' ? 'info' : 'warning'} /></Typography>
+          {data.run.anomaly ? (
+            <Chip
+              sx={{ mt: 1 }}
+              size="small"
+              color={data.run.anomalyMeta?.escalated || data.run.anomaly === 'zero_rows' ? 'error' : 'warning'}
+              label={
+                data.run.anomaly === 'zero_rows'
+                  ? 'Zero rows'
+                  : data.run.anomalyMeta?.escalated
+                    ? 'Row drop (escalated)'
+                    : 'Row drop'
+              }
+            />
+          ) : null}
+          {data.run.anomalyMeta?.baseline != null ? (
+            <Typography variant="caption" display="block" color="text.secondary" mt={0.5}>
+              Baseline {data.run.anomalyMeta.baseline} → {data.run.rowsExtracted ?? data.run.anomalyMeta.current ?? 0}
+            </Typography>
+          ) : null}
+          {(data.run.failureReason || data.run.status === 'failed') && (
+            <Box mt={1.5}>
+              <Typography variant="overline" display="block">Failure reason</Typography>
+              {data.run.failureReason ? (
+                <Chip
+                  size="small"
+                  color={data.run.failureReasonSource === 'confirmed' ? 'error' : 'warning'}
+                  label={
+                    data.run.failureReason === 'layout_change'
+                      ? data.run.failureReasonSource === 'confirmed'
+                        ? 'Layout change (confirmed)'
+                        : data.run.failureReasonSource === 'suggested'
+                          ? 'Layout change (suggested)'
+                          : 'Layout change'
+                      : data.run.failureReason
+                  }
+                  sx={{ mb: 1 }}
+                />
+              ) : (
+                <Typography variant="body2" color="text.secondary" mb={1}>None set</Typography>
+              )}
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {data.run.failureReason === 'layout_change' && data.run.failureReasonSource === 'suggested' ? (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="warning"
+                    disabled={failureBusy}
+                    onClick={() => handleFailureReason({ failureReason: 'layout_change', confirmed: true })}
+                  >
+                    Confirm layout change
+                  </Button>
+                ) : null}
+                {!data.run.failureReason || data.run.failureReasonSource === 'suggested' ? (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={failureBusy}
+                    onClick={() => handleFailureReason({ failureReason: 'layout_change', confirmed: true })}
+                  >
+                    Mark layout change
+                  </Button>
+                ) : null}
+                {data.run.failureReason ? (
+                  <Button
+                    size="small"
+                    variant="text"
+                    disabled={failureBusy}
+                    onClick={() => handleFailureReason({ failureReason: null })}
+                  >
+                    Clear
+                  </Button>
+                ) : null}
+              </Stack>
+            </Box>
+          )}
         </Paper>
         <Paper sx={{ p: 2, minWidth: 180 }}>
           <Typography variant="overline">Duration</Typography>

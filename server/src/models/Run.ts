@@ -1,7 +1,14 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IRun extends Document {
+  /**
+   * Run lifecycle status. Common values:
+   * queued | pending | running | success | completed | failed | aborted | dead
+   * `dead` = attempts exhausted (dead-letter); distinct from retryable `failed`.
+   */
   status: string;
+  /** Last scrape heartbeat ISO timestamp; used for orphan lease reclaim. */
+  heartbeatAt?: string | null;
   name: string;
   robotId: string;
   robotMetaId: string;
@@ -21,6 +28,24 @@ export interface IRun extends Document {
   duration?: number | null;
   errorMessage?: string | null;
   queueJobId?: string | null;
+  /** Denormalized list-extraction row count; always written on finish (default 0). */
+  rowsExtracted: number;
+  /** Drift anomaly taxonomy: zero_rows | row_drop | null */
+  anomaly?: string | null;
+  anomalyMeta?: {
+    current: number;
+    baseline: number | null;
+    ratio: number | null;
+    baselineSource: 'last_good_run' | 'previewRows' | 'none';
+    escalated: boolean;
+    threshold: number | null;
+  } | null;
+  /** Scout-X scrape ID copied from the robot at run create (history across recreate). */
+  scoutId?: string | null;
+  /** Operator/system failure taxonomy; starts with layout_change. */
+  failureReason?: string | null;
+  /** How failureReason was set: suggested | confirmed | override */
+  failureReasonSource?: 'suggested' | 'confirmed' | 'override' | null;
 }
 
 const RunSchema: Schema = new Schema(
@@ -31,6 +56,7 @@ const RunSchema: Schema = new Schema(
     robotMetaId: { type: String, required: true },
     startedAt: { type: String, default: null },
     finishedAt: { type: String, default: null },
+    heartbeatAt: { type: String, default: null },
     browserId: { type: String, default: null },
     interpreterSettings: { type: Schema.Types.Mixed, default: null },
     log: { type: String, default: null },
@@ -45,6 +71,12 @@ const RunSchema: Schema = new Schema(
     duration: { type: Number, default: null },
     errorMessage: { type: String, default: null },
     queueJobId: { type: String, default: null },
+    rowsExtracted: { type: Number, default: 0 },
+    anomaly: { type: String, default: null },
+    anomalyMeta: { type: Schema.Types.Mixed, default: null },
+    scoutId: { type: String, default: null },
+    failureReason: { type: String, default: null },
+    failureReasonSource: { type: String, default: null },
   },
   {
     timestamps: false,
@@ -65,6 +97,8 @@ RunSchema.index({ robotMetaId: 1, startedAt: 1 }, { name: 'run_robot_meta_starte
 RunSchema.index({ robotMetaId: 1, _id: -1 }, { name: 'run_robot_meta_id_desc_idx' });
 RunSchema.index({ status: 1, startedAt: 1 }, { name: 'run_status_started_at_idx' });
 RunSchema.index({ runId: 1 }, { unique: true, name: 'run_id_uidx' });
+RunSchema.index({ scoutId: 1, startedAt: -1 }, { name: 'run_scout_id_started_at_idx' });
+
 
 const Run = mongoose.models.Run || mongoose.model<IRun>('Run', RunSchema);
 

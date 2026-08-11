@@ -12,6 +12,8 @@ import {
   useTheme,
   alpha,
   IconButton,
+  Chip,
+  Stack,
 } from '@mui/material';
 import {
   Close as CloseIcon,
@@ -20,6 +22,7 @@ import {
   Schedule,
 } from '@mui/icons-material';
 import { CronBuilder, CronBuilderValue } from './CronBuilder';
+import { buildPreferredStartSuggestions } from '../../constants/scheduleOptions';
 
 interface ScheduleModalProps {
   open: boolean;
@@ -28,7 +31,15 @@ interface ScheduleModalProps {
   currentCron: string | null | undefined;
   currentTimezone?: string;
   onClose: () => void;
-  onSave: (automationId: string, schedule: { enabled: boolean; cron: string | null; timezone: string }) => Promise<void>;
+  onSave: (
+    automationId: string,
+    schedule: {
+      enabled: boolean;
+      cron: string | null;
+      timezone: string;
+      preferredNextRunAt?: string | null;
+    }
+  ) => Promise<void>;
 }
 
 export const ScheduleModal: React.FC<ScheduleModalProps> = ({
@@ -43,11 +54,11 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
 
-  // Always start with null/default so opening the modal shows correct state from props
   const [enabled, setEnabled] = useState(false);
   const [cronValue, setCronValue] = useState<CronBuilderValue | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [preferredNextRunAt, setPreferredNextRunAt] = useState<string | null>(null);
   // Track the original saved cron so toggling on preserves it
   const savedCronRef = React.useRef<CronBuilderValue | null>(null);
 
@@ -61,9 +72,21 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         : null;
       setCronValue(cronObj);
       savedCronRef.current = cronObj;
+      setPreferredNextRunAt(null);
       setSaved(false);
     }
   }, [open, currentCron, currentTimezone]);
+
+  const suggestions = React.useMemo(() => {
+    if (!enabled || !cronValue?.cron) return [];
+    return buildPreferredStartSuggestions(cronValue.cron, cronValue.timezone || currentTimezone || 'UTC');
+  }, [enabled, cronValue, currentTimezone]);
+
+  useEffect(() => {
+    if (suggestions.length && !preferredNextRunAt) {
+      setPreferredNextRunAt(suggestions[0].iso);
+    }
+  }, [suggestions, preferredNextRunAt]);
 
   const handleEnabledToggle = (checked: boolean) => {
     setEnabled(checked);
@@ -83,6 +106,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
   const handleCronChange = (value: CronBuilderValue) => {
     setCronValue(value);
+    setPreferredNextRunAt(null);
   };
 
   const handleSave = async () => {
@@ -92,6 +116,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         enabled,
         cron: enabled && cronValue ? cronValue.cron : null,
         timezone: cronValue?.timezone || currentTimezone || 'UTC',
+        preferredNextRunAt: enabled ? preferredNextRunAt : null,
       });
       setSaved(true);
       setTimeout(() => {
@@ -186,10 +211,34 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
         {/* Cron builder */}
         {enabled && (
-          <CronBuilder
-            value={cronValue || undefined}
-            onChange={handleCronChange}
-          />
+          <>
+            <CronBuilder
+              value={cronValue || undefined}
+              onChange={handleCronChange}
+            />
+            {suggestions.length > 0 && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" fontWeight={700} mb={0.5}>
+                  Suggested first run
+                </Typography>
+                <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+                  Starts are spaced at least 90 seconds apart from other automations.
+                </Typography>
+                <Stack direction="row" flexWrap="wrap" gap={1}>
+                  {suggestions.map((s) => (
+                    <Chip
+                      key={s.iso}
+                      label={s.label}
+                      color={preferredNextRunAt === s.iso ? 'primary' : 'default'}
+                      variant={preferredNextRunAt === s.iso ? 'filled' : 'outlined'}
+                      onClick={() => setPreferredNextRunAt(s.iso)}
+                      sx={{ cursor: 'pointer' }}
+                    />
+                  ))}
+                </Stack>
+              </Box>
+            )}
+          </>
         )}
 
         {!enabled && (

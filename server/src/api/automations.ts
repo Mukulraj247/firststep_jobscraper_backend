@@ -24,12 +24,73 @@ import {
   sanitizeRowContextFields,
 } from '../services/automation';
 import { CANONICAL_JOB_FIELD_ORDER } from '../services/canonicalJobRecord';
-import { intervalMsFromCron, validateAutomationScheduleCron } from '../utils/schedule';
+import { intervalMsFromCron, suggestPreferredStartSlots, validateAutomationScheduleCron } from '../utils/schedule';
 import { deleteAutomationCascade } from '../services/deleteAutomation';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
 import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
+import { normalizeAutomationUrl } from '../utils/automationUrl';
+import {
+  generateUniqueScoutId,
+  isValidScoutId,
+  normalizeScoutIdInput,
+} from '../utils/scoutId';
+import { sanitizeAutomationTags } from '../constants/tagCatalog';
+import { FAILURE_REASON_CODES } from '../utils/failureReason';
 
 const router = Router();
+
+const FAILURE_REASONS = new Set<string>(FAILURE_REASON_CODES);
+
+function getCompanyName(robot: any): string {
+  const meta = robot?.recording_meta || {};
+  const fromMeta = typeof meta.companyName === 'string' ? meta.companyName.trim() : '';
+  if (fromMeta) return fromMeta;
+  const fromSaas =
+    typeof meta.saasConfig?.companyName === 'string' ? meta.saasConfig.companyName.trim() : '';
+  return fromSaas || '';
+}
+
+function getAutomationTags(robot: any): string[] {
+  const meta = robot?.recording_meta || {};
+  const fromMeta = Array.isArray(meta.tags) ? meta.tags : null;
+  if (fromMeta) {
+    const cleaned = fromMeta.map((t: any) => String(t || '').trim()).filter(Boolean);
+    return cleaned;
+  }
+  const fromSaas = Array.isArray(meta.saasConfig?.tags) ? meta.saasConfig.tags : [];
+  return fromSaas.map((t: any) => String(t || '').trim()).filter(Boolean);
+}
+
+function getScoutId(robot: any): string | null {
+  const id = robot?.recording_meta?.scoutId;
+  return typeof id === 'string' && id.trim() ? id.trim().toUpperCase() : null;
+}
+
+/** Resolve automation by UUID (recording_meta.id) or Scout-X ID. */
+async function findRobotByIdOrScoutId(userId: any, idOrScout: string) {
+  const owner = ownerIdFilter(userId);
+  const raw = String(idOrScout || '').trim();
+  if (!raw) return null;
+
+  let robot = await Robot.findOne({ ...owner, 'recording_meta.id': raw });
+  if (robot) return robot;
+
+  const scoutId = normalizeScoutIdInput(raw);
+  if (scoutId && isValidScoutId(scoutId)) {
+    robot = await Robot.findOne({ ...owner, 'recording_meta.scoutId': scoutId });
+  }
+  return robot;
+}
+
+async function scoutIdExistsForUser(userId: any, scoutId: string): Promise<boolean> {
+  const existing = await Robot.findOne({
+    ...ownerIdFilter(userId),
+    'recording_meta.scoutId': scoutId,
+  })
+    .select('_id')
+    .lean();
+  return !!existing;
+}
 
 function normalizeDatabaseTargetColumns(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -58,36 +119,6 @@ const defaultWorkflow = (startUrl: string) => ({
     },
   ],
 });
-
-const normalizeAutomationUrl = (value: string) => {
-  const trimmedValue = String(value || '').trim();
-
-  if (!trimmedValue) {
-    throw new Error('startUrl is required');
-  }
-
-  const collapsedProtocolValue = trimmedValue.replace(/^(https?:\/\/)+/i, (match) =>
-    match.toLowerCase().startsWith('https://') ? 'https://' : 'http://'
-  );
-
-  const normalizedCandidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(collapsedProtocolValue)
-    ? collapsedProtocolValue
-    : `https://${collapsedProtocolValue}`;
-
-  let parsedUrl: URL;
-
-  try {
-    parsedUrl = new URL(normalizedCandidate);
-  } catch {
-    throw new Error('Invalid startUrl');
-  }
-
-  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-    throw new Error('startUrl must use http or https');
-  }
-
-  return parsedUrl.toString();
-};
 
 const DEFAULT_LIST_LIMIT = 10;
 const MAX_LIST_LIMIT = 100;
@@ -153,6 +184,9 @@ async function fetchLatestRunPerRobotMetaIds(robotMetaIds: string[]): Promise<Ma
         startedAt: 1,
         finishedAt: 1,
         name: 1,
+        anomaly: 1,
+        failureReason: 1,
+        failureReasonSource: 1,
       },
     },
     { $sort: { _id: -1 } },
@@ -205,7 +239,10 @@ const mapAutomation = (
 
   return {
     id: robot.recording_meta.id,
+    scoutId: getScoutId(robot),
     name: robot.recording_meta.name,
+    companyName: getCompanyName(robot),
+    tags: getAutomationTags(robot),
     targetUrl: robot.recording_meta.url || '',
     createdAt: robot.recording_meta.createdAt,
     updatedAt: robot.recording_meta.updatedAt,
@@ -213,6 +250,8 @@ const mapAutomation = (
     lastRunTime: latestRun?.finishedAt || latestRun?.startedAt || null,
     rowsExtracted,
     latestRunId: latestRun?.runId || null,
+    latestFailureReason: latestRun?.failureReason || null,
+    latestFailureReasonSource: latestRun?.failureReasonSource || null,
     webhookUrl: config.webhookUrl || '',
     config,
     schedule,
@@ -224,7 +263,15 @@ router.use(requireSignInOrApiKey);
 router.get('/dashboard/automations', async (req: any, res: any) => {
   try {
     const { page, limit, skip } = parseListPagination(req);
-    const ownerFilter = ownerIdFilter(req.user.id);
+    const ownerFilter: any = { ...ownerIdFilter(req.user.id) };
+
+    const tagsFilterRaw = req.query.tags != null ? String(req.query.tags).trim() : '';
+    const tagsFilter = tagsFilterRaw
+      ? tagsFilterRaw.split(',').map((t) => t.trim()).filter(Boolean)
+      : [];
+    if (tagsFilter.length) {
+      ownerFilter['recording_meta.tags'] = { $all: tagsFilter };
+    }
 
     const [summary, total, robots] = await Promise.all([
       computeAccountRobotSummary(req.user.id),
@@ -233,12 +280,17 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
         .select([
           'schedule',
           'recording_meta.id',
+          'recording_meta.scoutId',
           'recording_meta.name',
+          'recording_meta.companyName',
+          'recording_meta.tags',
           'recording_meta.url',
           'recording_meta.createdAt',
           'recording_meta.updatedAt',
           'recording_meta.saasConfig.webhookUrl',
           'recording_meta.saasConfig.schedule',
+          'recording_meta.saasConfig.companyName',
+          'recording_meta.saasConfig.tags',
         ].join(' '))
         .sort({ _id: -1 })
         .skip(skip)
@@ -436,19 +488,103 @@ router.post('/automations/schedules/resume-all', async (req: any, res: any) => {
   }
 });
 
+router.get('/schedule/suggestions', async (req: any, res: any) => {
+  try {
+    const cron = typeof req.query.cron === 'string' ? req.query.cron.trim() : '';
+    const timezone =
+      typeof req.query.timezone === 'string' && moment.tz.zone(req.query.timezone)
+        ? req.query.timezone
+        : 'UTC';
+    if (!cron) {
+      return res.status(400).json({ error: 'cron query parameter is required' });
+    }
+    const everyMs = intervalMsFromCron(cron);
+    if (!everyMs) {
+      return res.json({ suggestions: [], everyMs: null, gapMs: 90_000 });
+    }
+    const slots = suggestPreferredStartSlots(everyMs, timezone);
+    return res.json({
+      suggestions: slots.map((d) => d.toISOString()),
+      everyMs,
+      gapMs: 90_000,
+      timezone,
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to build schedule suggestions: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to build schedule suggestions' });
+  }
+});
+
+router.get('/tags/catalog', async (_req: any, res: any) => {
+  try {
+    const { TAG_CATALOG, MAX_AUTOMATION_TAGS } = await import('../constants/tagCatalog');
+    return res.json({ catalog: TAG_CATALOG, maxTags: MAX_AUTOMATION_TAGS });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to load tag catalog' });
+  }
+});
+
+router.get('/automations/lookup', async (req: any, res: any) => {
+  try {
+    const scoutRaw = normalizeScoutIdInput(req.query.scoutId);
+    const urlRaw = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+
+    if (!scoutRaw && !urlRaw) {
+      return res.status(400).json({ error: 'Provide url or scoutId query parameter' });
+    }
+
+    let robot: any = null;
+
+    if (scoutRaw) {
+      if (!isValidScoutId(scoutRaw)) {
+        return res.status(400).json({ error: 'Invalid Scout-X ID format (expected SX12AB34)' });
+      }
+      robot = await Robot.findOne({
+        ...ownerIdFilter(req.user.id),
+        'recording_meta.scoutId': scoutRaw,
+      }).lean();
+    } else if (urlRaw) {
+      let normalized: string;
+      try {
+        normalized = normalizeAutomationUrl(urlRaw);
+      } catch (err: any) {
+        return res.status(400).json({ error: err?.message || 'Invalid url' });
+      }
+      robot = await Robot.findOne({
+        ...ownerIdFilter(req.user.id),
+        'recording_meta.url': normalized,
+      }).lean();
+    }
+
+    if (!robot) {
+      return res.json({ found: false, automation: null });
+    }
+
+    const metaId = robot.recording_meta.id;
+    const latestRun =
+      (await fetchLatestRunPerRobotMetaIds([metaId])).get(metaId) ?? null;
+
+    return res.json({
+      found: true,
+      automation: mapAutomation(robot, latestRun, 0),
+    });
+  } catch (error: any) {
+    logger.log('error', `Automation lookup failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to look up automation' });
+  }
+});
+
 router.get('/automations/:id', async (req: any, res: any) => {
   try {
-    const robot: any = await Robot.findOne({
-      ...ownerIdFilter(req.user.id),
-      'recording_meta.id': req.params.id,
-    }).lean();
+    const robot: any = await findRobotByIdOrScoutId(req.user.id, req.params.id);
 
     if (!robot) {
       return res.status(404).json({ error: 'Automation not found' });
     }
 
+    const metaId = robot.recording_meta.id;
     const latestRun =
-      (await fetchLatestRunPerRobotMetaIds([req.params.id])).get(req.params.id) ?? null;
+      (await fetchLatestRunPerRobotMetaIds([metaId])).get(metaId) ?? null;
     const rowsExtracted = latestRun?.runId
       ? (await batchExtractedRowCounts([String(latestRun.runId)])).get(String(latestRun.runId)) || 0
       : 0;
@@ -466,13 +602,88 @@ router.get('/automations/:id', async (req: any, res: any) => {
 
 router.post('/automations', async (req: any, res: any) => {
   try {
-    const { name, startUrl, workflow, config, webhookUrl } = req.body;
+    const {
+      name,
+      startUrl,
+      workflow,
+      config,
+      webhookUrl,
+      scoutId: bodyScoutId,
+      companyName: bodyCompany,
+      tags: bodyTags,
+    } = req.body;
 
     if (!name || !startUrl) {
       return res.status(400).json({ error: 'name and startUrl are required' });
     }
 
     const normalizedStartUrl = normalizeAutomationUrl(startUrl);
+
+    const duplicateUrl = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.url': normalizedStartUrl,
+    }).lean();
+
+    if (duplicateUrl) {
+      return res.status(409).json({
+        error: 'An automation with this target URL already exists. Update it instead of creating a duplicate.',
+        code: 'DUPLICATE_TARGET_URL',
+        automation: {
+          id: duplicateUrl.recording_meta.id,
+          scoutId: getScoutId(duplicateUrl),
+          name: duplicateUrl.recording_meta.name,
+          targetUrl: duplicateUrl.recording_meta.url || normalizedStartUrl,
+          companyName: getCompanyName(duplicateUrl),
+        },
+      });
+    }
+
+    let scoutId = normalizeScoutIdInput(bodyScoutId);
+    if (scoutId) {
+      if (!isValidScoutId(scoutId)) {
+        return res.status(400).json({ error: 'Invalid Scout-X ID format (expected SX12AB34)' });
+      }
+      if (await scoutIdExistsForUser(req.user.id, scoutId)) {
+        const existing = await Robot.findOne({
+          ...ownerIdFilter(req.user.id),
+          'recording_meta.scoutId': scoutId,
+        }).lean();
+        return res.status(409).json({
+          error: 'An automation with this Scout-X ID already exists. Update it or delete the old one first.',
+          code: 'SCOUT_ID_EXISTS',
+          automation: existing
+            ? {
+                id: existing.recording_meta.id,
+                scoutId: getScoutId(existing),
+                name: existing.recording_meta.name,
+                targetUrl: existing.recording_meta.url || '',
+                companyName: getCompanyName(existing),
+              }
+            : null,
+        });
+      }
+    } else {
+      scoutId = await generateUniqueScoutId((id) => scoutIdExistsForUser(req.user.id, id));
+    }
+
+    const companyName =
+      typeof bodyCompany === 'string'
+        ? bodyCompany.trim()
+        : typeof (config as any)?.companyName === 'string'
+          ? String((config as any).companyName).trim()
+          : '';
+
+    if (!companyName) {
+      return res.status(400).json({ error: 'companyName is required' });
+    }
+
+    const tagsResult = sanitizeAutomationTags(
+      bodyTags !== undefined ? bodyTags : (config as any)?.tags
+    );
+    if (!tagsResult.ok) {
+      return res.status(400).json({ error: tagsResult.error });
+    }
+    const tags = tagsResult.tags;
 
     const initialTz =
       (config as any)?.schedule?.timezone || (config as any)?.timezone || 'UTC';
@@ -496,12 +707,19 @@ router.post('/automations', async (req: any, res: any) => {
     const resolvedDbCols =
       incomingDbCols !== undefined ? incomingDbCols : [...DEFAULT_JOB_DATABASE_TARGET_COLUMNS];
 
+    const saasIncoming = { ...(config || {}) };
+    delete (saasIncoming as any).companyName;
+    delete (saasIncoming as any).tags;
+
     const robot = await Robot.create({
       id: uuid(),
       userId: normalizeOwnerIdForWrite(req.user.id),
       recording_meta: {
         name,
         id: robotMetaId,
+        scoutId,
+        companyName,
+        tags,
         createdAt,
         updatedAt: createdAt,
         pairs: workflow?.workflow?.length || workflow?.length || 1,
@@ -509,9 +727,11 @@ router.post('/automations', async (req: any, res: any) => {
         type: 'extract',
         url: normalizedStartUrl,
         saasConfig: {
-          ...(config || {}),
+          ...saasIncoming,
           webhookUrl: webhookUrl || config?.webhookUrl || '',
           databaseTargetColumns: resolvedDbCols,
+          companyName,
+          tags,
         },
       },
       recording: Array.isArray(workflow) ? { workflow } : workflow || defaultWorkflow(normalizedStartUrl),
@@ -525,13 +745,16 @@ router.post('/automations', async (req: any, res: any) => {
     await robot.save();
 
     return res.status(201).json({
-        automation: {
-          id: robotMetaId,
-          name,
-          targetUrl: normalizedStartUrl,
-          status: 'idle',
-          lastRunTime: null,
-          rowsExtracted: 0,
+      automation: {
+        id: robotMetaId,
+        scoutId,
+        name,
+        companyName,
+        tags,
+        targetUrl: normalizedStartUrl,
+        status: 'idle',
+        lastRunTime: null,
+        rowsExtracted: 0,
         config: getAutomationConfig(robot),
         schedule: nextSchedule,
       },
@@ -539,6 +762,13 @@ router.post('/automations', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to create automation: ${error.message}`);
     if (error?.code === 11000) {
+      const key = String(error?.message || '');
+      if (key.includes('scoutId') || key.includes('scout_id')) {
+        return res.status(409).json({
+          error: 'An automation with this Scout-X ID already exists.',
+          code: 'SCOUT_ID_EXISTS',
+        });
+      }
       return res.status(409).json({
         error:
           'An automation with this name already exists for your account. Open the Maxun dashboard to rename or remove it, then send again — or the extension will use a unique name on the next save.',
@@ -553,16 +783,53 @@ router.post('/automations', async (req: any, res: any) => {
 
 router.put('/automations/:id/config', async (req: any, res: any) => {
   try {
-    const robot = await Robot.findOne({
-      ...ownerIdFilter(req.user.id),
-      'recording_meta.id': req.params.id,
-    });
+    const robot = await findRobotByIdOrScoutId(req.user.id, req.params.id);
 
     if (!robot) {
       return res.status(404).json({ error: 'Automation not found' });
     }
 
-    const { name, startUrl, config, webhookUrl } = req.body;
+    const { name, startUrl, config, webhookUrl, elementsOnly, companyName: bodyCompany, tags: bodyTags } = req.body;
+    const elementsOnlyMode = elementsOnly === true || elementsOnly === 'true';
+
+    if (elementsOnlyMode) {
+      const prevSaas = getAutomationConfig(robot) || {};
+      const incoming = (config && typeof config === 'object') ? config : {};
+      const nextSaasConfig: Record<string, any> = { ...prevSaas };
+      if (Object.prototype.hasOwnProperty.call(incoming, 'listExtraction')) {
+        nextSaasConfig.listExtraction = (incoming as any).listExtraction;
+      }
+      if (Object.prototype.hasOwnProperty.call(incoming, 'previewRows')) {
+        nextSaasConfig.previewRows = (incoming as any).previewRows;
+      }
+      if (Object.prototype.hasOwnProperty.call(incoming, 'previewUrl')) {
+        nextSaasConfig.previewUrl = (incoming as any).previewUrl;
+      }
+
+      const nextMeta = {
+        ...robot.recording_meta,
+        updatedAt: new Date().toLocaleString(),
+        saasConfig: nextSaasConfig,
+      };
+      robot.recording_meta = nextMeta;
+      robot.markModified('recording_meta');
+      await robot.save();
+
+      return res.json({
+        success: true,
+        elementsOnly: true,
+        automation: {
+          id: nextMeta.id,
+          scoutId: getScoutId({ recording_meta: nextMeta }),
+          name: nextMeta.name,
+          companyName: getCompanyName({ recording_meta: nextMeta }),
+          targetUrl: nextMeta.url || '',
+          config: nextMeta.saasConfig || {},
+          schedule: robot.schedule,
+        },
+      });
+    }
+
     const normalizedStartUrl = startUrl ? normalizeAutomationUrl(startUrl) : undefined;
 
     // If the caller is updating config.schedule in the same payload, validate
@@ -584,13 +851,44 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     }
 
     const prevSaas = getAutomationConfig(robot) || {};
-    const incoming = (config && typeof config === 'object') ? config : {};
+    const incoming = (config && typeof config === 'object') ? { ...config } : {};
+    const companyName =
+      typeof bodyCompany === 'string'
+        ? bodyCompany.trim()
+        : typeof (incoming as any).companyName === 'string'
+          ? String((incoming as any).companyName).trim()
+          : undefined;
+    delete (incoming as any).companyName;
+    delete (incoming as any).tags;
+
+    let tagsToSet: string[] | undefined;
+    if (bodyTags !== undefined || (config && Object.prototype.hasOwnProperty.call(config, 'tags'))) {
+      const tagsResult = sanitizeAutomationTags(
+        bodyTags !== undefined ? bodyTags : (config as any)?.tags
+      );
+      if (!tagsResult.ok) {
+        return res.status(400).json({ error: tagsResult.error });
+      }
+      tagsToSet = tagsResult.tags;
+    }
+
+    const resolvedCompanyName =
+      companyName !== undefined ? companyName : getCompanyName(robot);
+    if (!resolvedCompanyName) {
+      return res.status(400).json({ error: 'companyName is required' });
+    }
+    if (companyName !== undefined && !companyName) {
+      return res.status(400).json({ error: 'companyName is required' });
+    }
+
     // Preserve extension-authored extraction unless the client explicitly sends listExtraction.
     // Deep-merge destinations so partial updates do not drop sibling destination configs.
     const nextSaasConfig: Record<string, any> = {
       ...prevSaas,
       ...incoming,
       ...(webhookUrl !== undefined ? { webhookUrl } : {}),
+      companyName: companyName !== undefined ? companyName : getCompanyName(robot),
+      ...(tagsToSet !== undefined ? { tags: tagsToSet } : {}),
       destinations: {
         ...((prevSaas as any).destinations || {}),
         ...((incoming as any).destinations || {}),
@@ -621,6 +919,9 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     if (!Object.prototype.hasOwnProperty.call(incoming, 'previewRows') && (prevSaas as any).previewRows) {
       nextSaasConfig.previewRows = (prevSaas as any).previewRows;
     }
+    if (!Object.prototype.hasOwnProperty.call(incoming, 'previewUrl') && (prevSaas as any).previewUrl) {
+      nextSaasConfig.previewUrl = (prevSaas as any).previewUrl;
+    }
     if (!Object.prototype.hasOwnProperty.call(incoming, 'columnOverrides') && (prevSaas as any).columnOverrides) {
       nextSaasConfig.columnOverrides = (prevSaas as any).columnOverrides;
     }
@@ -629,9 +930,26 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
       ...robot.recording_meta,
       ...(name ? { name } : {}),
       ...(normalizedStartUrl ? { url: normalizedStartUrl } : {}),
+      companyName: companyName !== undefined ? companyName : getCompanyName(robot),
+      ...(tagsToSet !== undefined ? { tags: tagsToSet } : {}),
       updatedAt: new Date().toLocaleString(),
       saasConfig: nextSaasConfig,
     };
+
+    if ((nextSaasConfig as any).schedule?.preferredNextRunAt) {
+      delete (nextSaasConfig as any).schedule.preferredNextRunAt;
+    }
+
+    const prevSchedule = (prevSaas as any).schedule || {};
+    const nextSched = (nextSaasConfig as any).schedule || {};
+    const scheduleChanged =
+      !!prevSchedule.enabled !== !!nextSched.enabled ||
+      String(prevSchedule.cron || '') !== String(nextSched.cron || '') ||
+      String(prevSchedule.timezone || '') !== String(nextSched.timezone || '');
+    const preferredFromBody =
+      req.body?.preferredNextRunAt ||
+      (incoming as any)?.schedule?.preferredNextRunAt ||
+      null;
 
     // Re-sync the schedule whenever the payload may have mutated it, so the
     // Agenda job, nextRunAt, and robot.schedule all stay consistent even when
@@ -643,18 +961,28 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
         schedule: robot.schedule,
       },
       req.user.id,
-      incomingTimezone
+      incomingTimezone,
+      scheduleChanged
+        ? {
+            packSlots: true,
+            ...(preferredFromBody ? { preferredNextRunAt: preferredFromBody } : {}),
+          }
+        : undefined
     );
 
     robot.recording_meta = nextMeta;
     robot.schedule = nextSchedule;
+    robot.markModified('recording_meta');
     await robot.save();
 
     return res.json({
       success: true,
       automation: {
         id: nextMeta.id,
+        scoutId: getScoutId({ recording_meta: nextMeta }),
         name: nextMeta.name,
+        companyName: getCompanyName({ recording_meta: nextMeta }),
+        tags: getAutomationTags({ recording_meta: nextMeta }),
         targetUrl: nextMeta.url || '',
         config: nextMeta.saasConfig || {},
         schedule: nextSchedule,
@@ -985,7 +1313,9 @@ router.get('/runs/:id', async (req: any, res: any) => {
       run: await enrichRunForSaas(run, robot),
       automation: {
         id: robot.recording_meta.id,
+        scoutId: getScoutId(robot),
         name: robot.recording_meta.name,
+        companyName: getCompanyName(robot),
         targetUrl: robot.recording_meta.url || '',
       },
       extractedRows: extractedRowsPayload,
@@ -995,6 +1325,57 @@ router.get('/runs/:id', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to fetch run ${req.params.id}: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch run details' });
+  }
+});
+
+router.patch('/runs/:id/failure-reason', async (req: any, res: any) => {
+  try {
+    const run: any = await Run.findOne({ runId: req.params.id });
+    if (!run) {
+      return res.status(404).json({ error: 'Run not found' });
+    }
+
+    const robot: any = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': run.robotMetaId,
+    })
+      .select('_id')
+      .lean();
+
+    if (!robot) {
+      return res.status(404).json({ error: 'Run not found' });
+    }
+
+    const { failureReason, confirmed } = req.body as {
+      failureReason?: string | null;
+      confirmed?: boolean;
+    };
+
+    if (failureReason === null || failureReason === '') {
+      run.failureReason = null;
+      run.failureReasonSource = null;
+    } else {
+      const reason = String(failureReason || '').trim();
+      if (!FAILURE_REASONS.has(reason)) {
+        return res.status(400).json({
+          error: `Unsupported failureReason. Allowed: ${[...FAILURE_REASONS].join(', ')}`,
+        });
+      }
+      run.failureReason = reason;
+      run.failureReasonSource = confirmed === true ? 'confirmed' : 'override';
+    }
+
+    await run.save();
+
+    return res.json({
+      success: true,
+      runId: run.runId,
+      failureReason: run.failureReason,
+      failureReasonSource: run.failureReasonSource,
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to update failure reason for ${req.params.id}: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to update failure reason' });
   }
 });
 
@@ -1009,7 +1390,12 @@ router.put('/automations/:id/schedule', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Automation not found' });
     }
 
-    const { enabled, cron, timezone } = req.body as { enabled?: boolean; cron?: string | null; timezone?: string };
+    const { enabled, cron, timezone, preferredNextRunAt } = req.body as {
+      enabled?: boolean;
+      cron?: string | null;
+      timezone?: string;
+      preferredNextRunAt?: string | null;
+    };
 
     const existingConfig = (robot.recording_meta as any).saasConfig || {};
     const existingSaasSchedule = existingConfig.schedule || {};
@@ -1087,7 +1473,8 @@ router.put('/automations/:id/schedule', async (req: any, res: any) => {
         schedule: robot.schedule,
       },
       req.user.id,
-      tz
+      tz,
+      preferredNextRunAt ? { preferredNextRunAt, packSlots: true } : { packSlots: true }
     );
 
     robot.recording_meta = nextMeta;
@@ -1126,19 +1513,61 @@ router.get('/runs', async (req: any, res: any) => {
   try {
     const { page, limit, skip } = parseListPagination(req);
     const robots = await Robot.find(ownerIdFilter(req.user.id))
-      .select('recording_meta.id recording_meta.name recording_meta.url recording_meta.saasConfig')
+      .select(
+        'recording_meta.id recording_meta.name recording_meta.url recording_meta.companyName recording_meta.scoutId recording_meta.saasConfig'
+      )
       .lean();
-    const allowedRobotIds = new Set(robots.map((robot: any) => robot.recording_meta.id));
+
+    const qFilter = req.query.q != null ? String(req.query.q).trim().toLowerCase() : '';
+    let filteredRobots = robots;
+    if (qFilter) {
+      filteredRobots = robots.filter((robot: any) => {
+        const meta = robot.recording_meta || {};
+        const name = String(meta.name || '').toLowerCase();
+        const company = getCompanyName(robot).toLowerCase();
+        const scoutId = String(meta.scoutId || '').toLowerCase();
+        return name.includes(qFilter) || company.includes(qFilter) || scoutId.includes(qFilter);
+      });
+    }
+
+    const allowedRobotIds = new Set(filteredRobots.map((robot: any) => robot.recording_meta.id));
     const robotMetaIdFilter = req.query.robotMetaId != null ? String(req.query.robotMetaId).trim() : '';
 
-    if (robotMetaIdFilter && !allowedRobotIds.has(robotMetaIdFilter)) {
-      return res.status(404).json({ error: 'Automation not found' });
+    if (robotMetaIdFilter) {
+      const ownsRobot = robots.some((r: any) => r.recording_meta?.id === robotMetaIdFilter);
+      if (!ownsRobot) {
+        return res.status(404).json({ error: 'Automation not found' });
+      }
+      if (!allowedRobotIds.has(robotMetaIdFilter)) {
+        return res.json({
+          runs: [],
+          pagination: { page, limit, total: 0, totalPages: 1 },
+        });
+      }
     }
 
     const match: any =
       robotMetaIdFilter
         ? { robotMetaId: robotMetaIdFilter }
         : { robotMetaId: { $in: Array.from(allowedRobotIds) } };
+
+    const statusRaw = req.query.status != null ? String(req.query.status).trim() : '';
+    if (statusRaw) {
+      const statuses = statusRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (statuses.length === 1) {
+        match.status = statuses[0];
+      } else if (statuses.length > 1) {
+        match.status = { $in: statuses };
+      }
+    }
+
+    const anomalyRaw = req.query.anomaly != null ? String(req.query.anomaly).trim() : '';
+    if (anomalyRaw) {
+      match.anomaly = anomalyRaw;
+    }
 
     const pipeline: any[] = [
       { $match: match },

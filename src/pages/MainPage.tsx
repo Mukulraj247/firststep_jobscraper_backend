@@ -6,6 +6,7 @@ import { Recordings } from "../components/robot/Recordings";
 import { Runs } from "../components/run/Runs";
 import ProxyForm from '../components/proxy/ProxyForm';
 import { DashboardPage } from './DashboardPage';
+import { FailureDashboardPage } from './FailureDashboardPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
 import { useGlobalInfoStore, useCacheInvalidation } from "../context/globalInfo";
 import { createAndRunRecording, createRunForStoredRecording, CreateRunResponseWithQueue, interpretStoredRecording, notifyAboutAbort, scheduleStoredRecording } from "../api/storage";
@@ -191,6 +192,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
           
           if (data.status === 'success') {
             notify('success', t('main_page.notifications.interpretation_success', { name: robotName }));
+          } else if (data.status === 'anomaly') {
+            notify('warning', `${robotName}: run finished with anomaly (${data.anomaly || 'row_drop'})`);
           } else {
             notify('error', t('main_page.notifications.interpretation_failed', { name: robotName }));
           }
@@ -267,6 +270,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
         
         if (completionData.status === 'success') {
           notify('success', t('main_page.notifications.interpretation_success', { name: robotName }));
+        } else if (completionData.status === 'anomaly') {
+          notify('warning', `${robotName}: run finished with anomaly (${completionData.anomaly || 'row_drop'})`);
         } else {
           notify('error', t('main_page.notifications.interpretation_failed', { name: robotName }));
         }
@@ -320,6 +325,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
           runId={ids.runId}
           runningRecordingName={runningRecordingName}
         />;
+      case 'failures':
+        return <FailureDashboardPage />;
       case 'proxy':
         return <ProxyForm />;
       case 'dashboard':

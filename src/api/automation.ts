@@ -3,7 +3,11 @@ import { apiUrl } from '../apiConfig';
 
 export interface AutomationSummary {
   id: string;
+  /** Parallel Scout-X scrape ID (SX12AB34). */
+  scoutId?: string | null;
   name: string;
+  companyName?: string;
+  tags?: string[];
   targetUrl: string;
   /** Robot meta updated-at string from the server (used for stale snapshots). */
   updatedAt?: string;
@@ -11,6 +15,8 @@ export interface AutomationSummary {
   rowsExtracted: number;
   status: string;
   latestRunId?: string | null;
+  latestFailureReason?: string | null;
+  latestFailureReasonSource?: string | null;
   webhookUrl?: string;
   config?: Record<string, any>;
   schedule?: {
@@ -21,6 +27,8 @@ export interface AutomationSummary {
     updatedAt?: string;
     /** Server-set: cron stored but triggers off (paused). */
     paused?: boolean;
+    nextRunAt?: string | null;
+    lastRunAt?: string | null;
   } | null;
 }
 
@@ -91,11 +99,16 @@ export interface DashboardAutomationsResponse {
 export const getDashboardAutomations = async (params?: {
   page?: number;
   limit?: number;
+  tags?: string[];
 }): Promise<DashboardAutomationsResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 10;
   const response = await axios.get(`${apiUrl}/api/dashboard/automations`, {
-    params: { page, limit },
+    params: {
+      page,
+      limit,
+      ...(params?.tags?.length ? { tags: params.tags.join(',') } : {}),
+    },
     withCredentials: true,
   });
   const data = response.data || {};
@@ -125,11 +138,21 @@ export const listSaasRuns = async (params?: {
   page?: number;
   limit?: number;
   robotMetaId?: string;
+  status?: string;
+  anomaly?: string;
+  q?: string;
 }): Promise<SaasRunsListResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 10;
   const response = await axios.get(`${apiUrl}/api/runs`, {
-    params: { page, limit, ...(params?.robotMetaId ? { robotMetaId: params.robotMetaId } : {}) },
+    params: {
+      page,
+      limit,
+      ...(params?.robotMetaId ? { robotMetaId: params.robotMetaId } : {}),
+      ...(params?.status ? { status: params.status } : {}),
+      ...(params?.anomaly ? { anomaly: params.anomaly } : {}),
+      ...(params?.q ? { q: params.q } : {}),
+    },
     withCredentials: true,
   });
   const data = response.data || {};
@@ -142,7 +165,9 @@ export const listSaasRuns = async (params?: {
 export const createAutomation = async (payload: {
   name: string;
   startUrl: string;
+  companyName: string;
   webhookUrl?: string;
+  tags?: string[];
   config?: Record<string, any>;
 }) => {
   const response = await axios.post(`${apiUrl}/api/automations`, payload, { withCredentials: true });
@@ -160,7 +185,10 @@ export const updateAutomationConfig = async (
     name?: string;
     startUrl?: string;
     webhookUrl?: string;
+    companyName?: string;
+    tags?: string[];
     config?: Record<string, any>;
+    preferredNextRunAt?: string | null;
   }
 ) => {
   const response = await axios.put(`${apiUrl}/api/automations/${id}/config`, payload, { withCredentials: true });
@@ -184,13 +212,35 @@ export const getSaasRun = async (id: string) => {
   return response.data;
 };
 
+export const updateRunFailureReason = async (
+  runId: string,
+  payload: { failureReason: string | null; confirmed?: boolean }
+) => {
+  const response = await axios.patch(
+    `${apiUrl}/api/runs/${runId}/failure-reason`,
+    payload,
+    { withCredentials: true }
+  );
+  return response.data;
+};
+
 export const updateAutomationSchedule = async (
   id: string,
-  schedule: { enabled: boolean; cron: string | null; timezone: string }
+  schedule: {
+    enabled: boolean;
+    cron: string | null;
+    timezone: string;
+    preferredNextRunAt?: string | null;
+  }
 ): Promise<{ success: boolean; schedule: any }> => {
   const response = await axios.put(
     `${apiUrl}/api/automations/${id}/schedule`,
-    { enabled: schedule.enabled, cron: schedule.cron, timezone: schedule.timezone },
+    {
+      enabled: schedule.enabled,
+      cron: schedule.cron,
+      timezone: schedule.timezone,
+      ...(schedule.preferredNextRunAt ? { preferredNextRunAt: schedule.preferredNextRunAt } : {}),
+    },
     { withCredentials: true }
   );
   return response.data;

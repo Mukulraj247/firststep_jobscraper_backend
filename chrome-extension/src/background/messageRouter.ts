@@ -17,6 +17,7 @@ import {
   saveScheduleToBackend,
   getAutomationStatus,
   triggerBackendRun,
+  lookupAutomation,
 } from './backendApi';
 
 /**
@@ -141,13 +142,14 @@ async function handleMessage(
 
       // From content script: list was selected
       case MSG.LIST_SELECTED: {
-        const { listSelector, itemCount, fields, previewRows, previewText } = message.payload || {};
+        const { listSelector, itemCount, fields, previewRows, previewText, previewUrl } = message.payload || {};
         await updateListState({
           phase: 'configuring',
           listSelector,
           itemCount,
           fields,
           previewRows,
+          ...(typeof previewUrl === 'string' && previewUrl ? { previewUrl } : {}),
         });
         sendResponse({ ok: true });
         break;
@@ -375,9 +377,22 @@ async function handleMessage(
       }
 
       // ── Backend Integration ──
+      case MSG.LOOKUP_AUTOMATION: {
+        const result = await lookupAutomation({
+          url: message.payload?.url,
+          scoutId: message.payload?.scoutId,
+        });
+        sendResponse({ ok: true, result });
+        break;
+      }
+
       case MSG.SAVE_TO_BACKEND: {
         const st = await getState();
         let startUrl = message.payload?.startUrl as string | undefined;
+        const previewUrl =
+          (typeof message.payload?.previewUrl === 'string' && message.payload.previewUrl) ||
+          st.list.previewUrl ||
+          undefined;
         const tabId = st.activeTabId ?? (await getActiveTabId());
         if (tabId) {
           try {
@@ -389,19 +404,38 @@ async function handleMessage(
             /* keep payload startUrl */
           }
         }
+        // Prefer the URL from preview time so client-side filters encoded in the
+        // URL at authoring time survive even if the user navigated away later.
+        if (previewUrl && /^https?:\/\//i.test(previewUrl)) {
+          startUrl = previewUrl;
+        }
         // Reuse persisted automationId so subsequent saves update instead of
         // creating duplicates. Explicit payload.automationId still wins.
         const persistedId = st.list.savedAutomation?.id;
         const schedulePayload = configScheduleFromDraft(
           st.list.cloudScheduleDraft ?? defaultCloudScheduleDraft()
         );
+        const elementsOnly = message.payload?.elementsOnly === true;
         const result = await saveConfigToBackend({
           ...message.payload,
           automationId: message.payload?.automationId || persistedId,
           startUrl,
-          schedule: schedulePayload,
+          previewUrl,
+          schedule: elementsOnly ? undefined : schedulePayload,
+          elementsOnly,
         });
         const newId = extractAutomationId(result);
+        const scoutId =
+          result?.automation?.scoutId ||
+          result?.scoutId ||
+          message.payload?.scoutId ||
+          st.list.savedAutomation?.scoutId ||
+          null;
+        const companyName =
+          result?.automation?.companyName ||
+          message.payload?.companyName ||
+          st.list.savedAutomation?.companyName ||
+          null;
         const serverSchedule =
           result?.automation?.schedule ||
           result?.schedule ||
@@ -425,6 +459,8 @@ async function handleMessage(
             savedAutomation: {
               ...(st.list.savedAutomation || { id: newId }),
               id: newId,
+              scoutId: scoutId || st.list.savedAutomation?.scoutId || null,
+              companyName: companyName || st.list.savedAutomation?.companyName || null,
               name: result?.automation?.name || st.list.savedAutomation?.name,
               fetchedAt: new Date().toISOString(),
               ...schedulePatch,
@@ -434,7 +470,7 @@ async function handleMessage(
         } else if (draftFromServer) {
           await updateListState({ cloudScheduleDraft: draftFromServer });
         }
-        sendResponse({ ok: true, result, automationId: newId });
+        sendResponse({ ok: true, result, automationId: newId, scoutId });
         break;
       }
 
@@ -625,7 +661,14 @@ async function handleMessage(
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error('Message handler error:', errorMsg);
-    sendResponse({ ok: false, error: errorMsg });
+    const code = (error as any)?.code;
+    const automation = (error as any)?.automation;
+    sendResponse({
+      ok: false,
+      error: errorMsg,
+      ...(code ? { code } : {}),
+      ...(automation ? { automation } : {}),
+    });
   }
 }
 

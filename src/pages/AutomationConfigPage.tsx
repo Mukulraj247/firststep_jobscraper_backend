@@ -27,8 +27,9 @@ import {
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import { getAutomation, updateAutomationConfig } from '../api/automation';
 import { useGlobalInfoStore } from '../context/globalInfo';
-import { SCHEDULE_OPTIONS } from '../constants/scheduleOptions';
+import { SCHEDULE_OPTIONS, buildPreferredStartSuggestions } from '../constants/scheduleOptions';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
+import { TagPicker } from '../components/automation/TagPicker';
 
 const DB_TARGET_COL_MAX = 100;
 const DB_TARGET_NAME_MAX = 120;
@@ -116,6 +117,8 @@ export const AutomationConfigPage = () => {
   const navigate = useNavigate();
   const { notify } = useGlobalInfoStore();
   const [name, setName] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
   const [startUrl, setStartUrl] = useState('https://');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [databaseTargetColumnsDraft, setDatabaseTargetColumnsDraft] = useState('');
@@ -127,6 +130,7 @@ export const AutomationConfigPage = () => {
   const [lastRunTime, setLastRunTime] = useState<string | null>(null);
   const [nextRunAt, setNextRunAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [preferredNextRunAt, setPreferredNextRunAt] = useState<string | null>(null);
 
   const [config, setConfig] = useState<Record<string, any>>({
     schedule: {
@@ -212,6 +216,8 @@ export const AutomationConfigPage = () => {
         const automation = response.automation;
         const saas = automation.config || {};
         setName(automation.name || '');
+        setCompanyName(automation.companyName || '');
+        setTags(Array.isArray(automation.tags) ? automation.tags : []);
         setStartUrl(automation.targetUrl || 'https://');
         const webhook =
           automation.webhookUrl ||
@@ -328,7 +334,25 @@ export const AutomationConfigPage = () => {
     return match?.label || (cron ? `Custom: ${cron}` : 'Off');
   }, [config.schedule?.cron]);
 
+  const scheduleSuggestions = useMemo(() => {
+    if (!config.schedule?.enabled || !config.schedule?.cron) return [];
+    return buildPreferredStartSuggestions(
+      config.schedule.cron,
+      config.schedule.timezone || 'UTC'
+    );
+  }, [config.schedule?.enabled, config.schedule?.cron, config.schedule?.timezone]);
+
+  useEffect(() => {
+    if (scheduleSuggestions.length && !preferredNextRunAt) {
+      setPreferredNextRunAt(scheduleSuggestions[0].iso);
+    }
+  }, [scheduleSuggestions, preferredNextRunAt]);
+
   const handleSave = async () => {
+    if (!companyName.trim()) {
+      notify('error', 'Company name is required');
+      return;
+    }
     const parsedTargets = parseDatabaseTargetColumnsInput(databaseTargetColumnsDraft);
     if (!parsedTargets.ok) {
       notify('error', parsedTargets.error);
@@ -377,6 +401,7 @@ export const AutomationConfigPage = () => {
         enabled: !!config.schedule?.enabled,
         cron: config.schedule?.cron || '',
         timezone: config.schedule?.timezone || 'UTC',
+        ...(preferredNextRunAt ? { preferredNextRunAt } : {}),
       },
       destinations: {
         ...config.destinations,
@@ -414,9 +439,12 @@ export const AutomationConfigPage = () => {
     try {
       await updateAutomationConfig(id, {
         name,
+        companyName: companyName.trim(),
+        tags,
         startUrl: normalizeStartUrl(startUrl),
         webhookUrl: webhook,
         config: configPayload,
+        ...(preferredNextRunAt ? { preferredNextRunAt } : {}),
       });
       notify('success', 'Automation configuration saved');
       navigate('/dashboard');
@@ -480,6 +508,16 @@ export const AutomationConfigPage = () => {
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
+            <TextField
+              label="Company name"
+              fullWidth
+              required
+              value={companyName}
+              onChange={(event) => setCompanyName(event.target.value)}
+              placeholder="e.g. DXC, EY, Google"
+              helperText="Required. Shown on the Scout-X dashboard Company column."
+            />
+            <TagPicker value={tags} onChange={setTags} />
             <TextField
               label="Start URL"
               fullWidth
@@ -651,6 +689,7 @@ export const AutomationConfigPage = () => {
                       key={option.label}
                       onClick={() => {
                         updateNested(['schedule', 'cron'], option.cron || '');
+                        setPreferredNextRunAt(null);
                         if (option.cron === null) {
                           updateNested(['schedule', 'enabled'], false);
                         } else {
@@ -739,6 +778,29 @@ export const AutomationConfigPage = () => {
                     />
                   </Box>
                 )}
+
+              {config.schedule?.enabled && scheduleSuggestions.length > 0 && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2" fontWeight={700} mb={0.5}>
+                    Suggested first run
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+                    Starts are spaced at least 90 seconds apart from other automations.
+                  </Typography>
+                  <Stack direction="row" flexWrap="wrap" gap={1}>
+                    {scheduleSuggestions.map((s) => (
+                      <Chip
+                        key={s.iso}
+                        label={s.label}
+                        color={preferredNextRunAt === s.iso ? 'primary' : 'default'}
+                        variant={preferredNextRunAt === s.iso ? 'filled' : 'outlined'}
+                        onClick={() => setPreferredNextRunAt(s.iso)}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                    ))}
+                  </Stack>
+                </Box>
+              )}
             </Box>
           </SectionPaper>
 

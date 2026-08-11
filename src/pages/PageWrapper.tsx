@@ -140,6 +140,7 @@ export const PageWrapper = () => {
                   <Route path="/robots/create" element={<RobotCreate />} />
                   <Route path="/robots/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="robots" />} />
                   <Route path="/runs/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="runs" />} />
+                  <Route path="/failures" element={<MainPage handleEditRecording={handleEditRecording} initialContent="failures" />} />
                   <Route path="/proxy" element={<MainPage handleEditRecording={handleEditRecording} initialContent="proxy" />} />
                   <Route path="/automation/:id/data" element={<AutomationDataPage />} />
                   <Route path="/automation/:id/config" element={<AutomationConfigPage />} />

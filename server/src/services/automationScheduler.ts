@@ -1,5 +1,6 @@
 import logger from '../logger';
 import Robot from '../models/Robot';
+import Run from '../models/Run';
 import { getAgenda, scheduleRecurringTrigger, cancelScheduledTrigger, ScheduleTriggerData } from '../queue/scraperQueue';
 import { createQueuedAutomationRun } from './automationRun';
 import { Job } from 'agenda';
@@ -7,8 +8,15 @@ import moment from 'moment-timezone';
 import {
   computeNextRun,
   computeNextRunFromInterval,
+  findPackedNextRunAt,
+  getScheduleCatchupGraceMs,
+  getScheduleCatchupIntervalMs,
+  getScheduleCatchupMaxRobots,
   humanIntervalFromMs,
   intervalMsFromCron,
+  isScheduleOverdue,
+  MIN_AUTOMATION_GAP_MS,
+  suggestPreferredStartSlots,
 } from '../utils/schedule';
 
 type StoredSchedule = {
@@ -22,7 +30,22 @@ type StoredSchedule = {
   nextRunAt?: Date | null;
 };
 
+const ACTIVE_RUN_STATUSES = ['pending', 'queued', 'running', 'scheduled'] as const;
+
 const getScheduleJobId = (automationId: string) => `automation-schedule:${automationId}`;
+
+const normalizeTimezone = (rawTz: string): string => {
+  const deprecatedTimezones: Record<string, string> = {
+    'Asia/Calcutta': 'Asia/Kolkata',
+    'Asia/Karachi': 'Asia/Karachi',
+    EST: 'America/New_York',
+    CST: 'America/Chicago',
+    MST: 'America/Denver',
+    PST: 'America/Los_Angeles',
+  };
+  const mapped = deprecatedTimezones[rawTz] || rawTz;
+  return moment.tz.zone(mapped) ? mapped : 'UTC';
+};
 
 export const buildAutomationScheduleState = (input?: Partial<StoredSchedule> | null): StoredSchedule => ({
   enabled: !!input?.enabled && (!!input?.cron || !!input?.every),
@@ -31,6 +54,8 @@ export const buildAutomationScheduleState = (input?: Partial<StoredSchedule> | n
   timezone: input?.timezone || 'UTC',
   jobId: input?.jobId || '',
   updatedAt: input?.updatedAt || new Date().toISOString(),
+  lastRunAt: input?.lastRunAt != null ? new Date(input.lastRunAt) : null,
+  nextRunAt: input?.nextRunAt != null ? new Date(input.nextRunAt) : null,
 });
 
 /**
@@ -53,28 +78,122 @@ export function resolveEffectiveScheduleState(robot: any): StoredSchedule {
   return fromRoot;
 }
 
+/** Prefer root timestamps (written on fire); fall back to saasConfig. */
+function readScheduleTimestamps(robot: any, schedule: StoredSchedule): {
+  lastRunAt: Date | null;
+  nextRunAt: Date | null;
+} {
+  const root = robot?.schedule;
+  const saas = robot?.recording_meta?.saasConfig?.schedule;
+  const lastRaw = root?.lastRunAt ?? saas?.lastRunAt ?? schedule.lastRunAt ?? null;
+  const nextRaw = root?.nextRunAt ?? saas?.nextRunAt ?? schedule.nextRunAt ?? null;
+  return {
+    lastRunAt: lastRaw != null ? new Date(lastRaw) : null,
+    nextRunAt: nextRaw != null ? new Date(nextRaw) : null,
+  };
+}
+
+async function hasActiveRunForRobot(robotMetaId: string): Promise<boolean> {
+  const existing = await Run.findOne({
+    robotMetaId,
+    status: { $in: [...ACTIVE_RUN_STATUSES] },
+  })
+    .select({ _id: 1 })
+    .lean();
+  return !!existing;
+}
+
+function computeScheduleAdvance(
+  schedule: StoredSchedule,
+  from: Date = new Date()
+): { lastRunAt: Date; nextRunAt: Date | null; everyMs: number | null } {
+  const tz = normalizeTimezone(schedule.timezone || 'UTC');
+  const cronExpr = schedule.cron || '';
+  const everyMs =
+    (typeof schedule.every === 'number' && schedule.every > 0 ? schedule.every : null) ??
+    intervalMsFromCron(cronExpr);
+  const nextRunAt = everyMs
+    ? computeNextRunFromInterval(everyMs, from)
+    : cronExpr
+      ? computeNextRun(cronExpr, tz)
+      : null;
+  return { lastRunAt: from, nextRunAt, everyMs };
+}
+
+async function persistScheduleAdvance(
+  robotId: any,
+  advance: { lastRunAt: Date; nextRunAt: Date | null; everyMs: number | null }
+): Promise<void> {
+  await Robot.updateOne(
+    { _id: robotId },
+    {
+      $set: {
+        'schedule.lastRunAt': advance.lastRunAt,
+        'schedule.nextRunAt': advance.nextRunAt,
+        ...(advance.everyMs ? { 'schedule.every': advance.everyMs } : {}),
+      },
+    }
+  );
+}
+
+async function collectOccupiedNextRunAts(excludeAutomationId?: string): Promise<number[]> {
+  const occupied = new Set<number>();
+
+  const robots = await Robot.find({
+    $or: [{ 'schedule.enabled': true }, { 'recording_meta.saasConfig.schedule.enabled': true }],
+  })
+    .select('recording_meta.id schedule.nextRunAt recording_meta.saasConfig.schedule.nextRunAt')
+    .lean();
+
+  for (const robot of robots as any[]) {
+    const id = robot?.recording_meta?.id;
+    if (excludeAutomationId && id === excludeAutomationId) continue;
+    const nextRaw =
+      robot?.schedule?.nextRunAt ?? robot?.recording_meta?.saasConfig?.schedule?.nextRunAt ?? null;
+    if (nextRaw == null) continue;
+    const ms = new Date(nextRaw).getTime();
+    if (!Number.isNaN(ms) && ms > Date.now() - MIN_AUTOMATION_GAP_MS) {
+      occupied.add(ms);
+    }
+  }
+
+  try {
+    const agenda = await getAgenda();
+    const jobs = await agenda.jobs({
+      name: 'schedule-triggers',
+      nextRunAt: { $gte: new Date(Date.now() - MIN_AUTOMATION_GAP_MS) },
+    });
+    for (const job of jobs || []) {
+      const id = (job.attrs?.data as any)?.automationId;
+      if (excludeAutomationId && id === excludeAutomationId) continue;
+      const next = job.attrs?.nextRunAt;
+      if (!next) continue;
+      const ms = new Date(next).getTime();
+      if (!Number.isNaN(ms)) occupied.add(ms);
+    }
+  } catch (err: any) {
+    logger.log('warn', `collectOccupiedNextRunAts Agenda lookup failed: ${err?.message || err}`);
+  }
+
+  return Array.from(occupied);
+}
+
 export async function syncAutomationSchedule(
   robot: any,
   userId: number,
   timezone: string = 'UTC',
-  options?: { preserveNextRunAt?: boolean }
+  options?: {
+    preserveNextRunAt?: boolean;
+    preferredNextRunAt?: Date | string | null;
+    /** When true, recompute a packed first fire (schedule create/update). */
+    packSlots?: boolean;
+  }
 ): Promise<StoredSchedule> {
   const rawNextSchedule = robot?.recording_meta?.saasConfig?.schedule ?? robot?.schedule;
   const nextSchedule = buildAutomationScheduleState(rawNextSchedule);
   const jobId = getScheduleJobId(robot.recording_meta.id);
 
-  const deprecatedTimezones: Record<string, string> = {
-    'Asia/Calcutta': 'Asia/Kolkata',
-    'Asia/Karachi': 'Asia/Karachi',
-    'EST': 'America/New_York',
-    'CST': 'America/Chicago',
-    'MST': 'America/Denver',
-    'PST': 'America/Los_Angeles',
-  };
-  const rawTz = timezone || 'UTC';
-  const finalTz = deprecatedTimezones[rawTz] && moment.tz.zone(deprecatedTimezones[rawTz])
-    ? deprecatedTimezones[rawTz]
-    : (moment.tz.zone(rawTz) ? rawTz : 'UTC');
+  const finalTz = normalizeTimezone(timezone || 'UTC');
 
   // Disable path: the caller is either turning the schedule off or the robot was never scheduled.
   // We MUST call cancelScheduledTrigger here to remove any lingering Agenda job so the cron stops.
@@ -102,6 +221,41 @@ export async function syncAutomationSchedule(
       : null) ?? intervalMsFromCron(cronExpr);
   const humanInterval = everyMs ? humanIntervalFromMs(everyMs) : null;
 
+  let forcedNextRunAt: Date | null = null;
+  if (!options?.preserveNextRunAt) {
+    const existingNextRaw =
+      robot?.schedule?.nextRunAt ?? robot?.recording_meta?.saasConfig?.schedule?.nextRunAt ?? null;
+    const existingMs = existingNextRaw != null ? new Date(existingNextRaw).getTime() : NaN;
+    const hasFutureNext = !Number.isNaN(existingMs) && existingMs > Date.now();
+    const shouldRepack = !!options?.packSlots || options?.preferredNextRunAt != null || !hasFutureNext;
+
+    if (!shouldRepack && hasFutureNext) {
+      forcedNextRunAt = new Date(existingMs);
+    } else {
+      const preferredRaw = options?.preferredNextRunAt;
+      let preferredMs: number | null = null;
+      if (preferredRaw != null) {
+        const t = new Date(preferredRaw).getTime();
+        if (!Number.isNaN(t) && t > Date.now()) preferredMs = t;
+      }
+      if (preferredMs == null && everyMs && humanInterval) {
+        const suggestions = suggestPreferredStartSlots(everyMs, finalTz);
+        preferredMs = suggestions[0]?.getTime() ?? Date.now() + everyMs;
+      } else if (preferredMs == null && cronExpr) {
+        const nextCron = computeNextRun(cronExpr, finalTz);
+        preferredMs = nextCron ? nextCron.getTime() : Date.now() + MIN_AUTOMATION_GAP_MS;
+      }
+      if (preferredMs != null) {
+        const occupied = await collectOccupiedNextRunAts(robot.recording_meta.id);
+        forcedNextRunAt = findPackedNextRunAt(occupied, preferredMs, MIN_AUTOMATION_GAP_MS);
+        logger.log(
+          'info',
+          `Packed nextRunAt for ${robot.recording_meta.id}: preferred=${new Date(preferredMs).toISOString()} packed=${forcedNextRunAt.toISOString()} (gap=${MIN_AUTOMATION_GAP_MS}ms, occupied=${occupied.length})`
+        );
+      }
+    }
+  }
+
   const agendaNextRunAt = await scheduleRecurringTrigger(
     robot.recording_meta.id,
     String(userId),
@@ -113,8 +267,12 @@ export async function syncAutomationSchedule(
           everyMs,
           humanInterval,
           preserveNextRunAt: !!options?.preserveNextRunAt,
+          forcedNextRunAt,
         }
-      : undefined
+      : {
+          preserveNextRunAt: !!options?.preserveNextRunAt,
+          forcedNextRunAt,
+        }
   );
 
   const scheduleType =
@@ -179,6 +337,15 @@ async function processScheduledRun(job: Job<ScheduleTriggerData>) {
     return;
   }
 
+  // Single-flight: do not stack on an in-flight/pending run (e.g. catch-up already queued).
+  if (await hasActiveRunForRobot(automationId)) {
+    logger.log(
+      'info',
+      `Skipping scheduled automation ${automationId}: active run already pending/running`
+    );
+    return;
+  }
+
   const scheduleJobId = (schedule.jobId || '').replace('automation-schedule:', '') || undefined;
   const normalizedUserId = isNaN(Number(userId)) ? userId : Number(userId);
 
@@ -187,42 +354,17 @@ async function processScheduledRun(job: Job<ScheduleTriggerData>) {
     scheduleJobId: scheduleJobId || undefined,
   });
 
-  // Update lastRunAt and nextRunAt on the robot schedule
-  const rawTz = schedule.timezone || 'UTC';
-  const deprecatedTimezones: Record<string, string> = {
-    'Asia/Calcutta': 'Asia/Kolkata',
-    'EST': 'America/New_York',
-    'CST': 'America/Chicago',
-    'MST': 'America/Denver',
-    'PST': 'America/Los_Angeles',
-  };
-  const tz = deprecatedTimezones[rawTz] || rawTz;
-  const cronExpr = schedule.cron || '';
-  const lastRunAt = new Date();
-  const everyMs =
-    (typeof schedule.every === 'number' && schedule.every > 0 ? schedule.every : null) ??
-    intervalMsFromCron(cronExpr);
-  const nextRunAt = everyMs
-    ? computeNextRunFromInterval(everyMs, lastRunAt)
-    : cronExpr
-      ? computeNextRun(cronExpr, tz)
-      : null;
+  const advance = computeScheduleAdvance(schedule, new Date());
+  await persistScheduleAdvance((robot as any)._id, advance);
 
-  await Robot.updateOne(
-    { _id: (robot as any)._id },
-    {
-      $set: {
-        'schedule.lastRunAt': lastRunAt,
-        'schedule.nextRunAt': nextRunAt,
-        ...(everyMs ? { 'schedule.every': everyMs } : {}),
-      },
-    }
+  logger.log(
+    'info',
+    `Scheduled automation ${automationId} enqueued run ${result.runId}. nextRunAt: ${advance.nextRunAt}`
   );
-
-  logger.log('info', `Scheduled automation ${automationId} enqueued run ${result.runId}. nextRunAt: ${nextRunAt}`);
 }
 
 let scheduleProcessorRegistered = false;
+let catchupTimer: NodeJS.Timeout | null = null;
 
 export async function registerScheduleProcessor(): Promise<void> {
   if (scheduleProcessorRegistered) return;
@@ -238,8 +380,120 @@ export async function startAutomationScheduleWorker() {
 }
 
 export async function stopAutomationScheduleWorker() {
+  stopMissedScheduleCatchupLoop();
   // Agenda worker stops via closeAgenda() during shutdown
-  // This function is kept for API compatibility
+}
+
+/**
+ * Enqueue at most one catch-up run per overdue scheduled robot.
+ * Idempotent with single-flight against pending/running Runs.
+ */
+export async function sweepMissedSchedules(options?: {
+  maxRobots?: number;
+  graceMs?: number;
+  now?: Date;
+}): Promise<number> {
+  const maxRobots = options?.maxRobots ?? getScheduleCatchupMaxRobots();
+  const graceMs = options?.graceMs ?? getScheduleCatchupGraceMs();
+  const now = options?.now ?? new Date();
+
+  const robots: any[] = await Robot.find({
+    $or: [
+      { 'schedule.enabled': true },
+      { 'recording_meta.saasConfig.schedule.enabled': true },
+    ],
+  })
+    .limit(Math.max(maxRobots * 4, 100))
+    .lean();
+
+  let enqueued = 0;
+
+  for (const robot of robots) {
+    if (enqueued >= maxRobots) break;
+
+    const schedule = resolveEffectiveScheduleState(robot);
+    if (!schedule.enabled || (!schedule.cron && !schedule.every)) continue;
+
+    const cronExpr = schedule.cron || '';
+    const everyMs =
+      (typeof schedule.every === 'number' && schedule.every > 0 ? schedule.every : null) ??
+      intervalMsFromCron(cronExpr);
+    const { lastRunAt, nextRunAt } = readScheduleTimestamps(robot, schedule);
+
+    if (
+      !isScheduleOverdue({
+        lastRunAt,
+        nextRunAt,
+        everyMs,
+        now,
+        graceMs,
+      })
+    ) {
+      continue;
+    }
+
+    const automationId = robot.recording_meta?.id;
+    if (!automationId) continue;
+
+    if (await hasActiveRunForRobot(automationId)) {
+      continue;
+    }
+
+    try {
+      const userId = robot.userId;
+      const normalizedUserId = isNaN(Number(userId)) ? userId : Number(userId);
+      const scheduleJobId = (schedule.jobId || '').replace('automation-schedule:', '') || undefined;
+
+      const result = await createQueuedAutomationRun(robot, normalizedUserId, {
+        source: 'scheduled',
+        scheduleJobId: scheduleJobId || undefined,
+      });
+
+      const advance = computeScheduleAdvance(schedule, now);
+      await persistScheduleAdvance(robot._id, advance);
+      enqueued += 1;
+      logger.log(
+        'info',
+        `Catch-up enqueued for automation ${automationId} run ${result.runId}. nextRunAt: ${advance.nextRunAt}`
+      );
+    } catch (error: any) {
+      logger.log(
+        'error',
+        `Catch-up failed for automation ${automationId}: ${error?.message || error}`
+      );
+    }
+  }
+
+  if (enqueued > 0) {
+    logger.log('info', `Missed-schedule sweep enqueued ${enqueued} catch-up run(s)`);
+  }
+  return enqueued;
+}
+
+/**
+ * Run one sweep immediately, then on an interval. Safe to call once per process.
+ */
+export function startMissedScheduleCatchupLoop(): void {
+  if (catchupTimer) return;
+  const intervalMs = getScheduleCatchupIntervalMs();
+
+  const run = () => {
+    void sweepMissedSchedules().catch((error: any) => {
+      logger.log('error', `Missed-schedule sweep error: ${error?.message || error}`);
+    });
+  };
+
+  run();
+  catchupTimer = setInterval(run, intervalMs);
+  if (typeof catchupTimer.unref === 'function') catchupTimer.unref();
+  logger.log('info', `Missed-schedule catch-up loop started (every ${intervalMs}ms)`);
+}
+
+export function stopMissedScheduleCatchupLoop(): void {
+  if (catchupTimer) {
+    clearInterval(catchupTimer);
+    catchupTimer = null;
+  }
 }
 
 export async function rehydrateAutomationSchedules() {

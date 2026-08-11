@@ -22,3 +22,44 @@ export const getBrowserPoolIdleTtlMs = (): number => {
   // holding 200MB+ after the scrape finishes.
   return isLowMemoryMode() ? 0 : 90_000;
 };
+
+/** Max page leases a pooled browser may serve before forced recycle (default 20; low-mem 1). */
+export const getBrowserPoolMaxJobs = (): number => {
+  const fromEnv = parseInt(process.env.BROWSER_POOL_MAX_JOBS || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
+  return isLowMemoryMode() ? 1 : 20;
+};
+
+/** Max wall-clock age of a pooled browser before recycle (default 15m; low-mem 5m). */
+export const getBrowserPoolMaxAgeMs = (): number => {
+  const fromEnv = parseInt(process.env.BROWSER_POOL_MAX_AGE_MS || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv >= 0) return fromEnv;
+  return isLowMemoryMode() ? 5 * 60_000 : 15 * 60_000;
+};
+
+/** Pure helper: retire when jobs or age ceiling hit. */
+export function shouldRetirePooledBrowser(opts: {
+  jobsServed: number;
+  createdAt: number;
+  now?: number;
+  maxJobs: number;
+  maxAgeMs: number;
+}): boolean {
+  const now = opts.now ?? Date.now();
+  if (opts.maxJobs > 0 && opts.jobsServed >= opts.maxJobs) return true;
+  if (opts.maxAgeMs > 0 && now - opts.createdAt >= opts.maxAgeMs) return true;
+  return false;
+}
+
+/** RSS ceiling that triggers retiring all pooled browsers (default ≈ 1.2 GiB). */
+export function getBrowserPoolRssLimitBytes(): number {
+  const fromEnv = parseInt(process.env.BROWSER_POOL_RSS_LIMIT_BYTES || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
+  return 1_288_490_188;
+}
+
+/** Pure helper: process RSS at/over limit → recycle the whole pool. */
+export function shouldRetirePoolForRss(rssBytes: number, limitBytes?: number): boolean {
+  const limit = limitBytes ?? getBrowserPoolRssLimitBytes();
+  return limit > 0 && rssBytes >= limit;
+}

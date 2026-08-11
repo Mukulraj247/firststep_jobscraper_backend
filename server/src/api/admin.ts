@@ -111,6 +111,8 @@ function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<str
   const ownerUserId = robot?.userId != null ? String(robot.userId) : null;
   const ownerEmail = ownerUserId ? emailByUserId.get(ownerUserId) || null : null;
   const config = robot ? getAutomationConfig(robot) : {};
+  const denormalizedRows =
+    typeof run.rowsExtracted === 'number' ? run.rowsExtracted : rowsExtracted;
 
   return {
     runId: run.runId,
@@ -134,7 +136,9 @@ function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<str
     runByScheduleId: run.runByScheduleId ?? null,
     runByAPI: !!run.runByAPI,
     runBySDK: !!run.runBySDK,
-    rowsExtracted,
+    rowsExtracted: denormalizedRows,
+    anomaly: run.anomaly || null,
+    anomalyMeta: run.anomalyMeta || null,
     hasSerializableOutput: !!(run.serializableOutput && Object.keys(run.serializableOutput).length),
     hasBinaryOutput: !!(run.binaryOutput && Object.keys(run.binaryOutput).length),
     screenshotCount:
@@ -371,7 +375,7 @@ router.get('/admin/runs', requireAdmin, async (req: Request, res: Response) => {
       Run.countDocuments(match),
       Run.find(match)
         .select(
-          'runId name status robotMetaId robotId startedAt finishedAt browserId retryCount duration errorMessage queueJobId runByUserId runByScheduleId runByAPI runBySDK interpreterSettings'
+          'runId name status robotMetaId robotId startedAt finishedAt browserId retryCount duration errorMessage queueJobId runByUserId runByScheduleId runByAPI runBySDK interpreterSettings rowsExtracted anomaly anomalyMeta'
         )
         .sort({ _id: -1 })
         .skip(skip)

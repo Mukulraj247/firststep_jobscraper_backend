@@ -422,6 +422,7 @@ function init() {
         fields: fieldConfig,
         previewRows,
         previewText,
+        previewUrl: window.location.href,
       },
     });
   }

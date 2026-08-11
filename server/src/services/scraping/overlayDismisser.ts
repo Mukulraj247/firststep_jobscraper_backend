@@ -69,6 +69,9 @@ export async function dismissNow(
       const ACCEPT_RX =
         /\b(accept|agree|got\s*it|allow|understood|ok(?:ay)?|continue|i\s*agree|i\s*accept|allow\s*all|accept\s*all|allow\s*cookies|accept\s*cookies|save\s*and\s*accept)\b/i;
       const CLOSE_RX = /\b(close|dismiss|no\s*thanks|not\s*now|maybe\s*later|skip|later|×|✕)\b/i;
+      // Findly / DXC career sites show a language confirmation modal.
+      const LANG_CONFIRM_RX =
+        /^(english|anglais|englisch|inglese|inglés|inglês|continue\s+in\s+english)$/i;
 
       // Known cookie-consent vendor selectors. Each entry is a list of
       // specific selectors we'll click in order if visible.
@@ -136,6 +139,8 @@ export async function dismissNow(
         '[class*="popup" i]',
         '[class*="overlay" i]',
         '[class*="banner" i]',
+        '[id*="lang" i]',
+        '[class*="lang" i]',
       ];
       const containers: Element[] = [];
       for (const sel of containerSelectors) {
@@ -160,6 +165,19 @@ export async function dismissNow(
         }
         return false;
       };
+
+      // 2a) Language confirmation modals (Findly / DXC / multilingual career sites).
+      // Only click English/Anglais inside a modal that mentions language — never the
+      // site nav language switcher (that navigates away from the job list).
+      for (const container of containers) {
+        const blob = (container.textContent || '').toLowerCase();
+        if (!/langue|language|idioma|sprache|言語|ngôn\s*ngữ|confirmation/.test(blob)) continue;
+        const buttons = safeQuery(container, 'button, a, [role="button"]');
+        for (const btn of buttons) {
+          if (!isVisible(btn)) continue;
+          if (LANG_CONFIRM_RX.test((btn.textContent || '').trim()) && clickEl(btn)) break;
+        }
+      }
 
       for (const container of containers) {
         // Prefer accept over close so cookie banners actually go away, then

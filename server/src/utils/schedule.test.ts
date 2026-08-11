@@ -5,6 +5,7 @@ import {
   computeNextRun,
   intervalMsFromCron,
   computeNextRunFromInterval,
+  isScheduleOverdue,
 } from './schedule';
 
 describe('validateCron', () => {
@@ -71,9 +72,17 @@ describe('intervalMsFromCron', () => {
     expect(intervalMsFromCron('0 * * * *')).toBe(60 * 60 * 1000);
   });
 
-  it('returns null for calendar crons', () => {
-    expect(intervalMsFromCron('0 0 * * *')).toBeNull();
-    expect(intervalMsFromCron('0 0 * * 1')).toBeNull();
+  it('maps daily/weekly calendar presets to intervals for hash stagger', () => {
+    expect(intervalMsFromCron('0 0 * * *')).toBe(24 * 60 * 60 * 1000);
+    expect(intervalMsFromCron('0 0 */2 * *')).toBe(2 * 24 * 60 * 60 * 1000);
+    expect(intervalMsFromCron('0 0 */3 * *')).toBe(3 * 24 * 60 * 60 * 1000);
+    expect(intervalMsFromCron('0 0 * * 1')).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(intervalMsFromCron('0 0 1 * *')).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+
+  it('returns null for free-form calendar crons', () => {
+    expect(intervalMsFromCron('0 9 * * *')).toBeNull();
+    expect(intervalMsFromCron('30 14 * * 5')).toBeNull();
   });
 });
 
@@ -82,5 +91,88 @@ describe('computeNextRunFromInterval', () => {
     const from = new Date('2026-07-31T10:00:00.000Z');
     const next = computeNextRunFromInterval(15 * 60 * 1000, from);
     expect(next.toISOString()).toBe('2026-07-31T10:15:00.000Z');
+  });
+});
+
+describe('isScheduleOverdue', () => {
+  const graceMs = 120_000;
+  const everyMs = 15 * 60_000;
+  const lastRunAt = new Date('2026-08-08T10:00:00.000Z');
+  // dueAt = 10:15; with grace overdue at 10:17
+
+  it('keeps a fresh interval schedule', () => {
+    expect(
+      isScheduleOverdue({
+        lastRunAt,
+        everyMs,
+        graceMs,
+        now: new Date('2026-08-08T10:10:00.000Z'),
+      })
+    ).toBe(false);
+  });
+
+  it('is not overdue within grace after dueAt', () => {
+    expect(
+      isScheduleOverdue({
+        lastRunAt,
+        everyMs,
+        graceMs,
+        now: new Date('2026-08-08T10:16:00.000Z'),
+      })
+    ).toBe(false);
+  });
+
+  it('is overdue past dueAt + grace', () => {
+    expect(
+      isScheduleOverdue({
+        lastRunAt,
+        everyMs,
+        graceMs,
+        now: new Date('2026-08-08T10:17:00.000Z'),
+      })
+    ).toBe(true);
+  });
+
+  it('uses past nextRunAt when lastRunAt is missing', () => {
+    expect(
+      isScheduleOverdue({
+        lastRunAt: null,
+        nextRunAt: new Date('2026-08-08T09:00:00.000Z'),
+        everyMs,
+        graceMs,
+        now: new Date('2026-08-08T09:05:00.000Z'),
+      })
+    ).toBe(true);
+  });
+
+  it('is not overdue with no timestamps', () => {
+    expect(
+      isScheduleOverdue({
+        lastRunAt: null,
+        nextRunAt: null,
+        everyMs,
+        graceMs,
+        now: new Date('2026-08-08T12:00:00.000Z'),
+      })
+    ).toBe(false);
+  });
+
+  it('calendar cron uses nextRunAt when past + grace', () => {
+    expect(
+      isScheduleOverdue({
+        nextRunAt: new Date('2026-08-08T08:00:00.000Z'),
+        everyMs: null,
+        graceMs,
+        now: new Date('2026-08-08T08:03:00.000Z'),
+      })
+    ).toBe(true);
+    expect(
+      isScheduleOverdue({
+        nextRunAt: new Date('2026-08-08T08:00:00.000Z'),
+        everyMs: null,
+        graceMs,
+        now: new Date('2026-08-08T08:01:00.000Z'),
+      })
+    ).toBe(false);
   });
 });

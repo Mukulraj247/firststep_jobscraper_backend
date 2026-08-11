@@ -388,13 +388,26 @@ PUBLIC_URL=http://YOUR_DROPLET_IP:8080
 VITE_BACKEND_URL=http://YOUR_DROPLET_IP:8080
 VITE_PUBLIC_URL=http://YOUR_DROPLET_IP:8080
 
-# One process: API + scheduler + scraper (simplest on one Droplet)
+# Process topology (DigitalOcean / PM2):
+#   Production uses ecosystem.config.cjs which forces RUN_EMBEDDED_WORKERS=false on the API
+#   and runs scrapes in scoutx-scraper (`npm run worker`). Chromium never shares the API process.
+# Local single-process DX: leave true so `npm run start:dev` still scrapes without a second terminal.
+# If you set false locally, also run: npm run worker:dev
 RUN_EMBEDDED_WORKERS=true
+
+# Cap Mongo connections per Node process (API + scraper + enrichment each open a pool).
+# MONGODB_MAX_POOL_SIZE=10
 
 # Safe for 2–4 GB RAM
 SCRAPER_WORKER_CONCURRENCY=1
 SCRAPER_JOB_TIMEOUT_MS=120000
 LOW_MEMORY_MODE=false
+# Hard-cancel child processes (default on in code). Each concurrent scrape ≈ 1GB RAM.
+# SCRAPE_JOB_CHILD_PROCESS=true
+# Retry backoff (~30s / 2m / 10m) + per-host circuit breaker
+# SCRAPE_RETRY_DELAYS_MS=30000,120000,600000
+# SCRAPE_HOST_BREAKER_THRESHOLD=5
+# SCRAPE_HOST_BREAKER_COOLDOWN_MS=600000
 
 # Logs
 LOGS_PATH=/opt/scout-x/server/logs
@@ -442,35 +455,52 @@ npm run build
 
 Build can take a few minutes.
 
-### G2 — Start with PM2
+### G2 — Start with PM2 (three processes)
+
+Chromium scrapes run in a **separate** process from the API so a browser OOM cannot kill the dashboard.
 
 ```bash
-pm2 start npm --name scout-x -- run server
+cd /opt/scout-x
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```
 
 `pm2 startup` will print a command. **Copy and run that command**, then run `pm2 save` again if asked.
 
+You should see **three** apps online:
+
+| PM2 name | Role |
+|----------|------|
+| `scout-x` | API + dashboard (no Chromium). `RUN_EMBEDDED_WORKERS=false` |
+| `scoutx-scraper` | Scheduled scrapes + Agenda (`npm run worker`) |
+| `scoutx-enrichment` | Job-board enrichment via scrape.do / ATS (no Chromium) |
+
+> **Job board enrichment:** Set `SCRAPE_DO_TOKEN` in `.env` first.  
+> **If scrapes stay pending forever:** `scoutx-scraper` is not running — check `pm2 status` and `pm2 logs scoutx-scraper`.
+
 ### G3 — Check status
 
 ```bash
 pm2 status
-pm2 logs scout-x
+pm2 logs scout-x --lines 50
+pm2 logs scoutx-scraper --lines 50
 ```
 
 Healthy signs:
 
-- Process status is **online**  
-- Logs show the server listening (often port **8080**)  
+- All three processes are **online**  
+- API logs include `Embedded workers disabled for this API process`  
+- Scraper logs include `Worker runtime started`  
+- API is listening (often port **8080**)  
 - No endless crash loop  
 
 Useful PM2 commands later:
 
 ```bash
-pm2 restart scout-x
-pm2 stop scout-x
-pm2 logs scout-x --lines 100
+pm2 restart scout-x scoutx-scraper scoutx-enrichment
+pm2 stop scoutx-scraper
+pm2 logs scoutx-scraper --lines 100
 ```
 
 ---
@@ -629,11 +659,13 @@ When a specific site blocks DigitalOcean:
 
 | Task | Command / action |
 |------|------------------|
-| See if app is running | `pm2 status` |
-| View live logs | `pm2 logs scout-x` |
-| Restart after `.env` change | `pm2 restart scout-x` |
-| Deploy new code | `git pull` → `npm ci --include=dev` → build → `pm2 restart scout-x` |
+| See if app is running | `pm2 status` (expect scout-x, scoutx-scraper, scoutx-enrichment) |
+| View live logs | `pm2 logs scout-x` / `pm2 logs scoutx-scraper` |
+| Restart after `.env` change | `pm2 restart scout-x scoutx-scraper scoutx-enrichment` |
+| Deploy new code | `git pull` → `npm ci --include=dev` → build → `pm2 restart all` |
 | Reboot Droplet | App should come back if `pm2 startup` + `pm2 save` were done |
+| Scrapes stuck pending | Start/restart `scoutx-scraper`; check `pm2 logs scoutx-scraper` |
+| Enrichment not filling Job board | Set `SCRAPE_DO_TOKEN`, check `pm2 logs scoutx-enrichment` |
 | Check disk space | `df -h` |
 | Check memory | `free -h` |
 | Resize Droplet later | DigitalOcean → Droplet → **Resize** (power off first for CPU/RAM resize) |
@@ -698,7 +730,8 @@ If you already decided on DigitalOcean, use this guide. If you want lower cost f
 - [ ] `.env` filled with production values  
 - [ ] `npm run build:server` OK  
 - [ ] `npm run build` OK  
-- [ ] `pm2 start` + `pm2 startup` + `pm2 save` OK  
+- [ ] `pm2 start ecosystem.config.cjs` + `pm2 startup` + `pm2 save` OK (three apps online)  
+- [ ] API log shows embedded workers disabled; scraper log shows Worker runtime started  
 
 ### Access / test
 
@@ -720,7 +753,7 @@ If you already decided on DigitalOcean, use this guide. If you want lower cost f
 4. SSH in; install Node, Chromium libs, PM2.  
 5. Create **MongoDB Atlas** and put the URI in `.env`.  
 6. Upload/clone Scout-X; install; build.  
-7. Start with PM2 and `RUN_EMBEDDED_WORKERS=true`.  
+7. Start with PM2 via `ecosystem.config.cjs` (API + scraper + enrichment; API has `RUN_EMBEDDED_WORKERS=false`).  
 8. Open firewall; test one scrape; then one schedule.  
 9. Add domain/HTTPS/proxy/Spaces only after the basics work.  
 10. (Optional) Wire DigitalOcean API + ZeptoMail for `/admin` compute panel and 6-hour digests.

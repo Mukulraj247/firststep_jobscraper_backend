@@ -141,6 +141,7 @@
     "job_id": "Job ID",
     "description": "Description",
     "no_description": "No description available.",
+    "showing_range": "Showing {{from}}–{{to}} of {{total}}",
     "load_error": "Failed to load jobs",
     "years": "{{count}}+ yrs"
   },

@@ -281,4 +281,21 @@ describe('shouldKeepExtractedJobRow', () => {
       })
     ).toBe(true);
   });
+
+  it('drops Phenom hub pages and keeps Ford job-detail URLs', () => {
+    expect(
+      shouldKeepExtractedJobRow({
+        jobTitle: 'Candidate Hub',
+        jobUrl: 'https://jobs.carrier.com/candidate-hub',
+        companyName: 'Carrier',
+      })
+    ).toBe(false);
+    expect(
+      shouldKeepExtractedJobRow({
+        jobTitle: '',
+        jobUrl: 'https://careers.ford.com/job/dearborn/manager-hr-business-partners/48560/98473354336',
+        companyName: 'Ford',
+      })
+    ).toBe(true);
+  });
 });

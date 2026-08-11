@@ -111,6 +111,13 @@ async function dispatchWebhookDestination(run: IRun | any, robot: IRobot | any, 
     runId: run.runId,
     status: run.status,
     rowsCount: rows.length,
+    rowsExtracted:
+      typeof run.rowsExtracted === 'number' ? run.rowsExtracted : rows.length,
+    baselineRows: run.anomalyMeta?.baseline ?? null,
+    anomaly: run.anomaly || null,
+    ratio: run.anomalyMeta?.ratio ?? null,
+    escalated: Boolean(run.anomalyMeta?.escalated),
+    anomalyMeta: run.anomalyMeta || null,
     extractedData: rows.map((row) => row.data),
   };
 

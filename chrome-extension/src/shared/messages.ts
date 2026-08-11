@@ -52,6 +52,8 @@ export const MSG = {
   EXPORT_CSV: 'maxun:export-csv',
   EXPORT_JSON: 'maxun:export-json',
   SAVE_TO_BACKEND: 'maxun:save-to-backend',
+  /** Side panel → background: exact URL or Scout-X ID lookup. */
+  LOOKUP_AUTOMATION: 'maxun:lookup-automation',
   DETECT_TABLES_CMD: 'maxun:detect-tables-cmd',
   EXTRACT_TABLE_CMD: 'maxun:extract-table-cmd',
   EXTRACT_TEXT_CMD: 'maxun:extract-text-cmd',

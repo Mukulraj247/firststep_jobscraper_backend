@@ -3,20 +3,51 @@ import logger from '../logger';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
 import { createRemoteBrowserForRun, destroyRemoteBrowser } from '../browser-management/controller';
-import { getAgenda, SCRAPER_JOB_CONCURRENCY, ScraperJobData, requeueScraperRun } from '../queue/scraperQueue';
+import { getAgenda, SCRAPER_JOB_CONCURRENCY, ScraperJobData, requeueScraperRun, computeScraperLockLifetimeMs } from '../queue/scraperQueue';
 import { processRunExecution } from './execution';
-import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, persistExtractedDataForRun } from '../services/automation';
-import { runListExtraction } from '../services/listExtractor';
+import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, getAutomationConfig, persistExtractedDataForRun } from '../services/automation';
+import { runListExtraction, applySelectorPromotions, primaryItemSelector } from '../services/listExtractor';
+import {
+  evaluateRunDrift,
+  fetchRecentFinishedRuns,
+  getBaselineForRobot,
+  loadDriftConfig,
+  RunDriftError,
+  RunDriftOutcome,
+} from '../services/runDrift';
 import { detectCaptcha, detectCloudflareChallenge, waitForCloudflareToClear, applyHumanDelay, simulateHumanMouse, detectAmazonChallengeAndWait, detectMicrosoftChallengeAndWait } from '../services/unblocker';
 import { CaptchaEncounteredError, describe as describeCaptcha } from '../services/scraping/captchaGate';
 import { resolveProxyPool, selectRotatedProxy, type ProxyProfile } from '../services/proxyManager';
 import { normalizeProxyServer } from '../services/proxyConfig';
 import { selectRotatedUserAgent } from '../services/userAgentManager';
 import { getSessionStatePath, sessionStateExists } from '../storage/sessionState';
-import { acquirePooledPage, releasePooledPage, evictBrowserFromPool } from '../services/browserReusePool';
+import {
+  acquirePooledPage,
+  releasePooledPage,
+  evictBrowserFromPool,
+  closeBrowserReusePool,
+} from '../services/browserReusePool';
+import { killUntrackedPlaywrightChromium } from '../services/browserProcess';
 import { getDefaultMaxPagesPerBrowser, isLowMemoryMode } from '../utils/memoryMode';
+import {
+  computeScrapeRetryDelayMs,
+  getHostBreaker,
+  hostnameFromUrl,
+  recordHostFailure,
+  recordHostSuccess,
+} from '../services/scrapeBackpressure';
+import { emitQueuedRunEvent } from './scrapeSocket';
+import { applyLayoutChangeSuggestion, resolveFailureReason } from '../utils/failureReason';
+import {
+  isChildProcessIsolationEnabled,
+  runScraperJobInChild,
+  ScraperJobTimeoutError,
+  killAllActiveScrapeChildren,
+} from './scrapeJobSupervisor';
+import { detectAtsBoard, fetchAtsBoardJobs } from '../services/atsAdapters';
+import { getScrapeHeartbeatMs } from '../utils/scrapeHeartbeat';
 
-const EXECUTION_TIMEOUT_MS = parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10);
+export const EXECUTION_TIMEOUT_MS = parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10);
 /** Total attempts per run (1 = no retries). Lower on constrained/free instances to avoid retry storms. */
 const MAX_ATTEMPTS = Math.max(1, parseInt(process.env.SCRAPER_MAX_ATTEMPTS || '3', 10));
 /** Deploy-tunable anti-bot wait budgets. Defaults keep prior behaviour; shrink these on free tier so a single challenge wait can't exceed SCRAPER_JOB_TIMEOUT_MS. */
@@ -101,14 +132,259 @@ const computeDuration = (startedAt: string) => {
   return Math.max(0, Date.now() - started);
 };
 
-async function markFailed(run: any, errorMessage: string, finalState: 'pending' | 'failed') {
+async function markFailed(run: any, errorMessage: string, finalState: 'pending' | 'failed' | 'dead') {
   await appendRunLog(run, errorMessage, { flush: true });
   run.status = finalState;
   run.errorMessage = errorMessage;
-  run.finishedAt = finalState === 'failed' ? new Date().toLocaleString() : '';
-  run.duration = finalState === 'failed' ? computeDuration(run.startedAt) : null;
+  const terminal = finalState === 'failed' || finalState === 'dead';
+  run.finishedAt = terminal ? new Date().toLocaleString() : '';
+  run.duration = terminal ? computeDuration(run.startedAt) : null;
+
+  if (terminal) {
+    const resolved = resolveFailureReason({
+      failureReason: run.failureReason,
+      failureReasonSource: run.failureReasonSource,
+      errorMessage,
+    });
+    run.failureReason = resolved.failureReason;
+    run.failureReasonSource = resolved.failureReasonSource;
+  }
+
   (run as any)._pendingLogWrites = 0;
   await run.save();
+}
+
+async function forceCleanupJobBrowsers(
+  browserId: string | null,
+  extractionPoolKey: string | null,
+  userId: string,
+  reason: string
+): Promise<void> {
+  logger.log('warn', `Force browser cleanup (${reason}): browserId=${browserId || 'none'} poolKey=${extractionPoolKey || 'none'}`);
+  if (extractionPoolKey) {
+    await evictBrowserFromPool(extractionPoolKey).catch((error: any) => {
+      logger.log('warn', `evictBrowserFromPool failed: ${error?.message || error}`);
+    });
+  } else {
+    // List extraction timed out before pool key was recorded — close every pooled Chromium.
+    await closeBrowserReusePool().catch((error: any) => {
+      logger.log('warn', `closeBrowserReusePool failed: ${error?.message || error}`);
+    });
+  }
+  if (browserId) {
+    await destroyRemoteBrowser(browserId, String(userId)).catch((error: any) => {
+      logger.log('warn', `destroyRemoteBrowser failed: ${error?.message || error}`);
+    });
+  }
+  await killUntrackedPlaywrightChromium().catch(() => {});
+}
+
+/**
+ * Persist list rows, evaluate drift, webhook + socket — shared by browser list
+ * extraction and ATS board collection (no Chromium).
+ */
+async function finalizeExtractedListRows(opts: {
+  run: any;
+  automation: any;
+  userId: string;
+  rows: Record<string, any>[];
+  extractionMethod: 'ats_board' | 'browser';
+  atsProvider?: string;
+  zeroRowsHint?: string;
+}): Promise<void> {
+  const { run, automation, userId, rows, extractionMethod, atsProvider, zeroRowsHint } = opts;
+
+  run.serializableOutput = {
+    ...(run.serializableOutput || {}),
+    scrapeList: {
+      ...(run.serializableOutput?.scrapeList || {}),
+      'Configured List Extraction': rows,
+    },
+  };
+  run.interpreterSettings = {
+    ...(run.interpreterSettings || {}),
+    extractionMethod,
+    ...(atsProvider ? { atsProvider } : {}),
+  };
+
+  const driftConfig = loadDriftConfig();
+  const saasConfig = getAutomationConfig(automation) as Record<string, any>;
+  const previewRows = Array.isArray(saasConfig?.previewRows) ? saasConfig.previewRows : null;
+  const { baseline, baselineSource } = await getBaselineForRobot(
+    String(run.robotMetaId),
+    previewRows,
+    String(run.runId)
+  );
+  const recentFinishedRuns = await fetchRecentFinishedRuns(
+    String(run.robotMetaId),
+    Math.max(0, driftConfig.escalationStreak - 1),
+    String(run.runId)
+  );
+  const drift = evaluateRunDrift({
+    current: rows.length,
+    baseline,
+    baselineSource,
+    recentFinishedRuns,
+    config: driftConfig,
+  });
+
+  run.rowsExtracted = rows.length;
+  run.anomaly = drift.anomaly;
+  run.anomalyMeta = drift.anomalyMeta;
+  run.status = drift.runStatus;
+  run.finishedAt = new Date().toLocaleString();
+  run.duration = computeDuration(run.startedAt);
+  run.errorMessage = drift.errorMessage;
+  // Suggest layout_change when selectors likely no longer match (zero rows / escalated miss).
+  {
+    const suggested = applyLayoutChangeSuggestion({
+      anomaly: drift.anomaly,
+      runStatus: drift.runStatus,
+      rows: rows.length,
+      failureReason: run.failureReason,
+      failureReasonSource: run.failureReasonSource,
+    });
+    run.failureReason = suggested.failureReason;
+    run.failureReasonSource = suggested.failureReasonSource;
+  }
+  await run.save();
+
+  await appendRunLog(
+    run,
+    `List extraction finished with ${rows.length} rows via ${extractionMethod}` +
+      `${atsProvider ? ` (${atsProvider})` : ''} (drift=${drift.outcome}, baseline=${baseline ?? 'none'})`,
+    { flush: true }
+  );
+  if (drift.outcome === RunDriftOutcome.ZeroRows) {
+    await appendRunLog(
+      run,
+      zeroRowsHint ||
+        'Zero rows usually means the item/field CSS selectors no longer match this page (Amazon Jobs often changes markup), or the list had not rendered yet. Re-record the list on this exact URL in the extension, enable scroll/wait if needed, and check the run screenshot for a consent or anti-bot page.',
+      { flush: true }
+    );
+  }
+
+  const refreshedRun = await Run.findOne({ runId: run.runId });
+  if (!refreshedRun) {
+    throw new Error(`Run ${run.runId} disappeared after list extraction`);
+  }
+
+  const persistedRows = await persistExtractedDataForRun(refreshedRun, automation);
+  if (drift.shouldWebhook || drift.runStatus === 'completed') {
+    await dispatchAutomationWebhook(refreshedRun, automation, persistedRows);
+  }
+
+  const emitStatus =
+    drift.runStatus === 'failed' ? 'failed' : drift.anomaly ? 'anomaly' : 'success';
+  await emitQueuedRunEvent(userId, 'run-completed', {
+    runId: run.runId,
+    robotMetaId: run.robotMetaId,
+    robotName: automation.recording_meta.name,
+    status: emitStatus,
+    finishedAt: refreshedRun.finishedAt,
+    anomaly: drift.anomaly,
+    escalated: Boolean(drift.anomalyMeta?.escalated),
+    rowsExtracted: rows.length,
+    extractionMethod,
+    atsProvider: atsProvider || null,
+  });
+
+  if (drift.skipRetry) {
+    throw new RunDriftError({
+      runId: String(run.runId),
+      outcome: drift.outcome,
+      anomaly: drift.anomaly,
+      anomalyMeta: drift.anomalyMeta,
+      message: drift.errorMessage || `Run drift: ${drift.outcome}`,
+    });
+  }
+}
+
+/**
+ * Prefer public ATS board JSON when the start URL is Greenhouse / Lever / Ashby /
+ * SmartRecruiters / Findly (m-cloud) / SuccessFactors RMK. Returns true when
+ * collection finished without Chromium.
+ */
+async function tryAtsBoardCollection(
+  run: any,
+  automation: any,
+  userId: string,
+  config: Record<string, any>
+): Promise<boolean> {
+  const saasConfig = getAutomationConfig(automation) as Record<string, any>;
+  // Only an explicit `false` disables ATS. Treat missing/undefined as enabled.
+  const preferAts =
+    saasConfig?.preferAtsCollection !== false && config?.preferAtsCollection !== false;
+  if (!preferAts) {
+    await appendRunLog(
+      run,
+      'ATS board collection skipped (preferAtsCollection=false); using browser extraction',
+      { flush: true }
+    );
+    return false;
+  }
+
+  const startUrl = String(automation?.recording_meta?.url || '').trim();
+  if (!startUrl) {
+    await appendRunLog(run, 'ATS board collection skipped (automation has no URL)', { flush: true });
+    return false;
+  }
+
+  const detected = detectAtsBoard(startUrl);
+  if (!detected) {
+    await appendRunLog(
+      run,
+      `No ATS board provider matched for ${startUrl}; using browser extraction`,
+      { flush: true }
+    );
+    return false;
+  }
+
+  const maxPagesRaw =
+    config?.listExtraction?.pagination?.maxPages ??
+    saasConfig?.listExtraction?.pagination?.maxPages;
+  const maxPages =
+    typeof maxPagesRaw === 'number' && maxPagesRaw > 0 ? Math.floor(maxPagesRaw) : undefined;
+
+  await appendRunLog(
+    run,
+    `ATS board detected (${detected.provider}/${detected.companyHint}); fetching public job list without Chromium` +
+      `${maxPages ? ` (maxPages=${maxPages} from robot config)` : ''}…`,
+    { flush: true }
+  );
+
+  let board: Awaited<ReturnType<typeof fetchAtsBoardJobs>> = null;
+  try {
+    board = await fetchAtsBoardJobs(startUrl, maxPages ? { maxPages } : undefined);
+  } catch (fetchErr: any) {
+    await appendRunLog(
+      run,
+      `ATS board fetch threw for ${detected.provider}: ${fetchErr?.message || fetchErr}; falling back to browser`,
+      { flush: true }
+    );
+    return false;
+  }
+
+  if (!board || !board.rows.length) {
+    await appendRunLog(
+      run,
+      `ATS board fetch returned no rows for ${detected.provider}; falling back to browser extraction`,
+      { flush: true }
+    );
+    return false;
+  }
+
+  await finalizeExtractedListRows({
+    run,
+    automation,
+    userId,
+    rows: board.rows,
+    extractionMethod: 'ats_board',
+    atsProvider: board.provider,
+    zeroRowsHint: `ATS board API for ${board.provider} returned zero jobs.`,
+  });
+
+  return true;
 }
 
 async function processConfiguredListExtraction(
@@ -117,7 +393,11 @@ async function processConfiguredListExtraction(
   userId: string,
   config: Record<string, any>,
   identityProfile: Record<string, any>,
-  options?: { isolatedBrowserKey?: string; blockResources?: boolean }
+  options?: {
+    isolatedBrowserKey?: string;
+    blockResources?: boolean;
+    onPoolKey?: (poolKey: string) => void;
+  }
 ): Promise<{ poolKey: string }> {
   const lease = await acquirePooledPage({
     profile: {
@@ -128,6 +408,7 @@ async function processConfiguredListExtraction(
     blockResources: options?.blockResources ?? (config?.performance?.blockResources !== false),
   });
   const poolKey = lease.key;
+  options?.onPoolKey?.(poolKey);
   const page = lease.page;
 
   try {
@@ -199,7 +480,11 @@ async function processConfiguredListExtraction(
       extractionConfig.pagination.loadMoreWaitMs = config.pagination.loadMoreWaitMs;
     }
 
-    const rows = await runListExtraction(page, automation.recording_meta.url, extractionConfig);
+    const extractionResult = await runListExtraction(page, automation.recording_meta.url, extractionConfig);
+    const rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
+    const promotions = Array.isArray(extractionResult?.selectorPromotions)
+      ? extractionResult.selectorPromotions
+      : [];
     if (config?.captcha?.pauseOnDetect !== false && (await detectCaptcha(page))) {
       throw new CaptchaEncounteredError(
         { present: true, kind: 'text-marker', evidence: 'post-extraction body text' },
@@ -207,51 +492,57 @@ async function processConfiguredListExtraction(
       );
     }
 
-    const serializableOutput = {
-      ...(run.serializableOutput || {}),
-      scrapeList: {
-        ...(run.serializableOutput?.scrapeList || {}),
-        'Configured List Extraction': rows,
-      },
-    };
-
-    run.serializableOutput = serializableOutput;
-    run.status = 'completed';
-    run.finishedAt = new Date().toLocaleString();
-    run.duration = computeDuration(run.startedAt);
-    run.errorMessage = null;
-    await run.save();
-
-    await appendRunLog(run, `List extraction completed with ${rows.length} rows`);
-    if (rows.length === 0) {
-      await appendRunLog(
-        run,
-        'Zero rows usually means the item/field CSS selectors no longer match this page (Amazon Jobs often changes markup), or the list had not rendered yet. Re-record the list on this exact URL in the extension, enable scroll/wait if needed, and check the run screenshot for a consent or anti-bot page.'
-      );
+    if (promotions.length > 0) {
+      try {
+        const robot = await Robot.findOne({ 'recording_meta.id': run.robotMetaId });
+        if (robot) {
+          const prevSaas = getAutomationConfig(robot) as Record<string, any>;
+          const prevList = (prevSaas?.listExtraction || {}) as Record<string, any>;
+          const nextFields = applySelectorPromotions(prevList.fields || extractionConfig.fields || {}, promotions);
+          const nextItemSelector =
+            extractionResult.winningItemSelector ||
+            primaryItemSelector(prevList.itemSelector || extractionConfig.itemSelector);
+          const nextList = {
+            ...prevList,
+            fields: nextFields,
+            itemSelector: nextItemSelector,
+          };
+          (robot.recording_meta as any).saasConfig = {
+            ...prevSaas,
+            listExtraction: nextList,
+          };
+          robot.markModified('recording_meta');
+          await robot.save();
+          await appendRunLog(
+            run,
+            `Promoted ranked selectors: ${promotions.map((p) => `${p.field}→${p.to}`).join(', ')}`,
+            { flush: true }
+          );
+        }
+      } catch (promoErr: any) {
+        logger.log('warn', `Selector promotion persist failed: ${promoErr?.message || promoErr}`);
+      }
     }
 
-    const refreshedRun = await Run.findOne({ runId: run.runId });
-    if (!refreshedRun) {
-      throw new Error(`Run ${run.runId} disappeared after list extraction`);
-    }
-
-    const persistedRows = await persistExtractedDataForRun(refreshedRun, automation);
-    await dispatchAutomationWebhook(refreshedRun, automation, persistedRows);
-
-    const { io } = await import('../server');
-    io.of('/queued-run').to(`user-${userId}`).emit('run-completed', {
-      runId: run.runId,
-      robotMetaId: run.robotMetaId,
-      robotName: automation.recording_meta.name,
-      status: 'success',
-      finishedAt: refreshedRun.finishedAt,
+    await finalizeExtractedListRows({
+      run,
+      automation,
+      userId,
+      rows,
+      extractionMethod: 'browser',
     });
 
     return { poolKey };
-  } finally {
-    if (!lease.page.isClosed()) {
-      await releasePooledPage(lease).catch(() => {});
+  } catch (error) {
+    // Sick navigation / anti-bot / extraction failure — retire whole Chromium.
+    // Drift is selector/content signal, not a broken browser process.
+    if (!(error instanceof RunDriftError)) {
+      await evictBrowserFromPool(poolKey).catch(() => {});
     }
+    throw error;
+  } finally {
+    // Always release so activePages decrements even if the page was already closed.
+    await releasePooledPage(lease).catch(() => {});
   }
 }
 
@@ -321,9 +612,62 @@ async function buildIdentityProfile(userId: string, automationId: string, config
 }
 
 async function processScraperJob(job: AgendaJob<ScraperJobData>) {
-  const { automationId, runId, userId, config } = job.attrs.data;
+  await runScraperJobPayload(
+    {
+      ...job.attrs.data,
+      queueJobId: job.attrs._id?.toString() || 'unknown',
+    } as ScraperJobData & { queueJobId?: string },
+    { agendaJob: job }
+  );
+}
+
+/**
+ * Core scrape execution (in-process or inside scrapeJobChild).
+ * Does not fork — the Agenda supervisor decides isolation.
+ */
+export async function runScraperJobPayload(
+  data: ScraperJobData & { queueJobId?: string },
+  options?: { agendaJob?: AgendaJob<ScraperJobData> }
+): Promise<void> {
+  const { automationId, runId, userId, config } = data;
   logger.log('info', `Processing scraper job: runId=${runId}, automationId=${automationId}`);
-  const attemptsMade = (job.attrs.data as any)._attemptsMade || 0;
+  const attemptsMade = data._attemptsMade || 0;
+  const queueJobId = data.queueJobId || 'unknown';
+  const agendaJob = options?.agendaJob;
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
+
+  const beatOnce = async () => {
+    try {
+      const iso = new Date().toISOString();
+      await Run.updateOne({ runId }, { $set: { heartbeatAt: iso } });
+      if (agendaJob?.attrs) {
+        agendaJob.attrs.lockedAt = new Date();
+        // Persist lock touch when Agenda exposes save on the job handle.
+        if (typeof (agendaJob as any).save === 'function') {
+          await (agendaJob as any).save().catch(() => {});
+        }
+      }
+    } catch (err: any) {
+      logger.log('warn', `Scrape heartbeat failed for ${runId}: ${err?.message || err}`);
+    }
+  };
+
+  const startHeartbeat = () => {
+    stopHeartbeat();
+    const ms = getScrapeHeartbeatMs();
+    void beatOnce();
+    heartbeatTimer = setInterval(() => {
+      void beatOnce();
+    }, ms);
+    if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+  };
 
   const run = await Run.findOne({ runId });
 
@@ -340,19 +684,43 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
     throw new Error(`Automation ${automationId} not found`);
   }
 
+  const targetHost = hostnameFromUrl(automation?.recording_meta?.url);
   let browserId: string | null = null;
   let extractionPoolKey: string | null = null;
 
-  try {
-    const identityProfile = await buildIdentityProfile(
-      String(userId),
-      automationId,
-      { ...config, targetUrl: automation?.recording_meta?.url },
-      attemptsMade
-    );
+  // Park without burning attempts when this host's circuit is open.
+  if (targetHost) {
+    const breaker = getHostBreaker(targetHost);
+    if (breaker.isOpen()) {
+      const parkMs = breaker.remainingMs() + Math.floor(Math.random() * 5_000);
+      const parkSec = Math.round(parkMs / 1000);
+      run.status = 'pending';
+      run.errorMessage = `Host circuit open for ${targetHost}; parked ${parkSec}s`;
+      run.finishedAt = '';
+      run.duration = null;
+      await run.save();
+      await appendRunLog(
+        run,
+        `Host circuit OPEN for ${targetHost}; parked ${parkSec}s (attempt unchanged ${attemptsMade + 1}/${MAX_ATTEMPTS})`,
+        { flush: true }
+      );
+      await requeueScraperRun(
+        {
+          automationId,
+          runId,
+          userId: String(userId),
+          config,
+          _attemptsMade: attemptsMade,
+        },
+        { force: true, delayMs: parkMs }
+      );
+      return;
+    }
+  }
 
+  try {
     run.status = 'running';
-    run.queueJobId = job.attrs._id?.toString() || 'unknown';
+    run.queueJobId = queueJobId;
     run.retryCount = attemptsMade;
     run.errorMessage = null;
     run.interpreterSettings = {
@@ -360,28 +728,20 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
       runtimeConfig: config,
     };
     await run.save();
+    startHeartbeat();
 
-    try {
-      const { io: serverIo } = await import('../server');
-      serverIo.of('/queued-run').to(`user-${userId}`).emit('run-started', {
-        runId: run.runId,
-        robotMetaId: run.robotMetaId,
-        robotName: automation.recording_meta.name,
-        status: 'running',
-        startedAt: new Date().toLocaleString(),
-      });
-    } catch (socketError: any) {
-      logger.log('warn', `Failed to send run-started notification for run ${run.runId}: ${socketError.message}`);
-    }
+    await emitQueuedRunEvent(String(userId), 'run-started', {
+      runId: run.runId,
+      robotMetaId: run.robotMetaId,
+      robotName: automation.recording_meta.name,
+      status: 'running',
+      startedAt: new Date().toLocaleString(),
+    });
 
-    await appendRunLog(run, `Dequeued Agenda job ${job.attrs._id?.toString() || 'unknown'} (attempt ${attemptsMade + 1}/${MAX_ATTEMPTS})`);
-    await appendRunLog(
-      run,
-      `Identity selected: strategy=${identityProfile.identityStrategy || 'baseline'}, browser=${identityProfile.browserType || 'playwright-default'}, proxy ${identityProfile.contextProxy?.server || 'none'}, headless=${identityProfile.headless}`
-    );
+    await appendRunLog(run, `Dequeued Agenda job ${queueJobId} (attempt ${attemptsMade + 1}/${MAX_ATTEMPTS})`);
 
     const hasConfiguredListExtraction =
-      !!config?.listExtraction?.itemSelector &&
+      !!primaryItemSelector(config?.listExtraction?.itemSelector) &&
       config?.listExtraction?.fields &&
       Object.keys(config.listExtraction.fields).length > 0;
 
@@ -393,6 +753,37 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
       (!automation.recording?.workflow || automation.recording.workflow.length <= 1);
 
     const useListExtraction = hasConfiguredListExtraction || isUrlOnlyAutomation;
+
+    // Phase 2: ATS board JSON before identity/proxy/Chromium.
+    if (useListExtraction) {
+      try {
+        const atsDone = await tryAtsBoardCollection(run, automation, String(userId), config || {});
+        if (atsDone) {
+          if (targetHost) recordHostSuccess(targetHost);
+          return;
+        }
+      } catch (atsError: any) {
+        if (atsError instanceof RunDriftError) {
+          throw atsError;
+        }
+        await appendRunLog(
+          run,
+          `ATS board collection failed (${atsError?.message || atsError}); falling back to browser`,
+          { flush: true }
+        );
+      }
+    }
+
+    const identityProfile = await buildIdentityProfile(
+      String(userId),
+      automationId,
+      { ...config, targetUrl: automation?.recording_meta?.url },
+      attemptsMade
+    );
+    await appendRunLog(
+      run,
+      `Identity selected: strategy=${identityProfile.identityStrategy || 'baseline'}, browser=${identityProfile.browserType || 'playwright-default'}, proxy ${identityProfile.contextProxy?.server || 'none'}, headless=${identityProfile.headless}`
+    );
 
     if (!useListExtraction) {
       browserId = createRemoteBrowserForRun(String(userId), identityProfile);
@@ -406,10 +797,21 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
 
     let executionResult: { poolKey: string } | undefined;
 
+    const rememberPoolKey = (key: string) => {
+      extractionPoolKey = key;
+    };
+
     const executionFn = useListExtraction
       ? async () => {
           try {
-            const result = await processConfiguredListExtraction(run, automation, String(userId), config, identityProfile);
+            const result = await processConfiguredListExtraction(
+              run,
+              automation,
+              String(userId),
+              config,
+              identityProfile,
+              { onPoolKey: rememberPoolKey }
+            );
             executionResult = result;
             extractionPoolKey = result.poolKey;
           } catch (firstError: any) {
@@ -447,7 +849,11 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
               String(userId),
               config,
               identityProfile,
-              { isolatedBrowserKey: isolatedKey, blockResources: false }
+              {
+                isolatedBrowserKey: isolatedKey,
+                blockResources: false,
+                onPoolKey: rememberPoolKey,
+              }
             );
             executionResult = fallbackResult;
             extractionPoolKey = fallbackResult.poolKey;
@@ -463,15 +869,72 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
           } as any);
         };
 
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`Scraper job timed out after ${EXECUTION_TIMEOUT_MS}ms`)), EXECUTION_TIMEOUT_MS);
-    });
+    // Child mode: supervisor owns the hard timeout (SIGKILL). In-process keeps Promise.race.
+    const childOwnedTimeout = process.env.SCRAPE_JOB_CHILD === '1';
+    if (childOwnedTimeout) {
+      await executionFn();
+    } else {
+      let timeoutHandle: NodeJS.Timeout | null = null;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Scraper job timed out after ${EXECUTION_TIMEOUT_MS}ms`)),
+          EXECUTION_TIMEOUT_MS
+        );
+      });
 
-    await Promise.race([executionFn(), timeoutPromise]);
+      try {
+        await Promise.race([executionFn(), timeoutPromise]);
+      } catch (raceError: any) {
+        const msg = raceError instanceof Error ? raceError.message : String(raceError);
+        if (/timed out after/i.test(msg)) {
+          // Promise.race does not cancel executionFn — Chromium keeps scrolling/navigating.
+          // Kill pooled / remote browsers immediately so CPU drops.
+          await forceCleanupJobBrowsers(browserId, extractionPoolKey, String(userId), msg);
+        }
+        throw raceError;
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
+    }
 
     const refreshedRun = await Run.findOne({ runId });
     if (!refreshedRun) {
       throw new Error(`Run ${runId} disappeared during execution`);
+    }
+
+    // Safety net: list extraction must never report success with 0 rows, even if
+    // finalize was skipped or an older path marked the run completed early.
+    const extractedRows =
+      typeof refreshedRun.rowsExtracted === 'number' ? refreshedRun.rowsExtracted : 0;
+    const alreadyFailed =
+      refreshedRun.status === 'failed' || refreshedRun.status === 'dead';
+    if (useListExtraction && extractedRows <= 0 && !alreadyFailed) {
+      refreshedRun.rowsExtracted = 0;
+      refreshedRun.status = 'failed';
+      refreshedRun.anomaly = refreshedRun.anomaly || 'zero_rows';
+      refreshedRun.failureReason = refreshedRun.failureReason || 'layout_change';
+      refreshedRun.failureReasonSource = refreshedRun.failureReasonSource || 'suggested';
+      refreshedRun.errorMessage =
+        refreshedRun.errorMessage ||
+        'Zero rows extracted and run did not finalize normally. Selectors likely broke, the list did not render, or the target URL filters are wrong.';
+      refreshedRun.finishedAt = refreshedRun.finishedAt || new Date().toLocaleString();
+      refreshedRun.duration = computeDuration(refreshedRun.startedAt);
+      await appendRunLog(refreshedRun, refreshedRun.errorMessage, { flush: true });
+      await refreshedRun.save();
+      throw new RunDriftError({
+        runId: String(runId),
+        outcome: RunDriftOutcome.ZeroRows,
+        anomaly: 'zero_rows',
+        anomalyMeta: {
+          current: 0,
+          baseline: null,
+          ratio: null,
+          baselineSource: 'none',
+          escalated: false,
+          threshold: null,
+        },
+        message: refreshedRun.errorMessage,
+      });
     }
 
     const browserModule = await import('../server');
@@ -490,18 +953,40 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
       }
     }
 
-    await appendRunLog(refreshedRun, `Agenda job ${job.attrs._id?.toString() || 'unknown'} completed successfully`);
-    refreshedRun.status = refreshedRun.status === 'success' ? 'completed' : (refreshedRun.status || 'completed');
+    await appendRunLog(
+      refreshedRun,
+      refreshedRun.anomaly
+        ? `Agenda job ${queueJobId} finished with anomaly=${refreshedRun.anomaly}`
+        : `Agenda job ${queueJobId} completed successfully`,
+      { flush: true }
+    );
+    // Preserve drift fields written by list extraction (soft drop keeps errorMessage/anomaly).
+    // Map in-flight statuses to completed; never leave a finished job stuck on "running".
+    if (
+      refreshedRun.status === 'success' ||
+      refreshedRun.status === 'running' ||
+      refreshedRun.status === 'queued' ||
+      refreshedRun.status === 'pending' ||
+      !refreshedRun.status
+    ) {
+      refreshedRun.status = 'completed';
+    }
     refreshedRun.duration = computeDuration(refreshedRun.startedAt);
-    refreshedRun.errorMessage = null;
+    if (!refreshedRun.anomaly) {
+      refreshedRun.errorMessage = null;
+    }
     refreshedRun.finishedAt = refreshedRun.finishedAt || new Date().toLocaleString();
+    if (typeof refreshedRun.rowsExtracted !== 'number') {
+      refreshedRun.rowsExtracted = 0;
+    }
     await refreshedRun.save();
 
     if (browserId) {
       await destroyRemoteBrowser(browserId, String(userId));
     }
 
-    return { success: true, runId };
+    recordHostSuccess(targetHost);
+    return;
   } catch (error: any) {
     const message = error instanceof Error ? error.message : String(error);
     const latestRun = await Run.findOne({ runId });
@@ -514,9 +999,22 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
       }
     }
 
-    // CAPTCHA surfaced from either engine: emit a dedicated `captcha:required`
-    // socket event and fail the run with a clear reason. No retry — a retry
-    // from the same identity will just hit the same challenge.
+    // Drift hard-fail already persisted status/anomaly/webhook — do not retry or overwrite.
+    const isDrift =
+      error instanceof RunDriftError ||
+      (error && error.name === 'RunDriftError');
+    if (isDrift) {
+      logger.log(
+        'warn',
+        `Run ${runId} terminal drift failure (${(error as RunDriftError).outcome}): ${message}`
+      );
+      throw error;
+    }
+
+    // Host pressure: navigation/CAPTCHA/timeout style failures (not config/drift).
+    recordHostFailure(targetHost);
+
+    // CAPTCHA: emit captcha:required; retry with backoff when attempts remain.
     const isCaptcha =
       error instanceof CaptchaEncounteredError ||
       (error && error.name === 'CaptchaEncounteredError');
@@ -525,7 +1023,6 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
       const hasRemainingAttempts = attemptsMade + 1 < MAX_ATTEMPTS;
 
       try {
-        const { io } = await import('../server');
         const payload = describeCaptcha(
           {
             present: true,
@@ -536,18 +1033,20 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
           automationId,
           (error as any)?.url || automation?.recording_meta?.url || ''
         );
-        io.of('/queued-run').to(`user-${userId}`).emit('captcha:required', payload);
+        await emitQueuedRunEvent(String(userId), 'captcha:required', payload as any);
       } catch (emitError: any) {
         logger.log('warn', `Failed to emit captcha:required for run ${runId}: ${emitError.message}`);
       }
 
       if (hasRemainingAttempts) {
+        const delayMs = computeScrapeRetryDelayMs(attemptsMade);
+        const delaySec = Math.round(delayMs / 1000);
         await appendRunLog(
           latestRun,
-          `CAPTCHA encountered — retrying with Camoufox (+ residential proxy if configured) (${attemptsMade + 2}/${MAX_ATTEMPTS})`
+          `CAPTCHA encountered — retrying with Camoufox (+ residential proxy if configured) (${attemptsMade + 2}/${MAX_ATTEMPTS}); Retry scheduled in ${delaySec}s`
         );
         latestRun.status = 'pending';
-        latestRun.errorMessage = `CAPTCHA encountered on attempt ${attemptsMade + 1}: ${message}`;
+        latestRun.errorMessage = `CAPTCHA on attempt ${attemptsMade + 1}; retry in ${delaySec}s`;
         latestRun.retryCount = attemptsMade + 1;
         latestRun.finishedAt = '';
         latestRun.duration = null;
@@ -562,11 +1061,11 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
               config,
               _attemptsMade: attemptsMade + 1,
             },
-            { force: true }
+            { force: true, delayMs }
           );
           await appendRunLog(
             latestRun,
-            `Re-enqueued for retry ${attemptsMade + 2}/${MAX_ATTEMPTS}`
+            `Re-enqueued for retry ${attemptsMade + 2}/${MAX_ATTEMPTS} in ${delaySec}s`
           );
         } catch (requeueError: any) {
           logger.log(
@@ -580,17 +1079,16 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
           );
         }
       } else {
-        await markFailed(latestRun, `CAPTCHA encountered — run paused. ${message}`, 'failed');
+        await markFailed(latestRun, `CAPTCHA encountered — attempts exhausted. ${message}`, 'dead');
         latestRun.retryCount = attemptsMade;
         await latestRun.save();
 
         try {
-          const { io } = await import('../server');
-          io.of('/queued-run').to(`user-${userId}`).emit('run-completed', {
+          await emitQueuedRunEvent(String(userId), 'run-completed', {
             runId,
             robotMetaId: latestRun.robotMetaId,
             robotName: automation?.recording_meta?.name || 'Unknown Robot',
-            status: 'failed',
+            status: 'dead',
             finishedAt: new Date().toLocaleString(),
             reason: 'captcha',
           });
@@ -615,25 +1113,21 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
           logger.log('warn', `Failed to evict browser from pool for run ${runId}: ${evictError.message}`);
         }
       }
+
+      const delayMs = hasRemainingAttempts ? computeScrapeRetryDelayMs(attemptsMade) : 0;
+      const delaySec = Math.round(delayMs / 1000);
       await markFailed(
         latestRun,
-        `${message}${hasRemainingAttempts ? ' - retrying with a new identity profile' : ''}`,
-        hasRemainingAttempts ? 'pending' : 'failed'
+        hasRemainingAttempts
+          ? `${message} - retrying with a new identity profile in ${delaySec}s`
+          : `Dead letter: attempts exhausted (${MAX_ATTEMPTS}/${MAX_ATTEMPTS}). ${message}`,
+        hasRemainingAttempts ? 'pending' : 'dead'
       );
       latestRun.retryCount = attemptsMade + 1;
       await latestRun.save();
 
-      // Intent: "status=pending" asks the system to retry. But the current Agenda `scraper-jobs`
-      // doc is about to be marked `failedAt` by Agenda's fail handler, and `enqueueScraperRun`
-      // uses `insertOnly: true` — so the 90s stale poller would find the existing terminal doc
-      // and silently no-op, leaving the run stuck in `pending` forever. Explicitly delete the
-      // stale Agenda doc and re-enqueue a fresh one with the incremented attempt counter.
       if (hasRemainingAttempts) {
         try {
-          // `force: true` — the current Agenda doc is still locked (this worker is about to
-          // throw out of the job function, which releases the lock). We know it's safe to
-          // cancel and re-insert here; without `force`, the safety lock-check would no-op
-          // and leave the run stranded in pending.
           await requeueScraperRun(
             {
               automationId,
@@ -642,22 +1136,21 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
               config,
               _attemptsMade: attemptsMade + 1,
             },
-            { force: true }
+            { force: true, delayMs }
           );
           await appendRunLog(
             latestRun,
-            `Re-enqueued for retry ${attemptsMade + 2}/${MAX_ATTEMPTS}`
+            `Retry scheduled in ${delaySec}s (attempt ${attemptsMade + 2}/${MAX_ATTEMPTS})`
           );
         } catch (requeueError: any) {
           logger.log(
             'error',
             `Failed to re-enqueue run ${runId} for retry: ${requeueError.message}`
           );
-          // If re-enqueue fails, surface the failure instead of leaving the run stranded.
           await markFailed(
             latestRun,
             `${message} - retry re-enqueue failed: ${requeueError.message}`,
-            'failed'
+            'dead'
           );
         }
       }
@@ -667,12 +1160,11 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
           const robot: any = await Robot.findOne({
             'recording_meta.id': latestRun.robotMetaId,
           }).lean();
-          const { io } = await import('../server');
-          io.of('/queued-run').to(`user-${userId}`).emit('run-completed', {
+          await emitQueuedRunEvent(String(userId), 'run-completed', {
             runId,
             robotMetaId: latestRun.robotMetaId,
             robotName: robot?.recording_meta?.name || 'Unknown Robot',
-            status: 'failed',
+            status: 'dead',
             finishedAt: new Date().toLocaleString(),
           });
         } catch (emitError: any) {
@@ -682,25 +1174,66 @@ async function processScraperJob(job: AgendaJob<ScraperJobData>) {
     }
 
     throw error;
+  } finally {
+    stopHeartbeat();
   }
 }
 
 let scraperWorkerRegistered = false;
+let scraperShuttingDown = false;
+
+export function isScraperShuttingDown(): boolean {
+  return scraperShuttingDown;
+}
+
+export function setScraperShuttingDown(value: boolean): void {
+  scraperShuttingDown = value;
+}
 
 export async function startScraperWorker() {
   if (scraperWorkerRegistered) return;
   const agenda = await getAgenda();
+  const childIsolation = isChildProcessIsolationEnabled();
+  const lockLifetime = computeScraperLockLifetimeMs(EXECUTION_TIMEOUT_MS);
+  logger.log(
+    'info',
+    childIsolation
+      ? 'Scraper jobs will run in disposable child processes (hard cancel on timeout)'
+      : 'Scraper jobs will run in-process (SCRAPE_JOB_CHILD_PROCESS=false)'
+  );
   (agenda as any).define(
     'scraper-jobs',
-    { concurrency: SCRAPER_JOB_CONCURRENCY },
+    { concurrency: SCRAPER_JOB_CONCURRENCY, lockLifetime },
     async (job: AgendaJob<ScraperJobData>) => {
+      if (scraperShuttingDown) {
+        const id = job.attrs._id?.toString() || 'unknown';
+        logger.log('info', `Aborting scraper job ${id} — worker draining (will unlock for reclaim)`);
+        throw new Error('Worker draining — job aborted for reclaim');
+      }
       try {
-        await processScraperJob(job);
+        if (isChildProcessIsolationEnabled()) {
+          await runScraperJobInChild(
+            {
+              ...job.attrs.data,
+              // queueJobId is optional on payload; child does not need Agenda job id for locks
+            },
+            { timeoutMs: EXECUTION_TIMEOUT_MS }
+          );
+        } else {
+          await processScraperJob(job);
+        }
         logger.log('info', `Scraper job ${job.attrs._id?.toString() || 'unknown'} completed`);
       } catch (error: any) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.log('error', `Scraper job ${job.attrs._id?.toString() || 'unknown'} failed: ${message}`);
-        // Re-throw to let Agenda handle retries if configured
+        if (error instanceof ScraperJobTimeoutError || error?.name === 'ScraperJobTimeoutError') {
+          logger.log(
+            'error',
+            `Scraper job ${job.attrs._id?.toString() || 'unknown'} hard-timed out: ${message}`
+          );
+        } else {
+          logger.log('error', `Scraper job ${job.attrs._id?.toString() || 'unknown'} failed: ${message}`);
+        }
+        // Re-throw to let Agenda mark the job failed (app retries use requeueScraperRun)
         throw error;
       } finally {
         if (typeof global.gc === 'function') {
@@ -712,9 +1245,10 @@ export async function startScraperWorker() {
     }
   );
   scraperWorkerRegistered = true;
-  logger.log('info', 'Scraper job processor registered with Agenda');
+  logger.log('info', `Scraper job processor registered with Agenda (lockLifetime=${lockLifetime}ms)`);
 }
 
 export async function stopScraperWorker() {
-  // Agenda handles stopping internally via closeAgenda()
+  scraperShuttingDown = true;
+  await killAllActiveScrapeChildren();
 }

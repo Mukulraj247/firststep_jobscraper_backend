@@ -4,10 +4,13 @@ import moment from 'moment-timezone';
 /** Minimum gap between two consecutive schedule fires (product policy). */
 export const MIN_SCHEDULE_INTERVAL_MS = 15 * 60 * 1000;
 
+/** Minimum gap between any two automations' scheduled start times (spread-out policy). */
+export const MIN_AUTOMATION_GAP_MS = 90_000;
+
 /**
  * Wall-clock cron presets that should instead run as true intervals from
- * schedule-save / last-run time — so "Every 15 min" automations do not all
- * pile up on :00/:15/:30/:45 and overload the scraper.
+ * schedule-save / last-run time — so short presets do not all pile up on
+ * shared clock ticks, and daily/weekly presets do not all fire at midnight.
  */
 const INTERVAL_CRON_TO_MS: Record<string, number> = {
   '*/15 * * * *': 15 * 60 * 1000,
@@ -15,6 +18,12 @@ const INTERVAL_CRON_TO_MS: Record<string, number> = {
   '0 * * * *': 60 * 60 * 1000,
   '0 */6 * * *': 6 * 60 * 60 * 1000,
   '0 */12 * * *': 12 * 60 * 60 * 1000,
+  // Calendar presets → interval + per-robot hash stagger (same path as short presets).
+  '0 0 * * *': 24 * 60 * 60 * 1000,
+  '0 0 */2 * *': 2 * 24 * 60 * 60 * 1000,
+  '0 0 */3 * *': 3 * 24 * 60 * 60 * 1000,
+  '0 0 * * 1': 7 * 24 * 60 * 60 * 1000,
+  '0 0 1 * *': 30 * 24 * 60 * 60 * 1000,
 };
 
 const INTERVAL_MS_TO_HUMAN: Record<number, string> = {
@@ -23,13 +32,18 @@ const INTERVAL_MS_TO_HUMAN: Record<number, string> = {
   [60 * 60 * 1000]: '1 hour',
   [6 * 60 * 60 * 1000]: '6 hours',
   [12 * 60 * 60 * 1000]: '12 hours',
+  [24 * 60 * 60 * 1000]: '1 day',
+  [2 * 24 * 60 * 60 * 1000]: '2 days',
+  [3 * 24 * 60 * 60 * 1000]: '3 days',
+  [7 * 24 * 60 * 60 * 1000]: '1 week',
+  [30 * 24 * 60 * 60 * 1000]: '30 days',
 };
 
 export function normalizeCronExpression(cron: string): string {
   return cron.trim().replace(/\s+/g, ' ');
 }
 
-/** Map known short presets to interval ms, or null for calendar cron. */
+/** Map known stagger presets to interval ms, or null for free-form calendar cron. */
 export function intervalMsFromCron(cron: string | null | undefined): number | null {
   if (!cron || typeof cron !== 'string') return null;
   return INTERVAL_CRON_TO_MS[normalizeCronExpression(cron)] ?? null;
@@ -121,4 +135,142 @@ export function validateAutomationScheduleCron(
     return syntax;
   }
   return validateMinimumScheduleInterval(cronExpression, timezone);
+}
+
+/** Grace after dueAt before catch-up fires (default 2m — avoid racing Agenda). */
+export function getScheduleCatchupGraceMs(): number {
+  const fromEnv = parseInt(process.env.SCHEDULE_CATCHUP_GRACE_MS || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv >= 0) return fromEnv;
+  return 120_000;
+}
+
+/** How often the missed-schedule sweep runs (default 2m). */
+export function getScheduleCatchupIntervalMs(): number {
+  const fromEnv = parseInt(process.env.SCHEDULE_CATCHUP_INTERVAL_MS || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
+  return 120_000;
+}
+
+/** Max overdue robots to enqueue per sweep pass (default 40). */
+export function getScheduleCatchupMaxRobots(): number {
+  const fromEnv = parseInt(process.env.SCHEDULE_CATCHUP_MAX_ROBOTS || '', 10);
+  if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
+  return 40;
+}
+
+const toTime = (value: Date | string | number | null | undefined): number | null => {
+  if (value == null) return null;
+  const t = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isNaN(t) ? null : t;
+};
+
+/**
+ * True when a scheduled robot is past due by more than graceMs.
+ *
+ * Interval: dueAt = lastRunAt + everyMs; if no lastRunAt, use nextRunAt when past.
+ * Calendar cron (no everyMs): dueAt = nextRunAt when that timestamp is in the past.
+ * No timestamps yet → not overdue (wait for rehydrate/sync to set nextRunAt).
+ */
+export function isScheduleOverdue(opts: {
+  lastRunAt?: Date | string | number | null;
+  nextRunAt?: Date | string | number | null;
+  everyMs?: number | null;
+  now?: Date | number;
+  graceMs: number;
+}): boolean {
+  const now = opts.now instanceof Date ? opts.now.getTime() : (opts.now ?? Date.now());
+  const grace = Math.max(0, opts.graceMs);
+  const lastMs = toTime(opts.lastRunAt ?? null);
+  const nextMs = toTime(opts.nextRunAt ?? null);
+  const everyMs =
+    typeof opts.everyMs === 'number' && opts.everyMs > 0 ? opts.everyMs : null;
+
+  let dueAt: number | null = null;
+  if (everyMs && lastMs != null) {
+    dueAt = lastMs + everyMs;
+  } else if (nextMs != null) {
+    dueAt = nextMs;
+  }
+
+  if (dueAt == null) return false;
+  return now >= dueAt + grace;
+}
+
+/**
+ * Find the earliest time at or after `preferredMs` that sits at least `gapMs`
+ * away from every occupied timestamp (system-wide schedule packing).
+ */
+export function findPackedNextRunAt(
+  occupiedTimesMs: Array<number | null | undefined>,
+  preferredMs: number,
+  gapMs: number = MIN_AUTOMATION_GAP_MS
+): Date {
+  const gap = Math.max(1, gapMs);
+  const preferred = Number.isFinite(preferredMs) ? preferredMs : Date.now();
+  const sorted = occupiedTimesMs
+    .map((t) => (typeof t === 'number' && Number.isFinite(t) ? t : NaN))
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b);
+
+  let candidate = preferred;
+  for (let i = 0; i < 100_000; i++) {
+    let conflictUntil: number | null = null;
+    for (const t of sorted) {
+      if (Math.abs(t - candidate) < gap) {
+        conflictUntil = conflictUntil == null ? t + gap : Math.max(conflictUntil, t + gap);
+      }
+    }
+    if (conflictUntil == null) {
+      return new Date(candidate);
+    }
+    candidate = Math.max(candidate + gap, conflictUntil);
+  }
+  return new Date(candidate);
+}
+
+/**
+ * Preferred local hours for first-run phase suggestions (meeting: e.g. every 6h → 3/9/15/21).
+ */
+export function preferredPhaseHoursForInterval(everyMs: number): number[] {
+  if (everyMs === 6 * 60 * 60 * 1000) return [3, 9, 15, 21];
+  if (everyMs === 12 * 60 * 60 * 1000) return [3, 15];
+  if (everyMs >= 24 * 60 * 60 * 1000) return [3];
+  if (everyMs === 60 * 60 * 1000) {
+    const hour = new Date().getHours();
+    return [0, 1, 2, 3].map((i) => (hour + i + 1) % 24);
+  }
+  return [];
+}
+
+/**
+ * Next N preferred first-run instants in `timezone` for a known interval preset.
+ * Falls back to [now + everyMs] when there is no phase hour list (short intervals).
+ */
+export function suggestPreferredStartSlots(
+  everyMs: number,
+  timezone: string = 'UTC',
+  now: Date = new Date(),
+  count: number = 4
+): Date[] {
+  if (!everyMs || everyMs <= 0) return [];
+  const tz = moment.tz.zone(timezone) ? timezone : 'UTC';
+  const hours = preferredPhaseHoursForInterval(everyMs);
+  if (!hours.length) {
+    return [new Date(now.getTime() + everyMs)];
+  }
+
+  const slots: Date[] = [];
+  const start = moment.tz(now, tz).startOf('hour');
+  for (let step = 0; step < 24 * 14 && slots.length < count; step++) {
+    const candidate = start.clone().add(step, 'hour');
+    if (!hours.includes(candidate.hour())) continue;
+    const aligned = candidate.clone().minute(0).second(0).millisecond(0);
+    if (aligned.valueOf() <= now.getTime()) continue;
+    slots.push(aligned.toDate());
+  }
+
+  if (!slots.length) {
+    slots.push(new Date(now.getTime() + everyMs));
+  }
+  return slots;
 }

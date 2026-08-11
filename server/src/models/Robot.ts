@@ -71,6 +71,24 @@ RobotSchema.index(
 
 RobotSchema.index({ 'recording_meta.id': 1 }, { name: 'robot_recording_meta_id' });
 
+/** Parallel Scout-X scrape ID (SX47KX19); unique per account when present. */
+RobotSchema.index(
+  { userId: 1, 'recording_meta.scoutId': 1 },
+  {
+    unique: true,
+    name: 'robot_user_scout_id_unique',
+    partialFilterExpression: {
+      'recording_meta.scoutId': { $type: 'string', $gt: '' },
+    },
+  }
+);
+
+/** Exact target-URL lookup after normalizeAutomationUrl (no fuzzy path match). */
+RobotSchema.index(
+  { userId: 1, 'recording_meta.url': 1 },
+  { name: 'robot_user_url_idx' }
+);
+
 const Robot = mongoose.models.Robot || mongoose.model<IRobot>('Robot', RobotSchema);
 
 export default Robot;

@@ -271,12 +271,30 @@ export const CollapsibleRow = ({ row, handleDelete, isOpen, onToggleExpanded, cu
               case 'runStatus':
                 return (
                   <TableCell key={column.id} align={column.align}>
-                    {(row.status === 'success' || row.status === 'completed') && <Chip label={t('runs_table.run_status_chips.success')} color="success" variant="outlined" />}
+                    {(row.status === 'success' || row.status === 'completed') && !row.anomaly && <Chip label={t('runs_table.run_status_chips.success')} color="success" variant="outlined" />}
+                    {(row.status === 'success' || row.status === 'completed') && row.anomaly === 'row_drop' && (
+                      <Chip
+                        label={row.anomalyMeta?.escalated ? 'Row drop (escalated)' : 'Row drop'}
+                        color="warning"
+                        variant="outlined"
+                        sx={{ mr: 0.5 }}
+                      />
+                    )}
                     {row.status === 'running' && <Chip label={t('runs_table.run_status_chips.running')} color="warning" variant="outlined" />}
                     {row.status === 'pending' && <Chip label={t('runs_table.run_status_chips.pending', 'Pending')} color="info" variant="outlined" />}
                     {row.status === 'scheduled' && <Chip label={t('runs_table.run_status_chips.scheduled')} variant="outlined" />}
                     {row.status === 'queued' && <Chip label={t('runs_table.run_status_chips.queued')} variant="outlined" />}
-                    {row.status === 'failed' && <Chip label={t('runs_table.run_status_chips.failed')} color="error" variant="outlined" />}
+                    {row.status === 'failed' && !row.anomaly && <Chip label={t('runs_table.run_status_chips.failed')} color="error" variant="outlined" />}
+                    {row.status === 'failed' && row.anomaly === 'zero_rows' && (
+                      <Chip label="Zero rows" color="error" variant="outlined" />
+                    )}
+                    {row.status === 'failed' && row.anomaly === 'row_drop' && (
+                      <Chip label="Row drop (escalated)" color="error" variant="outlined" />
+                    )}
+                    {row.status === 'failed' && row.anomaly && row.anomaly !== 'zero_rows' && row.anomaly !== 'row_drop' && (
+                      <Chip label={String(row.anomaly)} color="error" variant="outlined" />
+                    )}
+                    {row.status === 'dead' && <Chip label={t('runs_table.run_status_chips.dead', 'Dead')} color="error" variant="outlined" />}
                     {row.status === 'aborted' && <Chip label={t('runs_table.run_status_chips.aborted')} color="error" variant="outlined" />}
                   </TableCell>
                 )

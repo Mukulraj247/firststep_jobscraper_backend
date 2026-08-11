@@ -95,6 +95,10 @@ export async function createQueuedAutomationRun(
       name: robot.recording_meta.name,
       robotId: robot._id ? robot._id.toString() : robot.id,
       robotMetaId: robot.recording_meta.id,
+      scoutId:
+        typeof robot.recording_meta.scoutId === 'string' && robot.recording_meta.scoutId.trim()
+          ? String(robot.recording_meta.scoutId).trim().toUpperCase()
+          : null,
       startedAt: new Date().toISOString(),
       finishedAt: null,
       browserId,

@@ -4,26 +4,51 @@ dotenv.config();
 import logger from './logger';
 import mongoose, { connectDB, syncDB } from './storage/db';
 import { startWorkers } from './pgboss-worker';
-import { startScraperWorker, stopScraperWorker } from './workers/scraperWorker';
-import { rehydrateAutomationSchedules, startAutomationScheduleWorker, stopAutomationScheduleWorker } from './services/automationScheduler';
+import { startScraperWorker, stopScraperWorker, setScraperShuttingDown } from './workers/scraperWorker';
+import {
+  rehydrateAutomationSchedules,
+  startAutomationScheduleWorker,
+  stopAutomationScheduleWorker,
+  startMissedScheduleCatchupLoop,
+} from './services/automationScheduler';
 import { registerOpsDigestJob } from './services/opsDigest';
-import { closeAgenda } from './queue/scraperQueue';
+import { drainAndCloseAgenda, getScrapeDrainMs } from './queue/scraperQueue';
 import { closeBrowserReusePool } from './services/browserReusePool';
+import {
+  killUntrackedPlaywrightChromium,
+  startOrphanChromiumReaper,
+  stopOrphanChromiumReaper,
+} from './services/browserProcess';
+import { recoverOrphanedRuns } from './services/orphanRunRecovery';
+import { warnIfConstrainedScraperFingerprint } from './utils/prodEnvGuard';
+import { isSchedulerEnabled } from './utils/schedulerEnabled';
 
 let shuttingDown = false;
 
 async function startWorkerRuntime() {
+  warnIfConstrainedScraperFingerprint((level, msg) => logger.log(level as any, msg));
+
   await connectDB();
   await syncDB();
 
+  // Recover runs left mid-flight after a previous hard kill (API boot alone won't help in PM2 split).
+  await recoverOrphanedRuns({ assumeNoBrowsers: true });
+
   await startWorkers();
   await startScraperWorker();
-  await startAutomationScheduleWorker();
-  await rehydrateAutomationSchedules();
-  try {
-    await registerOpsDigestJob();
-  } catch (digestError: any) {
-    logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+  startOrphanChromiumReaper();
+
+  if (isSchedulerEnabled()) {
+    await startAutomationScheduleWorker();
+    await rehydrateAutomationSchedules();
+    startMissedScheduleCatchupLoop();
+    try {
+      await registerOpsDigestJob();
+    } catch (digestError: any) {
+      logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+    }
+  } else {
+    logger.log('info', 'SCHEDULER_ENABLED=false — scraper-only (skip schedule rehydrate / catch-up / ops digest)');
   }
 
   logger.log('info', 'Worker runtime started');
@@ -34,11 +59,30 @@ async function shutdown(signal: string) {
     return;
   }
   shuttingDown = true;
+  setScraperShuttingDown(true);
 
-  logger.log('info', `${signal} received, shutting down worker runtime...`);
+  logger.log('info', `${signal} received, shutting down worker runtime (drain ${getScrapeDrainMs()}ms)...`);
   let exitCode = 0;
 
   try {
+    if (isSchedulerEnabled()) {
+      await stopAutomationScheduleWorker();
+    }
+  } catch (error: any) {
+    exitCode = 1;
+    logger.log('error', `Failed to stop automation schedule worker: ${error.message}`);
+  }
+
+  try {
+    // Timed drain first so in-flight jobs can finish; then unlock + close.
+    await drainAndCloseAgenda({ drainMs: getScrapeDrainMs() });
+  } catch (error: any) {
+    exitCode = 1;
+    logger.log('error', `Failed to drain/close Agenda: ${error.message}`);
+  }
+
+  try {
+    // Kill any scrape children still alive after drain timeout / incomplete drain.
     await stopScraperWorker();
   } catch (error: any) {
     exitCode = 1;
@@ -46,21 +90,9 @@ async function shutdown(signal: string) {
   }
 
   try {
-    await stopAutomationScheduleWorker();
-  } catch (error: any) {
-    exitCode = 1;
-    logger.log('error', `Failed to stop automation schedule worker: ${error.message}`);
-  }
-
-  try {
-    await closeAgenda();
-  } catch (error: any) {
-    exitCode = 1;
-    logger.log('error', `Failed to close Agenda queue: ${error.message}`);
-  }
-
-  try {
+    stopOrphanChromiumReaper();
     await closeBrowserReusePool();
+    await killUntrackedPlaywrightChromium().catch(() => {});
   } catch (error: any) {
     exitCode = 1;
     logger.log('error', `Failed to close browser reuse pool: ${error.message}`);

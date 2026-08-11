@@ -87,8 +87,18 @@ const formatPct = (n?: number | null, digits = 1) => {
 
 const formatMbps = (n?: number | null) => {
   if (n == null || !Number.isFinite(n)) return '—';
-  if (n < 0.01) return `${(n * 1000).toFixed(1)} Kbps`;
+  if (n <= 0) return '0 Kbps';
+  if (n < 0.001) return `${(n * 1_000_000).toFixed(0)} bps`;
+  if (n < 1) return `${(n * 1000).toFixed(1)} Kbps`;
   return `${n.toFixed(3)} Mbps`;
+};
+
+/** DigitalOcean disk I/O Insights units are megabytes/sec (MBps), not megabits. */
+const formatMBps = (n?: number | null) => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  if (n <= 0) return '0 MB/s';
+  if (n < 0.01) return `${(n * 1000).toFixed(1)} KB/s`;
+  return `${n.toFixed(3)} MB/s`;
 };
 
 const formatGiB = (bytes?: number | null) => {
@@ -793,9 +803,9 @@ export const AdminPage = () => {
 
               <Stack direction="row" flexWrap="wrap" gap={2} mb={2.5}>
                 <UsageBar
-                  label="CPU usage"
-                  percent={m.cpuPercent.latest}
-                  detail={`avg ${formatPct(m.cpuPercent.avg)} · max ${formatPct(m.cpuPercent.max)} · of ${droplet.vcpus ?? '—'} vCPU`}
+                  label={`CPU avg (${doWindow})`}
+                  percent={m.cpuPercent.avg ?? m.cpuPercent.latest}
+                  detail={`now ${formatPct(m.cpuPercent.latest)} · max ${formatPct(m.cpuPercent.max)} · of ${droplet.vcpus ?? '—'} vCPU · matches DO Insights window avg`}
                   color="#0069ff"
                 />
                 <UsageBar
@@ -814,7 +824,7 @@ export const AdminPage = () => {
 
               <Stack direction="row" flexWrap="wrap" gap={1.5} mb={1}>
                 <MetricChart
-                  title="CPU usage"
+                  title={`CPU usage (${doWindow} avg ${formatPct(m.cpuPercent.avg)})`}
                   valueLabel={formatPct(m.cpuPercent.latest)}
                   points={m.cpuPercent.points}
                   color="#0069ff"
@@ -828,26 +838,26 @@ export const AdminPage = () => {
                   yMax={100}
                 />
                 <MetricChart
-                  title="Bandwidth out"
+                  title="Bandwidth out (public)"
                   valueLabel={formatMbps(m.bandwidthOutboundMbps.latest)}
                   points={m.bandwidthOutboundMbps.points}
                   color="#6a1b9a"
                 />
                 <MetricChart
-                  title="Bandwidth in"
+                  title="Bandwidth in (public)"
                   valueLabel={formatMbps(m.bandwidthInboundMbps.latest)}
                   points={m.bandwidthInboundMbps.points}
                   color="#00838f"
                 />
                 <MetricChart
                   title="Disk write"
-                  valueLabel={formatMbps(diskWrite.latest)}
+                  valueLabel={formatMBps(diskWrite.latest)}
                   points={diskWrite.points}
                   color="#ef6c00"
                 />
                 <MetricChart
                   title="Disk read"
-                  valueLabel={formatMbps(diskRead.latest)}
+                  valueLabel={formatMBps(diskRead.latest)}
                   points={diskRead.points}
                   color="#5d4037"
                 />
@@ -999,6 +1009,19 @@ export const AdminPage = () => {
                       color={STATUS_COLORS[run.status] || 'default'}
                       sx={{ minWidth: 88 }}
                     />
+                    {run.anomaly ? (
+                      <Chip
+                        size="small"
+                        color={run.anomalyMeta?.escalated || run.anomaly === 'zero_rows' ? 'error' : 'warning'}
+                        label={
+                          run.anomaly === 'zero_rows'
+                            ? 'zero rows'
+                            : run.anomalyMeta?.escalated
+                              ? 'row drop ↑'
+                              : 'row drop'
+                        }
+                      />
+                    ) : null}
                     <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 160 }} noWrap title={run.name}>
                       {run.name}
                     </Typography>

@@ -22,11 +22,16 @@ import { processQueuedRuns, recoverOrphanedRuns } from './routes/storage';
 import { reenqueueStalePendingScraperRuns } from './services/automationRun';
 import { startWorkers } from './pgboss-worker';
 import Run from './models/Run';
-import { closeAgenda } from './queue/scraperQueue';
-import { startScraperWorker, stopScraperWorker } from './workers/scraperWorker';
-import { rehydrateAutomationSchedules, startAutomationScheduleWorker, stopAutomationScheduleWorker } from './services/automationScheduler';
+import { closeAgenda, drainAndCloseAgenda, getScrapeDrainMs } from './queue/scraperQueue';
+import { startScraperWorker, stopScraperWorker, setScraperShuttingDown } from './workers/scraperWorker';
+import { rehydrateAutomationSchedules, startAutomationScheduleWorker, stopAutomationScheduleWorker, startMissedScheduleCatchupLoop } from './services/automationScheduler';
 import { registerOpsDigestJob } from './services/opsDigest';
 import { closeBrowserReusePool } from './services/browserReusePool';
+import {
+  startOrphanChromiumReaper,
+  stopOrphanChromiumReaper,
+  killUntrackedPlaywrightChromium,
+} from './services/browserProcess';
 import rateLimit from 'express-rate-limit';
 
 if (process.env.NODE_ENV === 'production') {
@@ -243,6 +248,8 @@ if (require.main === module) {
         await startScraperWorker();
         await startAutomationScheduleWorker();
         await rehydrateAutomationSchedules();
+        startMissedScheduleCatchupLoop();
+        startOrphanChromiumReaper();
         try {
           await registerOpsDigestJob();
         } catch (digestError: any) {
@@ -365,9 +372,10 @@ if (require.main === module) {
     }
   });
 
-  process.on('SIGINT', async () => {
-    console.log('Main app shutting down...');
+  const runShutdown = async (signal: string) => {
+    console.log(`Main app shutting down (${signal})...`);
     let shutdownSuccessful = true;
+    setScraperShuttingDown(true);
 
     await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -485,29 +493,38 @@ if (require.main === module) {
 
     if (runEmbeddedWorkers) {
       try {
-        await stopScraperWorker();
-      } catch (workerError: any) {
-        console.error('Error stopping scraper worker:', workerError.message);
-        shutdownSuccessful = false;
-      }
-
-      try {
         await stopAutomationScheduleWorker();
       } catch (workerError: any) {
         console.error('Error stopping automation schedule worker:', workerError.message);
         shutdownSuccessful = false;
       }
+
+      try {
+        await drainAndCloseAgenda({ drainMs: getScrapeDrainMs() });
+      } catch (queueError: any) {
+        console.error('Error draining Agenda queue:', queueError.message);
+        shutdownSuccessful = false;
+      }
+
+      try {
+        await stopScraperWorker();
+      } catch (workerError: any) {
+        console.error('Error stopping scraper worker:', workerError.message);
+        shutdownSuccessful = false;
+      }
+    } else {
+      try {
+        await closeAgenda();
+      } catch (queueError: any) {
+        console.error('Error closing Agenda queue:', queueError.message);
+        shutdownSuccessful = false;
+      }
     }
 
     try {
-      await closeAgenda();
-    } catch (queueError: any) {
-      console.error('Error closing Agenda queue:', queueError.message);
-      shutdownSuccessful = false;
-    }
-
-    try {
+      stopOrphanChromiumReaper();
       await closeBrowserReusePool();
+      await killUntrackedPlaywrightChromium();
     } catch (poolError: any) {
       console.error('Error closing browser reuse pool:', poolError.message);
       shutdownSuccessful = false;
@@ -522,6 +539,14 @@ if (require.main === module) {
 
     console.log(`Shutdown ${shutdownSuccessful ? 'completed successfully' : 'completed with errors'}`);
     process.exit(shutdownSuccessful ? 0 : 1);
+  };
+
+  process.on('SIGINT', () => {
+    void runShutdown('SIGINT');
+  });
+
+  process.on('SIGTERM', () => {
+    void runShutdown('SIGTERM');
   });
 
   process.on('unhandledRejection', (reason, promise) => {

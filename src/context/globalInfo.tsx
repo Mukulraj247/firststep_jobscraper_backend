@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
 import { AlertSnackbarProps } from "../components/ui/AlertSnackbar";
 import { WhereWhatPair } from "maxun-core";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -325,13 +325,15 @@ export const GlobalInfoProvider = ({ children }: { children: JSX.Element }) => {
   const [currentTextGroupName, setCurrentTextGroupName] = useState<string>('Text Data');
   const [isDOMMode, setIsDOMMode] = useState<boolean>(globalInfoStore.isDOMMode);
 
-  const notify = (severity: 'error' | 'warning' | 'info' | 'success', message: string) => {
+  // Must be stable: pages put `notify` in useCallback deps that feed useEffect fetch loops.
+  // A new function identity on every toast would re-trigger those effects (429 death spiral).
+  const notify = useCallback((severity: 'error' | 'warning' | 'info' | 'success', message: string) => {
     setNotification({ severity, message, isOpen: true });
-  }
+  }, []);
 
-  const closeNotify = () => {
+  const closeNotify = useCallback(() => {
     setNotification(globalInfoStore.notification);
-  }
+  }, []);
 
   const setBrowserIdWithValidation = (browserId: string | null) => {
     setBrowserId(browserId);

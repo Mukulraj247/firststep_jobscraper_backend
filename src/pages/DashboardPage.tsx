@@ -39,6 +39,7 @@ import { useSocketStore } from '../context/socket';
 import { ScheduleModal } from '../components/robot/ScheduleModal';
 import { getScheduleLabel } from '../constants/scheduleOptions';
 import { computeNextRunRelative, formatRelativeToNow } from '../utils/cronBuilder';
+import { TagPicker, formatTagChipLabel } from '../components/automation/TagPicker';
 
 const statusColor = (status: string): 'success' | 'error' | 'warning' | 'info' | 'default' => {
   switch (status) {
@@ -47,6 +48,8 @@ const statusColor = (status: string): 'success' | 'error' | 'warning' | 'info' |
     case 'success':
       return 'success';
     case 'failed':
+      return 'error';
+    case 'dead':
       return 'error';
     case 'pending':
       return 'info';
@@ -76,9 +79,12 @@ export const DashboardPage = () => {
   const [tick, setTick] = useState(0); // refreshes next-run countdown every 30s
   const [form, setForm] = useState({
     name: '',
+    companyName: '',
     startUrl: 'https://',
     webhookUrl: '',
   });
+  const [createTags, setCreateTags] = useState<string[]>([]);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
 
   // Schedule modal state
   const [scheduleModal, setScheduleModal] = useState<{
@@ -101,6 +107,7 @@ export const DashboardPage = () => {
   const [resumeAllOpen, setResumeAllOpen] = useState(false);
   const [resumingAll, setResumingAll] = useState(false);
   const [copiedTargetUrl, setCopiedTargetUrl] = useState<string | null>(null);
+  const [copiedScoutId, setCopiedScoutId] = useState<string | null>(null);
 
   const copyTargetUrl = useCallback(async (url?: string) => {
     if (!url) return;
@@ -112,6 +119,19 @@ export const DashboardPage = () => {
       }, 1500);
     } catch {
       setCopiedTargetUrl(null);
+    }
+  }, []);
+
+  const copyScoutId = useCallback(async (scoutId?: string | null) => {
+    if (!scoutId) return;
+    try {
+      await navigator.clipboard.writeText(scoutId);
+      setCopiedScoutId(scoutId);
+      window.setTimeout(() => {
+        setCopiedScoutId((current) => (current === scoutId ? null : current));
+      }, 1500);
+    } catch {
+      setCopiedScoutId(null);
     }
   }, []);
 
@@ -154,7 +174,11 @@ export const DashboardPage = () => {
         setIsLoading(true);
       }
       try {
-        const data = await getDashboardAutomations({ page: apiPage, limit });
+        const data = await getDashboardAutomations({
+          page: apiPage,
+          limit,
+          ...(tagFilter.length ? { tags: tagFilter } : {}),
+        });
         setAutomations(data.automations);
         setSummary(data.summary);
         setTotalCount(data.pagination.total);
@@ -165,7 +189,10 @@ export const DashboardPage = () => {
         });
         setHasBackgroundUpdates(false);
       } catch (error: any) {
-        notify('error', error?.response?.data?.error || 'Failed to load automations');
+        // Avoid toast spam on rate-limit; caller effects must not re-fire from notify.
+        if (error?.response?.status !== 429) {
+          notify('error', error?.response?.data?.error || 'Failed to load automations');
+        }
       } finally {
         if (silent) {
           setIsRefreshing(false);
@@ -174,7 +201,7 @@ export const DashboardPage = () => {
         }
       }
     },
-    [notify, buildDashboardListSignature, page, rowsPerPage]
+    [notify, buildDashboardListSignature, page, rowsPerPage, tagFilter]
   );
 
   useEffect(() => {
@@ -203,7 +230,11 @@ export const DashboardPage = () => {
   useEffect(() => {
     const id = setInterval(() => {
       if (document.hidden || isLoading || isRefreshing || hasBackgroundUpdates) return;
-      getDashboardAutomations({ page: page + 1, limit: rowsPerPage })
+      getDashboardAutomations({
+        page: page + 1,
+        limit: rowsPerPage,
+        ...(tagFilter.length ? { tags: tagFilter } : {}),
+      })
         .then((fresh) => {
           const freshSig = buildDashboardListSignature({
             summary: fresh.summary,
@@ -219,7 +250,7 @@ export const DashboardPage = () => {
         });
     }, 180000);
     return () => clearInterval(id);
-  }, [buildDashboardListSignature, hasBackgroundUpdates, isLoading, isRefreshing, page, rowsPerPage]);
+  }, [buildDashboardListSignature, hasBackgroundUpdates, isLoading, isRefreshing, page, rowsPerPage, tagFilter]);
 
   useEffect(() => {
     if (searchParams.get('extension') === '1' && extensionCardRef.current) {
@@ -253,11 +284,17 @@ export const DashboardPage = () => {
   }, [automations]);
 
   const handleCreate = async () => {
+    if (!form.companyName.trim()) {
+      notify('error', 'Company name is required');
+      return;
+    }
     try {
       await createAutomation({
         name: form.name,
+        companyName: form.companyName.trim(),
         startUrl: form.startUrl,
         webhookUrl: form.webhookUrl,
+        tags: createTags,
         config: {
           dataCleanup: {
             removeEmptyRows: true,
@@ -270,7 +307,8 @@ export const DashboardPage = () => {
         },
       });
       setIsCreateOpen(false);
-      setForm({ name: '', startUrl: 'https://', webhookUrl: '' });
+      setForm({ name: '', companyName: '', startUrl: 'https://', webhookUrl: '' });
+      setCreateTags([]);
       notify('success', 'Automation created');
       await loadAutomations();
     } catch (error: any) {
@@ -315,7 +353,12 @@ export const DashboardPage = () => {
 
   const handleScheduleSave = async (
     automationId: string,
-    schedule: { enabled: boolean; cron: string | null; timezone: string }
+    schedule: {
+      enabled: boolean;
+      cron: string | null;
+      timezone: string;
+      preferredNextRunAt?: string | null;
+    }
   ) => {
     try {
       await updateAutomationSchedule(automationId, schedule);
@@ -504,17 +547,27 @@ export const DashboardPage = () => {
         interval so you can <strong>Resume</strong> later. Pause/Resume does not delete robots, runs, or extracted data.
       </Alert>
 
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle2" fontWeight={700} mb={1}>
+          Filter by tags
+        </Typography>
+        <TagPicker value={tagFilter} onChange={(next) => { setTagFilter(next); setPage(0); }} />
+      </Paper>
+
       <TableContainer component={Paper}>
         <Table>
           <TableHead>
             <TableRow>
               <TableCell><strong>Name</strong></TableCell>
+              <TableCell><strong>ID</strong></TableCell>
+              <TableCell><strong>Company</strong></TableCell>
+              <TableCell><strong>Tags</strong></TableCell>
               <TableCell><strong>Target URL</strong></TableCell>
               <TableCell><strong>Last Run</strong></TableCell>
               <TableCell><strong>Rows</strong></TableCell>
               <TableCell><strong>Status</strong></TableCell>
-              <TableCell><strong>Schedule</strong></TableCell>
               <TableCell><strong>Next Run</strong></TableCell>
+              <TableCell><strong>Schedule</strong></TableCell>
               <TableCell align="right"><strong>Actions</strong></TableCell>
             </TableRow>
           </TableHead>
@@ -522,77 +575,89 @@ export const DashboardPage = () => {
             {(isLoading ? [] : automations).map((automation) => (
               <TableRow key={automation.id} hover>
                 <TableCell sx={{ fontWeight: 500 }}>{automation.name}</TableCell>
-                <TableCell sx={{ maxWidth: 280, fontSize: 12, color: 'text.secondary' }}>
-                  {automation.targetUrl ? (
-                    <Tooltip
-                      title={
-                        copiedTargetUrl === automation.targetUrl
-                          ? 'Copied'
-                          : `${automation.targetUrl} (click to copy)`
-                      }
-                      arrow
-                    >
-                      <Box
-                        component="button"
-                        type="button"
-                        onClick={() => copyTargetUrl(automation.targetUrl)}
-                        sx={{
-                          maxWidth: '100%',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          display: 'block',
-                          border: 'none',
-                          background: 'transparent',
-                          padding: 0,
-                          margin: 0,
-                          color: 'inherit',
-                          textAlign: 'left',
-                          cursor: 'copy',
-                          fontSize: 12,
-                        }}
+                <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                  {automation.scoutId ? (
+                    <Tooltip title={copiedScoutId === automation.scoutId ? 'Copied' : 'Click to copy'} arrow>
+                      <Button
+                        size="small"
+                        variant="text"
+                        onClick={() => copyScoutId(automation.scoutId)}
+                        sx={{ minWidth: 0, px: 0.5, fontFamily: 'inherit', fontSize: 12, textTransform: 'none' }}
                       >
-                        {automation.targetUrl}
-                      </Box>
+                        {automation.scoutId}
+                      </Button>
                     </Tooltip>
-                  ) : '-'}
+                  ) : (
+                    <Typography variant="caption" color="text.disabled">—</Typography>
+                  )}
+                </TableCell>
+                <TableCell sx={{ fontSize: 13 }}>
+                  {automation.companyName?.trim() ? automation.companyName : '—'}
+                </TableCell>
+                <TableCell sx={{ maxWidth: 220 }}>
+                  <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                    {(automation.tags || []).length
+                      ? (automation.tags || []).map((tag) => (
+                          <Chip
+                            key={tag}
+                            size="small"
+                            variant="outlined"
+                            label={formatTagChipLabel(tag)}
+                            onClick={() => {
+                              if (!tagFilter.includes(tag)) {
+                                setTagFilter((prev) => [...prev, tag].slice(0, 5));
+                                setPage(0);
+                              }
+                            }}
+                          />
+                        ))
+                      : '—'}
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{ fontSize: 12 }}>
+                  {automation.targetUrl ? (
+                    <Stack direction="row" spacing={0.5}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => window.open(automation.targetUrl, '_blank', 'noopener,noreferrer')}
+                      >
+                        Open
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => copyTargetUrl(automation.targetUrl)}
+                      >
+                        {copiedTargetUrl === automation.targetUrl ? 'Copied' : 'Copy'}
+                      </Button>
+                    </Stack>
+                  ) : (
+                    '—'
+                  )}
                 </TableCell>
                 <TableCell sx={{ fontSize: 13 }}>{automation.lastRunTime || 'Never'}</TableCell>
                 <TableCell>{automation.rowsExtracted || 0}</TableCell>
                 <TableCell>
-                  <Chip size="small" label={automation.status} color={statusColor(automation.status)} />
-                </TableCell>
-                <TableCell>
-                  <Tooltip
-                    title={
-                      automation.schedule?.enabled && automation.schedule?.cron
-                        ? `Cron: ${automation.schedule.cron}`
-                        : automation.schedule?.cron && !automation.schedule?.enabled
-                          ? `Paused — cron: ${automation.schedule.cron}`
-                          : 'Click Schedule to set up automatic runs'
-                    }
-                  >
-                    <Chip
-                      size="small"
-                      variant={automation.schedule?.enabled ? 'filled' : 'outlined'}
-                      color={
-                        automation.schedule?.enabled
-                          ? 'primary'
-                          : automation.schedule?.cron && !automation.schedule?.enabled
-                            ? 'warning'
-                            : 'default'
-                      }
-                      label={
-                        automation.schedule?.enabled
-                          ? getScheduleLabel(automation.schedule.cron)
-                          : automation.schedule?.cron && !automation.schedule?.enabled
-                            ? `Paused · ${getScheduleLabel(automation.schedule.cron)}`
-                            : 'No schedule'
-                      }
-                      onClick={() => openScheduleModal(automation)}
-                      sx={{ cursor: 'pointer', fontWeight: automation.schedule?.enabled ? 600 : 400 }}
-                    />
-                  </Tooltip>
+                  <Stack spacing={0.5} alignItems="flex-start">
+                    <Chip size="small" label={automation.status} color={statusColor(automation.status)} />
+                    {automation.latestFailureReason === 'layout_change' ? (
+                      <Chip
+                        size="small"
+                        color="warning"
+                        variant="outlined"
+                        label={
+                          automation.latestFailureReasonSource === 'confirmed'
+                            ? 'Layout change'
+                            : 'Layout change?'
+                        }
+                        onClick={() => {
+                          if (automation.latestRunId) navigate(`/run/${automation.latestRunId}`);
+                        }}
+                        sx={{ cursor: automation.latestRunId ? 'pointer' : 'default' }}
+                      />
+                    ) : null}
+                  </Stack>
                 </TableCell>
                 <TableCell sx={{ fontSize: 13 }}>
                   {automation.schedule?.enabled && automation.schedule?.cron ? (() => {
@@ -637,6 +702,38 @@ export const DashboardPage = () => {
                       —
                     </Typography>
                   )}
+                </TableCell>
+                <TableCell>
+                  <Tooltip
+                    title={
+                      automation.schedule?.enabled && automation.schedule?.cron
+                        ? `Cron: ${automation.schedule.cron}`
+                        : automation.schedule?.cron && !automation.schedule?.enabled
+                          ? `Paused — cron: ${automation.schedule.cron}`
+                          : 'Click Schedule to set up automatic runs'
+                    }
+                  >
+                    <Chip
+                      size="small"
+                      variant={automation.schedule?.enabled ? 'filled' : 'outlined'}
+                      color={
+                        automation.schedule?.enabled
+                          ? 'primary'
+                          : automation.schedule?.cron && !automation.schedule?.enabled
+                            ? 'warning'
+                            : 'default'
+                      }
+                      label={
+                        automation.schedule?.enabled
+                          ? getScheduleLabel(automation.schedule.cron)
+                          : automation.schedule?.cron && !automation.schedule?.enabled
+                            ? `Paused · ${getScheduleLabel(automation.schedule.cron)}`
+                            : 'No schedule'
+                      }
+                      onClick={() => openScheduleModal(automation)}
+                      sx={{ cursor: 'pointer', fontWeight: automation.schedule?.enabled ? 600 : 400 }}
+                    />
+                  </Tooltip>
                 </TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
@@ -709,7 +806,7 @@ export const DashboardPage = () => {
             ))}
             {!isLoading && automations.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8}>
+                <TableCell colSpan={11}>
                   <Typography color="text.secondary">No automations yet.</Typography>
                 </TableCell>
               </TableRow>
@@ -736,13 +833,23 @@ export const DashboardPage = () => {
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField label="Name" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
+            <TextField
+              label="Company name"
+              required
+              value={form.companyName}
+              onChange={(event) => setForm((current) => ({ ...current, companyName: event.target.value }))}
+              helperText="Required"
+            />
+            <TagPicker value={createTags} onChange={setCreateTags} />
             <TextField label="Start URL" value={form.startUrl} onChange={(event) => setForm((current) => ({ ...current, startUrl: event.target.value }))} />
             <TextField label="Webhook URL" value={form.webhookUrl} onChange={(event) => setForm((current) => ({ ...current, webhookUrl: event.target.value }))} />
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-          <Button onClick={handleCreate} variant="contained">Create</Button>
+          <Button onClick={handleCreate} variant="contained" disabled={!form.companyName.trim() || !form.name.trim()}>
+            Create
+          </Button>
         </DialogActions>
       </Dialog>
 

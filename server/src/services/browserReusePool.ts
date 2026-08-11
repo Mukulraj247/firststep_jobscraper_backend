@@ -4,9 +4,20 @@ import { BrowserLaunchProfile, connectToRemoteBrowser } from '../browser-managem
 import { applyStealthOverrides } from './unblocker';
 import {
   getBrowserPoolIdleTtlMs,
+  getBrowserPoolMaxAgeMs,
+  getBrowserPoolMaxJobs,
+  getBrowserPoolRssLimitBytes,
   getDefaultMaxPagesPerBrowser,
   isLowMemoryMode,
+  shouldRetirePooledBrowser,
+  shouldRetirePoolForRss,
 } from '../utils/memoryMode';
+import {
+  forceCloseBrowser,
+  registerBrowserPid,
+  setOrphanReaperPoolEmptyCheck,
+  killUntrackedPlaywrightChromium,
+} from './browserProcess';
 
 interface PooledBrowserEntry {
   key: string;
@@ -15,6 +26,10 @@ interface PooledBrowserEntry {
   maxPages: number;
   lastUsedAt: number;
   closing: boolean;
+  acquiredAt: number;
+  createdAt: number;
+  /** Successful page leases served from this browser process. */
+  jobsServed: number;
 }
 
 interface PooledPageLease {
@@ -37,7 +52,16 @@ interface AcquirePooledPageOptions {
 
 const pooledBrowsers = new Map<string, PooledBrowserEntry>();
 const IDLE_BROWSER_TTL_MS = getBrowserPoolIdleTtlMs();
+const MAX_JOBS = getBrowserPoolMaxJobs();
+const MAX_AGE_MS = getBrowserPoolMaxAgeMs();
+const RSS_LIMIT_BYTES = getBrowserPoolRssLimitBytes();
 const CLEANUP_INTERVAL_MS = parseInt(process.env.BROWSER_POOL_CLEANUP_INTERVAL_MS || '15000', 10);
+/** Force-evict browsers held past job timeout (+ grace) even if activePages > 0. */
+const STALE_IN_USE_MS = parseInt(
+  process.env.BROWSER_POOL_STALE_IN_USE_MS ||
+    String(Math.max(parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10), 120000) + 60000),
+  10
+);
 
 let cleanupTimer: NodeJS.Timeout | null = null;
 
@@ -67,35 +91,81 @@ const shouldBlockRequest = (url: string, resourceType: string) => {
   if (resourceType === 'image' || resourceType === 'font' || resourceType === 'media') {
     return true;
   }
-  // Extra cut on constrained hosts: stylesheets are large and rarely needed for
-  // CSS-selector list extraction (text/href still resolve without CSS).
   if (isLowMemoryMode() && resourceType === 'stylesheet') {
     return true;
   }
   return adAndAnalyticsPatterns.some((pattern) => url.includes(pattern));
 };
 
+setOrphanReaperPoolEmptyCheck(() => pooledBrowsers.size === 0);
+
+async function retireEntry(key: string, entry: PooledBrowserEntry, reason: string): Promise<void> {
+  if (entry.closing) return;
+  entry.closing = true;
+  logger.log('info', `Retiring pooled browser ${key} (${reason})`);
+  try {
+    await forceCloseBrowser(entry.browser, `retire:${key}`);
+  } finally {
+    pooledBrowsers.delete(key);
+  }
+}
+
 const ensureCleanupLoop = () => {
   if (cleanupTimer) return;
   cleanupTimer = setInterval(async () => {
     const now = Date.now();
-    for (const [key, entry] of pooledBrowsers.entries()) {
-      if (entry.closing || entry.activePages > 0) {
-        continue;
-      }
-      if (now - entry.lastUsedAt < IDLE_BROWSER_TTL_MS) {
-        continue;
-      }
-      entry.closing = true;
-      try {
-        await entry.browser.close();
-      } catch (error: any) {
-        logger.log('warn', `Failed to close idle pooled browser ${key}: ${error.message}`);
-      } finally {
-        pooledBrowsers.delete(key);
+    const rss = process.memoryUsage().rss;
+    if (shouldRetirePoolForRss(rss, RSS_LIMIT_BYTES) && pooledBrowsers.size > 0) {
+      logger.log(
+        'warn',
+        `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit ${Math.round(RSS_LIMIT_BYTES / 1048576)}MiB — retiring all ${pooledBrowsers.size} pooled browser(s)`
+      );
+      for (const [key, entry] of [...pooledBrowsers.entries()]) {
+        if (entry.closing) continue;
+        await retireEntry(key, entry, `rss-limit rss=${rss}`);
       }
     }
+
+    for (const [key, entry] of pooledBrowsers.entries()) {
+      if (entry.closing) continue;
+
+      const heldMs = now - (entry.acquiredAt || entry.lastUsedAt);
+      const stuckInUse = entry.activePages > 0 && heldMs > STALE_IN_USE_MS;
+      const idleExpired =
+        entry.activePages === 0 &&
+        IDLE_BROWSER_TTL_MS >= 0 &&
+        now - entry.lastUsedAt >= IDLE_BROWSER_TTL_MS;
+      const ageExpired =
+        entry.activePages === 0 &&
+        shouldRetirePooledBrowser({
+          jobsServed: entry.jobsServed,
+          createdAt: entry.createdAt,
+          now,
+          maxJobs: MAX_JOBS,
+          maxAgeMs: MAX_AGE_MS,
+        });
+
+      if (!stuckInUse && !idleExpired && !ageExpired) continue;
+
+      if (stuckInUse) {
+        logger.log(
+          'warn',
+          `Force-evicting stuck pooled browser ${key} (activePages=${entry.activePages}, held ${Math.round(heldMs / 1000)}s > ${Math.round(STALE_IN_USE_MS / 1000)}s)`
+        );
+      }
+
+      await retireEntry(
+        key,
+        entry,
+        stuckInUse ? 'stuck-in-use' : ageExpired ? 'max-age-or-jobs' : 'idle-ttl'
+      );
+    }
+
+    if (pooledBrowsers.size === 0) {
+      await killUntrackedPlaywrightChromium().catch(() => {});
+    }
   }, CLEANUP_INTERVAL_MS);
+  if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
 };
 
 async function getOrCreateBrowser(options: AcquirePooledPageOptions): Promise<PooledBrowserEntry> {
@@ -103,23 +173,51 @@ async function getOrCreateBrowser(options: AcquirePooledPageOptions): Promise<Po
   const key = buildPoolKey(options.profile);
   const maxPages = options.maxPagesPerBrowser || getDefaultMaxPagesPerBrowser();
 
-  // Low-memory: never reuse a Chromium process across jobs — reuse often leaves
-  // renderer RSS elevated and can briefly stack two browsers during fallbacks.
   if (!isLowMemoryMode()) {
     const existing = pooledBrowsers.get(key);
     if (existing && !existing.closing && existing.activePages < existing.maxPages) {
-      existing.lastUsedAt = Date.now();
-      return existing;
+      const rss = process.memoryUsage().rss;
+      if (shouldRetirePoolForRss(rss, RSS_LIMIT_BYTES)) {
+        logger.log(
+          'warn',
+          `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit before reuse — retiring pooled browsers`
+        );
+        for (const [k, e] of [...pooledBrowsers.entries()]) {
+          if (e.closing) continue;
+          await retireEntry(k, e, `rss-limit-before-reuse rss=${rss}`);
+        }
+      } else if (
+        shouldRetirePooledBrowser({
+          jobsServed: existing.jobsServed,
+          createdAt: existing.createdAt,
+          maxJobs: MAX_JOBS,
+          maxAgeMs: MAX_AGE_MS,
+        })
+      ) {
+        await retireEntry(
+          key,
+          existing,
+          `cap jobsServed=${existing.jobsServed} ageMs=${Date.now() - existing.createdAt}`
+        );
+      } else {
+        existing.lastUsedAt = Date.now();
+        return existing;
+      }
     }
   }
 
   const browser = await connectToRemoteBrowser(undefined, options.profile);
+  registerBrowserPid(browser);
+  const now = Date.now();
   const created: PooledBrowserEntry = {
     key,
     browser,
     activePages: 0,
     maxPages,
-    lastUsedAt: Date.now(),
+    lastUsedAt: now,
+    acquiredAt: now,
+    createdAt: now,
+    jobsServed: 0,
     closing: false,
   };
   pooledBrowsers.set(key, created);
@@ -131,6 +229,7 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
   const entry = await getOrCreateBrowser(options);
   entry.activePages += 1;
   entry.lastUsedAt = Date.now();
+  entry.acquiredAt = Date.now();
 
   try {
     const locale = options.profile?.locale || 'en-US';
@@ -141,9 +240,6 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
       userAgent: options.profile?.userAgent,
       locale,
       viewport,
-      // Accept-Language aligned with locale — Amazon Jobs, LinkedIn and
-      // similar bot-filters look for the mismatch between navigator.language
-      // (set via stealth) and the HTTP Accept-Language header.
       extraHTTPHeaders: {
         'Accept-Language': `${locale},${locale.split('-')[0]};q=0.9`,
       },
@@ -166,6 +262,7 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
     }
 
     const page = await context.newPage();
+    entry.jobsServed += 1;
     return {
       key: entry.key,
       browser: entry.browser,
@@ -175,6 +272,8 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
   } catch (error) {
     entry.activePages = Math.max(0, entry.activePages - 1);
     entry.lastUsedAt = Date.now();
+    // Sick browser after create/context failure — evict the whole process.
+    await evictBrowserFromPool(entry.key).catch(() => {});
     throw error;
   }
 }
@@ -182,9 +281,13 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
 export async function releasePooledPage(lease: PooledPageLease | null | undefined): Promise<void> {
   if (!lease) return;
   try {
-    if (!lease.page.isClosed()) {
-      lease.page.removeAllListeners();
-      await lease.page.close({ runBeforeUnload: false }).catch(() => {});
+    try {
+      if (!lease.page.isClosed()) {
+        lease.page.removeAllListeners();
+        await lease.page.close({ runBeforeUnload: false }).catch(() => {});
+      }
+    } catch {
+      /* page already dead */
     }
   } finally {
     await lease.context.close().catch(() => {});
@@ -192,8 +295,17 @@ export async function releasePooledPage(lease: PooledPageLease | null | undefine
     if (entry) {
       entry.activePages = Math.max(0, entry.activePages - 1);
       entry.lastUsedAt = Date.now();
-      // Free Chromium immediately when idle TTL is 0 or low-memory mode is on.
       if (entry.activePages === 0 && (isLowMemoryMode() || IDLE_BROWSER_TTL_MS === 0)) {
+        await evictBrowserFromPool(lease.key);
+      } else if (
+        entry.activePages === 0 &&
+        shouldRetirePooledBrowser({
+          jobsServed: entry.jobsServed,
+          createdAt: entry.createdAt,
+          maxJobs: MAX_JOBS,
+          maxAgeMs: MAX_AGE_MS,
+        })
+      ) {
         await evictBrowserFromPool(lease.key);
       }
     }
@@ -205,9 +317,7 @@ export async function evictBrowserFromPool(key: string): Promise<void> {
   if (!entry) return;
   entry.closing = true;
   try {
-    await entry.browser.close();
-  } catch (error: any) {
-    logger.log('warn', `Failed to evict pooled browser ${key}: ${error.message}`);
+    await forceCloseBrowser(entry.browser, `evict:${key}`);
   } finally {
     pooledBrowsers.delete(key);
   }
@@ -218,12 +328,23 @@ export async function closeBrowserReusePool(): Promise<void> {
     clearInterval(cleanupTimer);
     cleanupTimer = null;
   }
-  for (const [key, entry] of pooledBrowsers.entries()) {
+  const keys = [...pooledBrowsers.keys()];
+  for (const key of keys) {
+    const entry = pooledBrowsers.get(key);
+    if (!entry) continue;
+    entry.closing = true;
     try {
-      await entry.browser.close();
-    } catch (error: any) {
-      logger.log('warn', `Failed to close pooled browser ${key}: ${error.message}`);
+      await forceCloseBrowser(entry.browser, `shutdown:${key}`);
+    } finally {
+      pooledBrowsers.delete(key);
     }
   }
   pooledBrowsers.clear();
+  await killUntrackedPlaywrightChromium().catch(() => {});
 }
+
+export function getPooledBrowserCount(): number {
+  return pooledBrowsers.size;
+}
+
+export { shouldRetirePooledBrowser };

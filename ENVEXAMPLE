@@ -31,6 +31,7 @@ ADMIN_PASSWORD=change-me-admin-password
 # Whitelist your server IP (or 0.0.0.0/0 for testing) under Network Access.
 # Example: MONGODB_URI=mongodb+srv://USER:PASS@cluster0.xxxxx.mongodb.net/maxun?retryWrites=true&w=majority
 MONGODB_URI=mongodb://localhost:27017/maxun
+# DNS_SERVERS=8.8.8.8,1.1.1.1           # optional; omit to use system / VPC DNS (recommended on DigitalOcean)
 
 # Optional Firebase Storage (run screenshots / binary artifacts). Omit all of these to run without cloud object storage.
 # 1) Create a Firebase project, enable Storage, create a service account with Storage access and download JSON.
@@ -63,8 +64,21 @@ LOGS_PATH=server/logs                   # Directory for Winston log files (use a
 # Set SCRAPER_WORKER_CONCURRENCY=1 (prevents memory crashes / OOM on 512 MB RAM)
 # Set SCRAPER_JOB_TIMEOUT_MS=60000 (prevents hanging scraper tasks)
 RUN_EMBEDDED_WORKERS=false              # true = embedded in API process; false = separate `npm run worker` process
+# API_RATE_LIMIT_MAX=600                # Max /api requests per IP per 15 minutes (raise for local dev, e.g. 5000)
 SCRAPER_WORKER_CONCURRENCY=3            # Concurrent scraper jobs per worker process (use 1 for Render Free tier)
-SCRAPER_JOB_TIMEOUT_MS=120000           # Per-run timeout in ms (use 60000 for Render Free tier)
+SCRAPER_JOB_TIMEOUT_MS=120000           # Per-run timeout in ms (use 60000 for Render Free tier / 1GB Droplets)
+# LOW_MEMORY_MODE=true                  # Close Chromium after each job; lean launch flags (recommended on ≤1GB)
+# CHROMIUM_ORPHAN_REAPER=true           # Kill leftover chrome-headless-shell when the pool is empty (default on)
+# CHROMIUM_ORPHAN_REAPER_MS=60000       # How often to scan for orphan Chromium processes
+# BROWSER_POOL_STALE_IN_USE_MS=180000   # Force-evict pooled browsers stuck mid-job past this age
+# BROWSER_POOL_MAX_PAGES=3              # Concurrent pages per pooled browser (1 in LOW_MEMORY_MODE)
+# BROWSER_POOL_IDLE_TTL_MS=90000        # Close idle Chromium after this (0 = after each job; default 0 in low-mem)
+# BROWSER_POOL_MAX_JOBS=20              # Retire browser after N successful page leases (default 1 in low-mem)
+# BROWSER_POOL_MAX_AGE_MS=900000        # Retire browser after wall-clock age (15m; 5m in low-mem)
+# SCHEDULE_CATCHUP_GRACE_MS=120000      # Wait this long past due before catch-up (avoid racing Agenda)
+# SCHEDULE_CATCHUP_INTERVAL_MS=120000   # How often the missed-schedule sweep runs
+# SCHEDULE_CATCHUP_MAX_ROBOTS=40        # Max catch-up enqueues per sweep pass
+# SCRAPE_DRAIN_MS=90000                 # SIGTERM drain wait before force-unlock (keep < PM2 kill_timeout)
 
 # Optional Google OAuth settings for Google Sheet Integration
 GOOGLE_CLIENT_ID=your_google_client_id
@@ -99,3 +113,22 @@ BROWSER_HEALTH_EXTERNAL_PORT=3002
 # Optional proxy rotation settings for scraper runs
 DEFAULT_PROXY_URL=
 PROXY_POOL=
+
+# -----------------------------------------------------------------------------
+# Job board enrichment (detail-page scrape.do / ATS → maxun_job_board)
+# Run as a separate PM2 process: npm run worker:enrichment
+# Never launches Chromium — keep this off the API event loop.
+# -----------------------------------------------------------------------------
+# SCRAPE_DO_TOKEN=your_scrape_do_token
+# SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause enrichment when daily credits hit this
+# SCRAPE_DO_GEO=northamerica           # Used only on tier-3 (super+render) requests
+# SCRAPE_PROFILE_REPROBE_DAYS=30       # Re-try cheaper tiers after this many days
+# JOB_ENRICHMENT_CONCURRENCY=5         # In-flight enrichments per process
+# JOB_ENRICHMENT_BATCH=20              # Docs claimed per pass
+# JOB_ENRICHMENT_RATE_PER_MIN=12       # Token-bucket pace (~4k/day average is ~2.8/min)
+# JOB_ENRICHMENT_MAX_ATTEMPTS=4
+# JOB_BOARD_STALE_DAYS=14              # Skip re-fetch when board row is fresher than this
+# JOB_BOARD_MIN_DESC_CHARS=400         # List rows this complete become ready with 0 credits
+# MAX_PARSE_BYTES=1572864              # Cap HTML buffered/parsed (~1.5 MB)
+# UV_THREADPOOL_SIZE=8                 # Set on the enrichment process for gzip concurrency
+

@@ -2,6 +2,7 @@ import { Page } from 'playwright-core';
 import fetch from 'cross-fetch';
 import logger from '../logger';
 import ExtractedData from '../models/ExtractedData';
+import { resolveFailureReason, FAILURE_REASON_LABELS } from '../utils/failureReason';
 import Robot, { IRobot } from '../models/Robot';
 import Run, { IRun } from '../models/Run';
 import { ListExtractionConfig } from './listExtractor';
@@ -13,6 +14,11 @@ import {
   hasCanonicalExtractedShape,
 } from './canonicalJobRecord';
 import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
+import {
+  isCareersJobDetailUrl,
+  isGenericJobTitle,
+  isKnownPhenomCareersHost,
+} from './jobPageParser';
 
 export interface AutomationRuntimeConfig {
   schedule?: {
@@ -316,14 +322,28 @@ export const extractRowsFromOutput = (
 export const countRowsFromOutput = (serializableOutput: SerializableOutput, config?: AutomationRuntimeConfig): number =>
   extractRowsFromOutput(serializableOutput, config).length;
 
-export const buildDashboardStatus = (run?: any): 'pending' | 'completed' | 'failed' | 'queued' | 'running' | 'scheduled' | 'aborted' | 'aborting' | 'idle' => {
+export const buildDashboardStatus = (run?: any): 'pending' | 'completed' | 'failed' | 'dead' | 'queued' | 'running' | 'scheduled' | 'aborted' | 'aborting' | 'idle' => {
   if (!run) return 'idle';
-  if (['pending', 'completed', 'success', 'failed', 'queued', 'running', 'scheduled', 'aborted', 'aborting'].includes(run.status)) {
+  if (['pending', 'completed', 'success', 'failed', 'dead', 'queued', 'running', 'scheduled', 'aborted', 'aborting'].includes(run.status)) {
     if (run.status === 'success') return 'completed';
     return run.status;
   }
   return 'idle';
 };
+
+function getRobotCompanyName(robot?: any): string {
+  const meta = robot?.recording_meta || {};
+  const fromMeta = typeof meta.companyName === 'string' ? meta.companyName.trim() : '';
+  if (fromMeta) return fromMeta;
+  const fromSaas =
+    typeof meta.saasConfig?.companyName === 'string' ? meta.saasConfig.companyName.trim() : '';
+  return fromSaas || '';
+}
+
+function getRobotScoutId(robot?: any): string | null {
+  const id = robot?.recording_meta?.scoutId;
+  return typeof id === 'string' && id.trim() ? id.trim().toUpperCase() : null;
+}
 
 /**
  * Keys removed from row `data` when an override marks the column as omitted.
@@ -598,6 +618,9 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
 
     // Cookie purpose description sentence captured as a title.
     if (isCookiePurposeSentence(title)) return false;
+
+    // Marketing / hub titles — keep only when URL is a real job detail (title recovered later).
+    if (isGenericJobTitle(title) && !(url && isCareersJobDetailUrl(url))) return false;
   }
 
   // Description that's clearly a cookie purpose statement, combined with weak URL signal.
@@ -626,6 +649,9 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
 
     // SIA Partners-specific: /our-capabilities/ pages are service pages, not jobs.
     if (/sia-partners\.com/i.test(url) && /\/our-capabilities\//i.test(url)) return false;
+
+    // Ford / Carrier / Toyota careers hosts: only keep real job-detail URLs.
+    if (isKnownPhenomCareersHost(url) && !isCareersJobDetailUrl(url)) return false;
   }
 
   return true;
@@ -666,6 +692,23 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
     const CHUNK_SIZE = 500;
     for (let index = 0; index < payload.length; index += CHUNK_SIZE) {
       await ExtractedData.insertMany(payload.slice(index, index + CHUNK_SIZE));
+    }
+
+    // Non-blocking board enrichment enqueue (dedup + completeness gate).
+    try {
+      const { enqueueJobBoardEnrichments } = await import('./jobBoardEnrichment');
+      const ownerId = run.runByUserId ?? robot.userId;
+      await enqueueJobBoardEnrichments({
+        ownerId,
+        robotMetaId: run.robotMetaId,
+        runId: run.runId,
+        rows: canonicalRows,
+      });
+    } catch (enrichErr: any) {
+      logger.log(
+        'warn',
+        `Failed to enqueue job-board enrichments for run ${run.runId}: ${enrichErr?.message || enrichErr}`
+      );
     }
   }
 
@@ -743,11 +786,30 @@ export const applyAutomationRuntimeConfig = async (page: Page, robot: any): Prom
 export const enrichRunForSaas = async (run: any, robot?: any) => {
   const config = robot ? getAutomationConfig(robot) : undefined;
   const extractedRowsCount = await ExtractedData.countDocuments({ runId: run.runId });
+  const rowsExtracted =
+    typeof run.rowsExtracted === 'number'
+      ? run.rowsExtracted
+      : extractedRowsCount || countRowsFromOutput(run.serializableOutput, config);
+  const resolved = resolveFailureReason({
+    failureReason: run.failureReason,
+    failureReasonSource: run.failureReasonSource,
+    errorMessage: run.errorMessage,
+  });
   return {
     ...run,
     status: buildDashboardStatus(run),
     durationMs: computeRunDurationMs(run.startedAt, run.finishedAt),
-    rowsExtracted: extractedRowsCount || countRowsFromOutput(run.serializableOutput, config),
+    rowsExtracted,
+    anomaly: run.anomaly || null,
+    anomalyMeta: run.anomalyMeta || null,
+    scoutId: run.scoutId || null,
+    failureReason: resolved.failureReason,
+    failureReasonSource: resolved.failureReasonSource,
+    failureReasonLabel:
+      resolved.failureReason &&
+      FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
+        ? FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
+        : resolved.failureReason,
     screenshots: run.binaryOutput ? Object.entries(run.binaryOutput).map(([key, value]) => ({ key, value })) : [],
   };
 };
@@ -768,17 +830,36 @@ export const enrichRunForList = (
     ...rest
   } = run || {};
   const durationMs = computeRunDurationMs(run?.startedAt, run?.finishedAt);
+  const resolved = resolveFailureReason({
+    failureReason: run?.failureReason,
+    failureReasonSource: run?.failureReasonSource,
+    errorMessage: run?.errorMessage,
+  });
   return {
     ...rest,
     status: buildDashboardStatus(run),
     durationMs,
     duration: durationMs,
-    rowsExtracted: extractedCount,
+    rowsExtracted: typeof run?.rowsExtracted === 'number' ? run.rowsExtracted : extractedCount,
+    anomaly: run?.anomaly || null,
+    anomalyMeta: run?.anomalyMeta || null,
+    failureReason: resolved.failureReason,
+    failureReasonSource: resolved.failureReasonSource,
+    failureReasonLabel:
+      resolved.failureReason &&
+      FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
+        ? FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
+        : resolved.failureReason,
+    errorMessage: run?.errorMessage || '',
+    retryCount: typeof run?.retryCount === 'number' ? run.retryCount : 0,
     // Keep empty shells so older UI code that reads these keys does not crash.
     serializableOutput: {},
     binaryOutput: {},
     log: '',
     name: run?.name || robot?.recording_meta?.name || 'Run',
+    companyName: getRobotCompanyName(robot),
+    scoutId: getRobotScoutId(robot),
+    automationId: run?.robotMetaId || robot?.recording_meta?.id || null,
   };
 };
 

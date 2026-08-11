@@ -4,6 +4,7 @@ import type { ListExtractionState, FieldConfig, SemanticType, PaginationConfig, 
 import { configScheduleFromDraft } from '../../../shared/types';
 import { ExtensionScheduleForm, EXTENSION_SCHEDULE_OPTIONS, isValidCron } from '../ExtensionScheduleForm';
 import { ExtensionSchedulePicker } from '../ExtensionSchedulePicker';
+import { ExtensionTagPicker } from '../ExtensionTagPicker';
 
 interface Props {
   state: ListExtractionState;
@@ -105,8 +106,17 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
 
   const [showSendToMaxunModal, setShowSendToMaxunModal] = useState(false);
   const [sendToMaxunName, setSendToMaxunName] = useState('');
+  const [sendToMaxunScoutId, setSendToMaxunScoutId] = useState('');
+  const [sendToMaxunCompany, setSendToMaxunCompany] = useState('');
+  const [sendToMaxunTags, setSendToMaxunTags] = useState<string[]>([]);
   const [sendToMaxunError, setSendToMaxunError] = useState<string | null>(null);
   const [sendToMaxunSubmitting, setSendToMaxunSubmitting] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    id: string;
+    scoutId?: string | null;
+    name?: string;
+    targetUrl?: string;
+  } | null>(null);
 
   const getFields = useCallback(() => {
     return editingField ? editedFields : state.fields;
@@ -190,9 +200,63 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
     setSendToMaxunName(
       savedBackendAutomationId && savedName ? savedName : makeUniqueAutomationName()
     );
+    setSendToMaxunScoutId(
+      (state.savedAutomation?.scoutId || '').toString().trim().toUpperCase()
+    );
+    setSendToMaxunCompany((state.savedAutomation?.companyName || '').toString());
+    setPendingUpdate(null);
     setSendToMaxunError(null);
     setShowSendToMaxunModal(true);
-  }, [savedBackendAutomationId, state.savedAutomation?.name, makeUniqueAutomationName]);
+  }, [
+    savedBackendAutomationId,
+    state.savedAutomation?.name,
+    state.savedAutomation?.scoutId,
+    state.savedAutomation?.companyName,
+    makeUniqueAutomationName,
+  ]);
+
+  const finishSaveSuccess = (response: any) => {
+    setShowSendToMaxunModal(false);
+    setPendingUpdate(null);
+    const automationId =
+      response?.automationId ||
+      response?.result?.automation?.id ||
+      response?.result?.id ||
+      response?.automation?.id ||
+      null;
+    if (automationId) {
+      setLocalAutomationId(automationId);
+      void sendMessage(MSG.GET_AUTOMATION_STATUS, { automationId }).catch(() => undefined);
+    }
+  };
+
+  const performSave = async (opts: {
+    automationId?: string;
+    scoutId?: string;
+    elementsOnly?: boolean;
+  }) => {
+    const trimmed = sendToMaxunName.trim();
+    const fieldsToSave = editingField ? editedFields : state.fields;
+    const response = await withTimeout(
+      sendMessage(MSG.SAVE_TO_BACKEND, {
+        automationId: opts.automationId,
+        scoutId: opts.scoutId || undefined,
+        automationName: trimmed,
+        companyName: sendToMaxunCompany.trim(),
+        tags: sendToMaxunTags,
+        listSelector: state.listSelector,
+        fields: fieldsToSave,
+        pagination: state.pagination,
+        previewRows: state.previewRows,
+        previewUrl: state.previewUrl,
+        rowContext: state.rowContext,
+        elementsOnly: opts.elementsOnly === true,
+      }),
+      SAVE_TO_BACKEND_TIMEOUT_MS,
+      'Save to Scout-X'
+    );
+    finishSaveSuccess(response);
+  };
 
   const handleSaveToBackend = async () => {
     const trimmed = sendToMaxunName.trim();
@@ -200,8 +264,17 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
       setSendToMaxunError('Enter a name for this automation.');
       return;
     }
+    if (!sendToMaxunCompany.trim()) {
+      setSendToMaxunError('Company name is required.');
+      return;
+    }
     if (trimmed.length > 200) {
       setSendToMaxunError('Use 200 characters or fewer.');
+      return;
+    }
+    const scoutDraft = sendToMaxunScoutId.trim().toUpperCase();
+    if (scoutDraft && !/^SX\d{2}[A-Z]{2}\d{2}$/.test(scoutDraft)) {
+      setSendToMaxunError('Scout-X ID must look like SX12AB34 (SX + 2 digits + 2 letters + 2 digits).');
       return;
     }
     try {
@@ -219,35 +292,87 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
           return;
         }
       }
-      const fieldsToSave = editingField ? editedFields : state.fields;
-      const response = await withTimeout(
-        sendMessage(MSG.SAVE_TO_BACKEND, {
-          automationId: savedBackendAutomationId || undefined,
-          automationName: trimmed,
-          listSelector: state.listSelector,
-          fields: fieldsToSave,
-          pagination: state.pagination,
-          previewRows: state.previewRows,
-          rowContext: state.rowContext,
-        }),
-        SAVE_TO_BACKEND_TIMEOUT_MS,
-        'Save to Scout-X'
-      );
-      setShowSendToMaxunModal(false);
-      const automationId =
-        response?.automationId ||
-        response?.result?.automation?.id ||
-        response?.result?.id ||
-        response?.automation?.id ||
-        null;
-      if (automationId) {
-        setLocalAutomationId(automationId);
-        // Do not await — a slow/hung status call used to keep "Sending…" forever
-        void sendMessage(MSG.GET_AUTOMATION_STATUS, { automationId }).catch(() => undefined);
+
+      // Already bound to a backend robot in this session → normal full update.
+      if (savedBackendAutomationId && !scoutDraft) {
+        await performSave({ automationId: savedBackendAutomationId });
+        return;
       }
+
+      // Typed Scout-X ID: update that robot (elements only) or create with reuse after delete.
+      if (scoutDraft) {
+        const lookup = await sendMessage(MSG.LOOKUP_AUTOMATION, { scoutId: scoutDraft });
+        const found = lookup?.result?.found && lookup?.result?.automation;
+        if (found) {
+          setPendingUpdate({
+            id: lookup.result.automation.id,
+            scoutId: lookup.result.automation.scoutId || scoutDraft,
+            name: lookup.result.automation.name,
+            targetUrl: lookup.result.automation.targetUrl,
+          });
+          setSendToMaxunSubmitting(false);
+          return;
+        }
+        await performSave({ scoutId: scoutDraft });
+        return;
+      }
+
+      // No ID: check exact target URL for duplicates before create.
+      const previewUrl = state.previewUrl;
+      if (previewUrl && /^https?:\/\//i.test(previewUrl)) {
+        const lookup = await sendMessage(MSG.LOOKUP_AUTOMATION, { url: previewUrl });
+        const found = lookup?.result?.found && lookup?.result?.automation;
+        if (found) {
+          const auto = lookup.result.automation;
+          setSendToMaxunScoutId((auto.scoutId || '').toString().toUpperCase());
+          setPendingUpdate({
+            id: auto.id,
+            scoutId: auto.scoutId,
+            name: auto.name,
+            targetUrl: auto.targetUrl,
+          });
+          setSendToMaxunSubmitting(false);
+          return;
+        }
+      }
+
+      await performSave({});
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to save';
-      setSendToMaxunError(msg);
+      const code = (err as any)?.code;
+      const automation = (err as any)?.automation;
+      if (
+        (code === 'DUPLICATE_TARGET_URL' || code === 'SCOUT_ID_EXISTS') &&
+        automation?.id
+      ) {
+        setSendToMaxunScoutId((automation.scoutId || '').toString().toUpperCase());
+        setPendingUpdate({
+          id: automation.id,
+          scoutId: automation.scoutId,
+          name: automation.name,
+          targetUrl: automation.targetUrl,
+        });
+        setSendToMaxunError(null);
+      } else {
+        setSendToMaxunError(msg);
+      }
+    } finally {
+      setSendToMaxunSubmitting(false);
+    }
+  };
+
+  const handleConfirmUpdate = async () => {
+    if (!pendingUpdate?.id) return;
+    try {
+      setSendToMaxunSubmitting(true);
+      setSendToMaxunError(null);
+      await performSave({
+        automationId: pendingUpdate.id,
+        scoutId: pendingUpdate.scoutId || sendToMaxunScoutId.trim().toUpperCase() || undefined,
+        elementsOnly: true,
+      });
+    } catch (err) {
+      setSendToMaxunError(err instanceof Error ? err.message : 'Failed to update');
     } finally {
       setSendToMaxunSubmitting(false);
     }
@@ -605,6 +730,19 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
           {previewRows.length > 0 && (
             <div style={{ ...styles.card, marginTop: 8 }}>
               <h3 style={styles.cardTitle}>Preview ({previewRows.length} rows)</h3>
+              {state.previewUrl ? (
+                <p style={{ fontSize: 12, color: '#5f6368', margin: '0 0 8px', lineHeight: 1.4 }}>
+                  Scheduled runs will open:{' '}
+                  <code style={{ wordBreak: 'break-all' }}>{state.previewUrl}</code>
+                  {!/[?#]/.test(state.previewUrl) ? (
+                    <> Filters that don’t change the URL may not apply on scheduled runs.</>
+                  ) : null}
+                </p>
+              ) : (
+                <p style={{ fontSize: 12, color: '#5f6368', margin: '0 0 8px', lineHeight: 1.4 }}>
+                  Filters that don’t change the page URL may not apply on scheduled runs.
+                </p>
+              )}
               <div style={styles.previewTable}>
                 <table style={styles.table}>
                   <thead>
@@ -741,15 +879,15 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
                 <div style={styles.sendModalHeader}>
                   <h3 style={{ ...styles.modalTitle, marginBottom: 8 }}>Send to Scout-X</h3>
                   <p style={{ ...styles.muted, marginTop: 0, marginBottom: 10, lineHeight: 1.45, fontSize: 12 }}>
-                    Each automation needs a <strong>unique name</strong> on your server. If you already saved this
-                    extraction, the same name updates that automation.
+                    Each automation needs a <strong>unique name</strong> on your server. Target URLs must be unique
+                    (exact match). Optional Scout-X ID lets you update an existing scrape after a layout change.
                   </p>
                   <label style={styles.label}>Automation name</label>
                   <input
                     style={{ ...styles.input, marginBottom: 8 }}
                     value={sendToMaxunName}
                     onChange={(e) => setSendToMaxunName(e.target.value)}
-                    disabled={sendToMaxunSubmitting}
+                    disabled={sendToMaxunSubmitting || !!pendingUpdate}
                     maxLength={200}
                     autoFocus
                     placeholder="e.g. Amazon Jobs — Bangalore"
@@ -758,45 +896,111 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
                     <button
                       type="button"
                       onClick={() => setSendToMaxunName(makeUniqueAutomationName())}
-                      disabled={sendToMaxunSubmitting}
+                      disabled={sendToMaxunSubmitting || !!pendingUpdate}
                       style={styles.linkBtn}
                     >
                       Suggest unique name
                     </button>
                     <span style={{ fontSize: 10, color: '#6b7280' }}>{sendToMaxunName.length}/200</span>
                   </div>
+                  <label style={styles.label}>Company name (required)</label>
+                  <input
+                    style={{ ...styles.input, marginBottom: 8 }}
+                    value={sendToMaxunCompany}
+                    onChange={(e) => setSendToMaxunCompany(e.target.value)}
+                    disabled={sendToMaxunSubmitting || !!pendingUpdate}
+                    maxLength={120}
+                    placeholder="e.g. EY"
+                    required
+                  />
+                  <ExtensionTagPicker
+                    value={sendToMaxunTags}
+                    onChange={setSendToMaxunTags}
+                    disabled={sendToMaxunSubmitting || !!pendingUpdate}
+                  />
+                  <label style={styles.label}>Scout-X ID (optional)</label>
+                  <input
+                    style={{ ...styles.input, marginBottom: 8, fontFamily: 'ui-monospace, monospace' }}
+                    value={sendToMaxunScoutId}
+                    onChange={(e) => setSendToMaxunScoutId(e.target.value.toUpperCase())}
+                    disabled={sendToMaxunSubmitting || !!pendingUpdate}
+                    maxLength={8}
+                    placeholder="SX12AB34"
+                  />
+                  {pendingUpdate && (
+                    <div
+                      style={{
+                        ...styles.error,
+                        background: '#fff7ed',
+                        border: '1px solid #fdba74',
+                        color: '#9a3412',
+                        marginBottom: 8,
+                      }}
+                    >
+                      Automation already exists
+                      {pendingUpdate.scoutId ? ` (${pendingUpdate.scoutId})` : ''}
+                      {pendingUpdate.name ? `: ${pendingUpdate.name}` : ''}.
+                      Update elements only (selectors) and keep name, schedule, and history?
+                    </div>
+                  )}
                   {sendToMaxunError && (
                     <div style={{ ...styles.error, marginBottom: 0 }}>{sendToMaxunError}</div>
                   )}
                 </div>
-                <div className="scoutx-modal-scroll" style={styles.sendModalScroll}>
-                  <ExtensionScheduleForm
-                    compact
-                    layout="modal"
-                    value={state.cloudScheduleDraft}
-                    onChange={(d) => void handleScheduleDraftChange(d)}
-                  />
-                </div>
+                {!pendingUpdate && (
+                  <div className="scoutx-modal-scroll" style={styles.sendModalScroll}>
+                    <ExtensionScheduleForm
+                      compact
+                      layout="modal"
+                      value={state.cloudScheduleDraft}
+                      onChange={(d) => void handleScheduleDraftChange(d)}
+                    />
+                  </div>
+                )}
                 <div style={styles.sendModalFooter}>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveToBackend()}
-                      disabled={sendToMaxunSubmitting}
-                      style={{ ...styles.primaryBtn, flex: 1, marginBottom: 0 }}
-                    >
-                      {sendToMaxunSubmitting ? 'Sending…' : 'Send'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSendToMaxunSubmitting(false);
-                        setShowSendToMaxunModal(false);
-                      }}
-                      style={{ ...styles.secondaryBtn, flex: 1, marginBottom: 0 }}
-                    >
-                      Cancel
-                    </button>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {pendingUpdate ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleConfirmUpdate()}
+                          disabled={sendToMaxunSubmitting}
+                          style={{ ...styles.primaryBtn, flex: 1, marginBottom: 0 }}
+                        >
+                          {sendToMaxunSubmitting ? 'Updating…' : 'Yes, update'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPendingUpdate(null)}
+                          disabled={sendToMaxunSubmitting}
+                          style={{ ...styles.secondaryBtn, flex: 1, marginBottom: 0 }}
+                        >
+                          Back
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveToBackend()}
+                          disabled={sendToMaxunSubmitting}
+                          style={{ ...styles.primaryBtn, flex: 1, marginBottom: 0 }}
+                        >
+                          {sendToMaxunSubmitting ? 'Sending…' : 'Send'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSendToMaxunSubmitting(false);
+                            setPendingUpdate(null);
+                            setShowSendToMaxunModal(false);
+                          }}
+                          style={{ ...styles.secondaryBtn, flex: 1, marginBottom: 0 }}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

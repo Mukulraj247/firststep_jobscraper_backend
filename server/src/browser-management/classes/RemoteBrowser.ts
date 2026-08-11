@@ -18,6 +18,7 @@ import { FingerprintInjector } from "fingerprint-injector";
 import { FingerprintGenerator } from "fingerprint-generator";
 import { BrowserLaunchProfile, connectToRemoteBrowser } from '../browserConnection';
 import { applyStealthOverrides } from '../../services/unblocker';
+import { forceCloseBrowser } from '../../services/browserProcess';
 
 declare global {
   interface Window {
@@ -789,12 +790,7 @@ export class RemoteBrowser {
 
       try {
         if (this.browser) {
-          const browserClosePromise = this.browser.close();
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Browser close timeout')), 5000)
-          );
-          await Promise.race([browserClosePromise, timeoutPromise]);
-          logger.debug('Browser closed successfully');
+          await forceCloseBrowser(this.browser, 'RemoteBrowser.switchOff');
         }
       } catch (error: any) {
         logger.error("Error during browser close:", error);

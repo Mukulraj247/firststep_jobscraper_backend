@@ -215,7 +215,7 @@ function cssEscapeSelector(selector: string): string {
  * Generate selector variants that handle Tailwind breakpoint differences across items.
  * Example: "span.line-clamp-3" might be "span.line-clamp-2" in another item.
  */
-function generateSelectorVariants(selector: string): string[] {
+export function generateSelectorVariants(selector: string): string[] {
   const variants: string[] = [];
 
   // 1. Original — fully escaped

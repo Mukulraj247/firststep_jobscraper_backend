@@ -338,6 +338,8 @@ export const RunsTable: React.FC<RunsTableProps> = ({
           setRerenderRuns(true);
           if (data.status === 'success') {
             notify('success', t('main_page.notifications.interpretation_success', { name: data.robotName || name }));
+          } else if (data.status === 'anomaly') {
+            notify('warning', `${data.robotName || name}: run finished with anomaly (${data.anomaly || 'row_drop'})`);
           } else {
             notify('error', t('main_page.notifications.interpretation_failed', { name: data.robotName || name }));
           }

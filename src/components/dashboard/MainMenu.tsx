@@ -4,7 +4,7 @@ import Tab from '@mui/material/Tab';
 import Box from '@mui/material/Box';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Paper, useTheme, Typography } from "@mui/material";
-import { AutoAwesome, Usb, PlayArrow, Dashboard, WorkOutline } from "@mui/icons-material";
+import { AutoAwesome, Usb, PlayArrow, Dashboard, WorkOutline, ErrorOutline } from "@mui/icons-material";
 import { useTranslation } from 'react-i18next';
 
 interface MainMenuProps {
@@ -126,6 +126,14 @@ export const MainMenu = ({ value = 'robots', handleChangeContent }: MainMenuProp
             value="runs"
             label={t('mainmenu.runs')}
             icon={<PlayArrow sx={{ fontSize: 20 }} />}
+            iconPosition="start"
+            disableRipple={true}
+            sx={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '16px' }}
+          />
+          <Tab
+            value="failures"
+            label="Failure Dashboard"
+            icon={<ErrorOutline sx={{ fontSize: 20 }} />}
             iconPosition="start"
             disableRipple={true}
             sx={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '16px' }}

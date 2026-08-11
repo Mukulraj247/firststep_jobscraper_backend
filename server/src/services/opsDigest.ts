@@ -6,6 +6,8 @@ import Run from '../models/Run';
 import Robot from '../models/Robot';
 import User from '../models/User';
 import ExtractedData from '../models/ExtractedData';
+import JobBoardListing from '../models/JobBoardListing';
+import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import logger from '../logger';
 import { getAgenda, SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
 import { getDigitalOceanDashboard, DropletComputeSnapshot } from './digitalOceanMetrics';
@@ -13,7 +15,7 @@ import { isZeptoMailConfigured, parseDigestRecipients, sendZeptoMail } from './z
 
 const OPS_DIGEST_JOB = 'ops-digest';
 const PASSED_STATUSES = new Set(['success', 'completed']);
-const FAILED_STATUSES = new Set(['failed']);
+const FAILED_STATUSES = new Set(['failed', 'dead']);
 const ACTIVE_STATUSES = new Set(['running', 'pending', 'queued']);
 
 export type WindowRunStats = {
@@ -22,6 +24,8 @@ export type WindowRunStats = {
   total: number;
   passed: number;
   failed: number;
+  /** Attempts-exhausted dead-letter runs (also counted in failed for totals). */
+  dead: number;
   aborted: number;
   active: number;
   other: number;
@@ -31,6 +35,15 @@ export type WindowRunStats = {
   totalRetries: number;
   rowsExtracted: number;
   topFailures: Array<{ name: string; robotMetaId: string; count: number; lastError: string | null }>;
+  /** Selector drift lines: "Robot 100 → 0 (zero_rows)" */
+  selectorDrift: Array<{
+    name: string;
+    robotMetaId: string;
+    baseline: number | null;
+    current: number;
+    anomaly: string;
+    escalated: boolean;
+  }>;
 };
 
 export type OpsDigestPayload = {
@@ -56,6 +69,14 @@ export type OpsDigestPayload = {
     activeBrowserIds: string[];
     memoryUsage: NodeJS.MemoryUsage;
     uptimeSeconds: number;
+    jobBoard: {
+      queued: number;
+      enriching: number;
+      ready: number;
+      failed: number;
+      creditsSpentToday: number;
+      dailyCreditBudget: number;
+    };
   };
   digitalOcean: Awaited<ReturnType<typeof getDigitalOceanDashboard>>;
   adminUrl: string | null;
@@ -122,24 +143,29 @@ async function aggregateWindow(hours: number): Promise<WindowRunStats> {
   const runs: any[] = await Run.find({
     $or: [{ startedAt: { $gte: sinceIso } }, { finishedAt: { $gte: sinceIso } }],
   })
-    .select('runId name status robotMetaId duration retryCount errorMessage startedAt finishedAt')
+    .select('runId name status robotMetaId duration retryCount errorMessage startedAt finishedAt anomaly anomalyMeta rowsExtracted')
     .lean();
 
   const byStatus: Record<string, number> = {};
   let passed = 0;
   let failed = 0;
+  let dead = 0;
   let aborted = 0;
   let active = 0;
   let other = 0;
   let totalRetries = 0;
   const durations: number[] = [];
   const failByRobot = new Map<string, { name: string; count: number; lastError: string | null }>();
+  const selectorDrift: WindowRunStats['selectorDrift'] = [];
 
   for (const run of runs) {
     const status = String(run.status || 'unknown');
     byStatus[status] = (byStatus[status] || 0) + 1;
     if (PASSED_STATUSES.has(status)) passed += 1;
-    else if (FAILED_STATUSES.has(status)) failed += 1;
+    else if (status === 'dead') {
+      dead += 1;
+      failed += 1;
+    } else if (FAILED_STATUSES.has(status)) failed += 1;
     else if (status === 'aborted') aborted += 1;
     else if (ACTIVE_STATUSES.has(status)) active += 1;
     else other += 1;
@@ -158,6 +184,23 @@ async function aggregateWindow(hours: number): Promise<WindowRunStats> {
       prev.count += 1;
       prev.lastError = run.errorMessage ? String(run.errorMessage).slice(0, 200) : prev.lastError;
       failByRobot.set(key, prev);
+    }
+
+    if (run.anomaly) {
+      selectorDrift.push({
+        name: String(run.name || run.robotMetaId || 'Robot'),
+        robotMetaId: String(run.robotMetaId || ''),
+        baseline:
+          run.anomalyMeta?.baseline != null && Number.isFinite(Number(run.anomalyMeta.baseline))
+            ? Number(run.anomalyMeta.baseline)
+            : null,
+        current:
+          typeof run.rowsExtracted === 'number'
+            ? run.rowsExtracted
+            : Number(run.anomalyMeta?.current) || 0,
+        anomaly: String(run.anomaly),
+        escalated: Boolean(run.anomalyMeta?.escalated),
+      });
     }
   }
 
@@ -195,6 +238,7 @@ async function aggregateWindow(hours: number): Promise<WindowRunStats> {
     total: runs.length,
     passed,
     failed,
+    dead,
     aborted,
     active,
     other,
@@ -204,6 +248,7 @@ async function aggregateWindow(hours: number): Promise<WindowRunStats> {
     totalRetries,
     rowsExtracted,
     topFailures,
+    selectorDrift: selectorDrift.slice(0, 40),
   };
 }
 
@@ -254,7 +299,8 @@ export function getOpsDigestConfigStatus(): {
 }
 
 export async function buildOpsDigestPayload(): Promise<OpsDigestPayload> {
-  const [last6h, last24h, statusAgg, robotCount, userCount, browserPool, digitalOcean] =
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const [last6h, last24h, statusAgg, robotCount, userCount, browserPool, digitalOcean, boardStatus, creditDoc] =
     await Promise.all([
       aggregateWindow(6),
       aggregateWindow(24),
@@ -263,6 +309,8 @@ export async function buildOpsDigestPayload(): Promise<OpsDigestPayload> {
       User.countDocuments(),
       getBrowserPoolStats(),
       getDigitalOceanDashboard('6h'),
+      JobBoardListing.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+      EnrichmentCreditBudget.findById(dayKey).lean(),
     ]);
 
   const lifetimeByStatus: Record<string, number> = {};
@@ -270,6 +318,11 @@ export async function buildOpsDigestPayload(): Promise<OpsDigestPayload> {
   for (const row of statusAgg) {
     lifetimeByStatus[row._id || 'unknown'] = row.count;
     lifetimeRuns += row.count;
+  }
+
+  const boardByStatus: Record<string, number> = {};
+  for (const row of boardStatus) {
+    boardByStatus[row._id || 'unknown'] = row.count;
   }
 
   const publicUrl = String(process.env.PUBLIC_URL || process.env.VITE_PUBLIC_URL || '').replace(
@@ -297,6 +350,14 @@ export async function buildOpsDigestPayload(): Promise<OpsDigestPayload> {
       activeBrowserIds: browserPool.browserIds,
       memoryUsage: process.memoryUsage(),
       uptimeSeconds: Math.round(process.uptime()),
+      jobBoard: {
+        queued: boardByStatus.queued || 0,
+        enriching: boardByStatus.enriching || 0,
+        ready: boardByStatus.ready || 0,
+        failed: boardByStatus.failed || 0,
+        creditsSpentToday: creditDoc?.creditsSpent || 0,
+        dailyCreditBudget: parseInt(process.env.SCRAPE_DO_DAILY_CREDIT_BUDGET || '15000', 10),
+      },
     },
     digitalOcean,
     adminUrl: publicUrl ? `${publicUrl}/admin` : null,
@@ -321,6 +382,16 @@ function renderWindowTable(label: string, w: WindowRunStats): string {
         .join('')
     : `<tr><td colspan="3" style="padding:4px 8px;border:1px solid #ddd;color:#666">None</td></tr>`;
 
+  const driftRows = w.selectorDrift.length
+    ? w.selectorDrift
+        .map((d) => {
+          const left = d.baseline != null ? String(d.baseline) : '?';
+          const label = d.escalated ? `${d.anomaly}, escalated` : d.anomaly;
+          return `<tr><td style="padding:4px 8px;border:1px solid #ddd">${escapeHtml(d.name)}</td><td style="padding:4px 8px;border:1px solid #ddd;text-align:right;font-family:monospace">${escapeHtml(left)} → ${d.current}</td><td style="padding:4px 8px;border:1px solid #ddd;font-size:12px;color:#666">${escapeHtml(label)}</td></tr>`;
+        })
+        .join('')
+    : `<tr><td colspan="3" style="padding:4px 8px;border:1px solid #ddd;color:#666">None</td></tr>`;
+
   return `
     <h3 style="margin:24px 0 8px">${escapeHtml(label)}</h3>
     <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:12px">
@@ -328,6 +399,7 @@ function renderWindowTable(label: string, w: WindowRunStats): string {
         <td style="padding:8px 12px;background:#f5f5f5;border:1px solid #ddd"><b>Runs</b><br/>${w.total}</td>
         <td style="padding:8px 12px;background:#e8f5e9;border:1px solid #ddd"><b>Passed</b><br/>${w.passed}</td>
         <td style="padding:8px 12px;background:#ffebee;border:1px solid #ddd"><b>Failed</b><br/>${w.failed}</td>
+        <td style="padding:8px 12px;background:#ffcdd2;border:1px solid #ddd"><b>Dead</b><br/>${w.dead}</td>
         <td style="padding:8px 12px;background:#fff3e0;border:1px solid #ddd"><b>Active</b><br/>${w.active}</td>
         <td style="padding:8px 12px;background:#f5f5f5;border:1px solid #ddd"><b>Aborted</b><br/>${w.aborted}</td>
       </tr>
@@ -340,6 +412,15 @@ function renderWindowTable(label: string, w: WindowRunStats): string {
     </p>
     <h4 style="margin:12px 0 4px">By status</h4>
     <table style="border-collapse:collapse">${statusRows || '<tr><td style="padding:4px 8px">—</td></tr>'}</table>
+    <h4 style="margin:12px 0 4px">Selector Drift</h4>
+    <table style="border-collapse:collapse">
+      <tr>
+        <th style="padding:4px 8px;border:1px solid #ddd;text-align:left">Automation</th>
+        <th style="padding:4px 8px;border:1px solid #ddd;text-align:right">Baseline → current</th>
+        <th style="padding:4px 8px;border:1px solid #ddd;text-align:left">Anomaly</th>
+      </tr>
+      ${driftRows}
+    </table>
     <h4 style="margin:12px 0 4px">Top failures</h4>
     <table style="border-collapse:collapse">
       <tr>
@@ -365,7 +446,7 @@ function renderDroplet(d: DropletComputeSnapshot): string {
       </div>
       <table cellpadding="0" cellspacing="0" style="border-collapse:collapse">
         <tr>
-          <td style="padding:6px 10px;border:1px solid #ddd">CPU latest<br/><b>${pct(m.cpuPercent.latest)}</b> <span style="color:#666">(avg ${pct(m.cpuPercent.avg)})</span></td>
+          <td style="padding:6px 10px;border:1px solid #ddd">CPU window avg<br/><b>${pct(m.cpuPercent.avg ?? m.cpuPercent.latest)}</b> <span style="color:#666">(now ${pct(m.cpuPercent.latest)} · max ${pct(m.cpuPercent.max)})</span></td>
           <td style="padding:6px 10px;border:1px solid #ddd">Memory used<br/><b>${pct(m.memoryUsedPercent.latest)}</b> <span style="color:#666">(avg ${pct(m.memoryUsedPercent.avg)})</span></td>
           <td style="padding:6px 10px;border:1px solid #ddd">BW in<br/><b>${m.bandwidthInboundMbps.latest != null ? m.bandwidthInboundMbps.latest.toFixed(3) : '—'} Mbps</b></td>
           <td style="padding:6px 10px;border:1px solid #ddd">BW out<br/><b>${m.bandwidthOutboundMbps.latest != null ? m.bandwidthOutboundMbps.latest.toFixed(3) : '—'} Mbps</b></td>
@@ -415,6 +496,15 @@ export function renderOpsDigestHtml(payload: OpsDigestPayload): string {
     Browser: <b>${escapeHtml(c.defaultBrowserType)}</b>
   </p>
 
+  <h3 style="margin:24px 0 8px">Job board enrichment</h3>
+  <p style="font-size:14px">
+    Ready: <b>${c.jobBoard.ready}</b> ·
+    Queued: <b>${c.jobBoard.queued}</b> ·
+    Enriching: <b>${c.jobBoard.enriching}</b> ·
+    Failed: <b>${c.jobBoard.failed}</b> ·
+    Credits today: <b>${c.jobBoard.creditsSpentToday}</b> / ${c.jobBoard.dailyCreditBudget}
+  </p>
+
   <h3 style="margin:24px 0 8px">DigitalOcean droplet</h3>
   ${doBlock}
 
@@ -431,13 +521,23 @@ export function renderOpsDigestText(payload: OpsDigestPayload): string {
     `Last 6h — runs=${w.total} passed=${w.passed} failed=${w.failed} active=${w.active} aborted=${w.aborted}`,
     `Avg ${fmtDuration(w.avgDurationMs)} · p95 ${fmtDuration(w.p95DurationMs)} · retries=${w.totalRetries} · rows=${w.rowsExtracted}`,
     '',
+    'Selector Drift:',
+    ...(w.selectorDrift.length
+      ? w.selectorDrift.slice(0, 20).map((d) => {
+          const left = d.baseline != null ? String(d.baseline) : '?';
+          const label = d.escalated ? `${d.anomaly}, escalated` : d.anomaly;
+          return `  ${d.name}  ${left} → ${d.current}  (${label})`;
+        })
+      : ['  (none)']),
+    '',
     `Lifetime runs=${payload.totals.lifetimeRuns} robots=${payload.totals.robots} users=${payload.totals.users}`,
     `Heap ${fmtBytes(payload.compute.memoryUsage.heapUsed)} · RSS ${fmtBytes(payload.compute.memoryUsage.rss)} · browsers=${payload.compute.activeBrowsers}`,
+    `Job board — ready=${payload.compute.jobBoard.ready} queued=${payload.compute.jobBoard.queued} enriching=${payload.compute.jobBoard.enriching} failed=${payload.compute.jobBoard.failed} credits=${payload.compute.jobBoard.creditsSpentToday}/${payload.compute.jobBoard.dailyCreditBudget}`,
   ];
   if (payload.digitalOcean.configured) {
     for (const d of payload.digitalOcean.droplets) {
       lines.push(
-        `DO ${d.name} (#${d.id}) CPU ${pct(d.metrics.cpuPercent.latest)} mem ${pct(d.metrics.memoryUsedPercent.latest)}`
+        `DO ${d.name} (#${d.id}) CPU avg ${pct(d.metrics.cpuPercent.avg ?? d.metrics.cpuPercent.latest)} (now ${pct(d.metrics.cpuPercent.latest)}) mem ${pct(d.metrics.memoryUsedPercent.latest)}`
       );
     }
   } else {

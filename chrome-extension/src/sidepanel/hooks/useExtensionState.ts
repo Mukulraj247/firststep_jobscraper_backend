@@ -68,7 +68,10 @@ export function useSendMessage() {
           return;
         }
         if (!response?.ok) {
-          reject(new Error(response?.error || 'Request failed'));
+          const err: any = new Error(response?.error || 'Request failed');
+          if (response?.code) err.code = response.code;
+          if (response?.automation) err.automation = response.automation;
+          reject(err);
           return;
         }
         resolve(response);
