@@ -456,8 +456,10 @@ export async function waitForPageChange(
       return true;
     }
     if (before.htmlLen > 0) {
+      const delta = now.htmlLen - before.htmlLen;
       const ratio = now.htmlLen / Math.max(before.htmlLen, 1);
-      if (ratio < 0.7 || ratio > 1.3) {
+      // Append-style "Show More" often grows HTML by a few KB without a 30% jump.
+      if (ratio < 0.85 || ratio > 1.08 || delta > 800) {
         return true;
       }
     }

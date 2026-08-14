@@ -27,7 +27,7 @@ import {
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import { getAutomation, updateAutomationConfig } from '../api/automation';
 import { useGlobalInfoStore } from '../context/globalInfo';
-import { SCHEDULE_OPTIONS, buildPreferredStartSuggestions } from '../constants/scheduleOptions';
+import { SCHEDULE_OPTIONS } from '../constants/scheduleOptions';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
 import { TagPicker } from '../components/automation/TagPicker';
 
@@ -130,7 +130,6 @@ export const AutomationConfigPage = () => {
   const [lastRunTime, setLastRunTime] = useState<string | null>(null);
   const [nextRunAt, setNextRunAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [preferredNextRunAt, setPreferredNextRunAt] = useState<string | null>(null);
 
   const [config, setConfig] = useState<Record<string, any>>({
     schedule: {
@@ -334,20 +333,6 @@ export const AutomationConfigPage = () => {
     return match?.label || (cron ? `Custom: ${cron}` : 'Off');
   }, [config.schedule?.cron]);
 
-  const scheduleSuggestions = useMemo(() => {
-    if (!config.schedule?.enabled || !config.schedule?.cron) return [];
-    return buildPreferredStartSuggestions(
-      config.schedule.cron,
-      config.schedule.timezone || 'UTC'
-    );
-  }, [config.schedule?.enabled, config.schedule?.cron, config.schedule?.timezone]);
-
-  useEffect(() => {
-    if (scheduleSuggestions.length && !preferredNextRunAt) {
-      setPreferredNextRunAt(scheduleSuggestions[0].iso);
-    }
-  }, [scheduleSuggestions, preferredNextRunAt]);
-
   const handleSave = async () => {
     if (!companyName.trim()) {
       notify('error', 'Company name is required');
@@ -401,7 +386,6 @@ export const AutomationConfigPage = () => {
         enabled: !!config.schedule?.enabled,
         cron: config.schedule?.cron || '',
         timezone: config.schedule?.timezone || 'UTC',
-        ...(preferredNextRunAt ? { preferredNextRunAt } : {}),
       },
       destinations: {
         ...config.destinations,
@@ -444,7 +428,6 @@ export const AutomationConfigPage = () => {
         startUrl: normalizeStartUrl(startUrl),
         webhookUrl: webhook,
         config: configPayload,
-        ...(preferredNextRunAt ? { preferredNextRunAt } : {}),
       });
       notify('success', 'Automation configuration saved');
       navigate('/dashboard');
@@ -689,7 +672,6 @@ export const AutomationConfigPage = () => {
                       key={option.label}
                       onClick={() => {
                         updateNested(['schedule', 'cron'], option.cron || '');
-                        setPreferredNextRunAt(null);
                         if (option.cron === null) {
                           updateNested(['schedule', 'enabled'], false);
                         } else {
@@ -779,26 +761,15 @@ export const AutomationConfigPage = () => {
                   </Box>
                 )}
 
-              {config.schedule?.enabled && scheduleSuggestions.length > 0 && (
+              {config.schedule?.enabled && (
                 <Box sx={{ mt: 2 }}>
                   <Typography variant="subtitle2" fontWeight={700} mb={0.5}>
-                    Suggested first run
+                    Load-balanced start
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" display="block" mb={1}>
-                    Starts are spaced at least 90 seconds apart from other automations.
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Scout-X assigns a random first run time and spaces it at least 90 seconds from
+                    other scrapes so jobs do not pile up at the same instant.
                   </Typography>
-                  <Stack direction="row" flexWrap="wrap" gap={1}>
-                    {scheduleSuggestions.map((s) => (
-                      <Chip
-                        key={s.iso}
-                        label={s.label}
-                        color={preferredNextRunAt === s.iso ? 'primary' : 'default'}
-                        variant={preferredNextRunAt === s.iso ? 'filled' : 'outlined'}
-                        onClick={() => setPreferredNextRunAt(s.iso)}
-                        sx={{ cursor: 'pointer' }}
-                      />
-                    ))}
-                  </Stack>
                 </Box>
               )}
             </Box>

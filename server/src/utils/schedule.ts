@@ -228,49 +228,43 @@ export function findPackedNextRunAt(
   return new Date(candidate);
 }
 
+/** Minimum delay before a freshly scheduled first run (avoid immediate stampede). */
+export const MIN_FIRST_RUN_DELAY_MS = 60_000;
+
 /**
- * Preferred local hours for first-run phase suggestions (meeting: e.g. every 6h → 3/9/15/21).
+ * Pick a randomized first-run timestamp inside the interval window, then the
+ * caller should pack it with {@link findPackedNextRunAt} against other robots.
+ * Offset is in [minDelayMs, everyMs] (clamped when everyMs is short).
  */
-export function preferredPhaseHoursForInterval(everyMs: number): number[] {
-  if (everyMs === 6 * 60 * 60 * 1000) return [3, 9, 15, 21];
-  if (everyMs === 12 * 60 * 60 * 1000) return [3, 15];
-  if (everyMs >= 24 * 60 * 60 * 1000) return [3];
-  if (everyMs === 60 * 60 * 1000) {
-    const hour = new Date().getHours();
-    return [0, 1, 2, 3].map((i) => (hour + i + 1) % 24);
-  }
+export function randomPreferredStartMs(
+  everyMs: number,
+  now: Date = new Date(),
+  minDelayMs: number = MIN_FIRST_RUN_DELAY_MS
+): number {
+  const floor = Math.max(0, Math.min(minDelayMs, everyMs));
+  const span = Math.max(1, everyMs - floor);
+  const offset = floor + Math.floor(Math.random() * span);
+  return now.getTime() + offset;
+}
+
+/**
+ * @deprecated Shared wall-clock phase hours caused stampede UX ("everything at 3am").
+ * Kept for any legacy callers; new scheduling uses {@link randomPreferredStartMs}.
+ */
+export function preferredPhaseHoursForInterval(_everyMs: number): number[] {
   return [];
 }
 
 /**
- * Next N preferred first-run instants in `timezone` for a known interval preset.
- * Falls back to [now + everyMs] when there is no phase hour list (short intervals).
+ * @deprecated Prefer {@link randomPreferredStartMs}. Returns a single random slot
+ * for API compatibility with /schedule/suggestions.
  */
 export function suggestPreferredStartSlots(
   everyMs: number,
-  timezone: string = 'UTC',
+  _timezone: string = 'UTC',
   now: Date = new Date(),
-  count: number = 4
+  _count: number = 4
 ): Date[] {
   if (!everyMs || everyMs <= 0) return [];
-  const tz = moment.tz.zone(timezone) ? timezone : 'UTC';
-  const hours = preferredPhaseHoursForInterval(everyMs);
-  if (!hours.length) {
-    return [new Date(now.getTime() + everyMs)];
-  }
-
-  const slots: Date[] = [];
-  const start = moment.tz(now, tz).startOf('hour');
-  for (let step = 0; step < 24 * 14 && slots.length < count; step++) {
-    const candidate = start.clone().add(step, 'hour');
-    if (!hours.includes(candidate.hour())) continue;
-    const aligned = candidate.clone().minute(0).second(0).millisecond(0);
-    if (aligned.valueOf() <= now.getTime()) continue;
-    slots.push(aligned.toDate());
-  }
-
-  if (!slots.length) {
-    slots.push(new Date(now.getTime() + everyMs));
-  }
-  return slots;
+  return [new Date(randomPreferredStartMs(everyMs, now))];
 }

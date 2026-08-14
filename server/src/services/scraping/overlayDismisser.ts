@@ -29,6 +29,219 @@ export interface OverlayDismisserOptions {
   acceptDialogs?: boolean;
 }
 
+const CONTEXT_DESTROYED_RX =
+  /execution context was destroyed|target (?:page|closed)|frame was detached/i;
+
+/**
+ * In-page overlay dismiss pass. Must stay self-contained so Playwright can
+ * serialize it into the browser via `page.evaluate(dismissOverlaysInDocument)`.
+ *
+ * Optional `rootDoc` is for unit tests; the browser call always uses `document`.
+ */
+export function dismissOverlaysInDocument(rootDoc?: Document): number {
+  const doc = rootDoc ?? document;
+  const view = doc.defaultView;
+  const readStyle = (el: Element): CSSStyleDeclaration => {
+    if (view && typeof view.getComputedStyle === 'function') {
+      return view.getComputedStyle(el as Element);
+    }
+    return {
+      visibility: 'visible',
+      display: 'block',
+      opacity: '1',
+      pointerEvents: 'auto',
+    } as CSSStyleDeclaration;
+  };
+
+  const isVisible = (el: Element): boolean => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    const style = readStyle(el);
+    if (
+      style.visibility === 'hidden' ||
+      style.display === 'none' ||
+      style.opacity === '0' ||
+      style.pointerEvents === 'none'
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  const safeQuery = (root: Document | Element, sel: string): Element[] => {
+    try {
+      return Array.from(root.querySelectorAll(sel));
+    } catch {
+      return [];
+    }
+  };
+
+  // Cookie/consent only — `continue` / `ok` / `allow` match job-board chrome
+  // (Oracle HCM filters, pagination, apply CTAs) and must not be used there.
+  const CONSENT_ACCEPT_RX =
+    /\b(accept(?:\s+all)?(?:\s+cookies)?|agree(?:\s+to\s+all)?|got\s*it|i\s*agree|i\s*accept|allow\s+(?:all\s+)?cookies|save\s+and\s+accept|understood)\b/i;
+  const CLOSE_RX = /\b(close|dismiss|no\s*thanks|not\s*now|×|✕)\b/i;
+  // Findly / DXC career sites show a language confirmation modal.
+  const LANG_CONFIRM_RX =
+    /^(english|anglais|englisch|inglese|inglés|inglês|continue\s+in\s+english)$/i;
+  const LANG_MODAL_RX = /langue|language|idioma|sprache|言語|ngôn\s*ngữ/;
+  const CONSENT_COPY_RX = /cookie|consent|privacy|gdpr|we use cookies/;
+
+  const VENDOR_BUTTONS: string[][] = [
+    ['#onetrust-accept-btn-handler', '#accept-recommended-btn-handler'],
+    ['#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', '#CybotCookiebotDialogBodyButtonAccept'],
+    ['#truste-consent-button', '.truste-button2'],
+    ['#didomi-notice-agree-button', '.didomi-components-button--primary'],
+    ['.qc-cmp2-summary-buttons button[mode="primary"]'],
+    ['.osano-cm-accept-all'],
+    ['.klaro .cm-btn-accept-all', '.klaro .cm-btn-accept'],
+    ['[data-testid="uc-accept-all-button"]', '[data-testid="uc-deny-all-button"]'],
+    ['.sp_choice_type_11', '.message-component.message-button.primary'],
+    ['#cookiescript_accept'],
+    ['.iubenda-cs-accept-btn'],
+    ['#gdpr-accept', '#accept-cookies', '.cookie-accept', '.cookie-consent-accept'],
+  ];
+
+  const MAX_CLICKS = 3;
+  let clicks = 0;
+  const clicked = new Set<Element>();
+
+  const wouldNavigate = (el: Element): boolean => {
+    if (el.tagName !== 'A') return false;
+    const href = (el.getAttribute('href') || '').trim();
+    if (!href || href === '#' || href.startsWith('#') || /^javascript:/i.test(href)) {
+      return false;
+    }
+    return true;
+  };
+
+  const clickEl = (el: Element): boolean => {
+    if (clicks >= MAX_CLICKS) return false;
+    if (clicked.has(el)) return false;
+    if (!isVisible(el)) return false;
+    if (wouldNavigate(el)) return false;
+    try {
+      (el as HTMLElement).click();
+      clicked.add(el);
+      clicks++;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // 1) Vendor-specific buttons. First visible match per vendor group.
+  for (const group of VENDOR_BUTTONS) {
+    for (const sel of group) {
+      const el = safeQuery(doc, sel)[0];
+      if (el && clickEl(el)) {
+        break;
+      }
+    }
+  }
+
+  // 2) Only real dialogs and cookie/consent nodes — never generic
+  //    modal/overlay/banner/lang chrome. Oracle HCM (and similar SPAs) stamp
+  //    those class fragments on search chrome, job cards, and the language
+  //    switcher; clicking "Continue" / "English" / "OK" there navigates away
+  //    and destroys the Playwright execution context.
+  const DIALOG_SELECTORS = ['[role="dialog"]', '[role="alertdialog"]', '[aria-modal="true"]'];
+  const CONSENT_SELECTORS = [
+    '[class*="cookie" i]',
+    '[class*="consent" i]',
+    '[id*="cookie" i]',
+    '[id*="consent" i]',
+  ];
+
+  const seen = new Set<Element>();
+  const dialogs: Element[] = [];
+  const consentNodes: Element[] = [];
+  for (const sel of DIALOG_SELECTORS) {
+    for (const el of safeQuery(doc, sel)) {
+      if (!isVisible(el) || seen.has(el)) continue;
+      seen.add(el);
+      dialogs.push(el);
+    }
+  }
+  for (const sel of CONSENT_SELECTORS) {
+    for (const el of safeQuery(doc, sel)) {
+      if (!isVisible(el) || seen.has(el)) continue;
+      seen.add(el);
+      consentNodes.push(el);
+    }
+  }
+
+  const outermost = (els: Element[]): Element[] =>
+    els.filter((el) => !els.some((other) => other !== el && other.contains(el)));
+
+  const clickInside = (container: Element, rx: RegExp): boolean => {
+    const buttons = safeQuery(
+      container,
+      'button, a, [role="button"], input[type="button"], input[type="submit"]'
+    );
+    for (const btn of buttons) {
+      if (!isVisible(btn)) continue;
+      const label =
+        (btn.getAttribute('aria-label') || '') +
+        ' ' +
+        (btn.textContent || '') +
+        ' ' +
+        ((btn as HTMLElement).title || '');
+      if (rx.test(label.trim()) && clickEl(btn)) return true;
+    }
+    return false;
+  };
+
+  const clickCloseIcons = (container: Element): boolean => {
+    const closeIconSelectors = [
+      '[aria-label="close" i]',
+      '[aria-label*="dismiss" i]',
+      '.modal-close',
+      '.close-btn',
+      '.btn-close',
+      'button.close',
+    ];
+    for (const sel of closeIconSelectors) {
+      for (const el of safeQuery(container, sel)) {
+        if (isVisible(el) && clickEl(el)) return true;
+      }
+    }
+    return false;
+  };
+
+  // 2a) Language confirmation — only inside an actual dialog, never a
+  //     header/nav `[id*="lang"]` / `[class*="lang"]` switcher.
+  for (const container of outermost(dialogs)) {
+    const blob = (container.textContent || '').toLowerCase();
+    if (!LANG_MODAL_RX.test(blob)) continue;
+    const buttons = safeQuery(container, 'button, a, [role="button"]');
+    for (const btn of buttons) {
+      if (!isVisible(btn)) continue;
+      if (LANG_CONFIRM_RX.test((btn.textContent || '').trim()) && clickEl(btn)) break;
+    }
+  }
+
+  for (const container of outermost(consentNodes)) {
+    if (!clickInside(container, CONSENT_ACCEPT_RX)) {
+      clickInside(container, CLOSE_RX);
+    }
+  }
+
+  for (const container of outermost(dialogs)) {
+    const blob = (container.textContent || '').toLowerCase();
+    if (CONSENT_COPY_RX.test(blob)) {
+      if (!clickInside(container, CONSENT_ACCEPT_RX)) {
+        if (!clickInside(container, CLOSE_RX)) clickCloseIcons(container);
+      }
+      continue;
+    }
+    if (LANG_MODAL_RX.test(blob)) continue;
+    if (!clickInside(container, CLOSE_RX)) clickCloseIcons(container);
+  }
+
+  return clicks;
+}
+
 /**
  * Executes the overlay-dismiss pass inside the page. Returns how many
  * elements it clicked. Safe to call repeatedly.
@@ -39,181 +252,19 @@ export async function dismissNow(
 ): Promise<number> {
   if (options.autoDismiss === false) return 0;
   try {
-    const dismissed = await page.evaluate(() => {
-      const isVisible = (el: Element): boolean => {
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) return false;
-        const style = getComputedStyle(el as HTMLElement);
-        if (
-          style.visibility === 'hidden' ||
-          style.display === 'none' ||
-          style.opacity === '0' ||
-          style.pointerEvents === 'none'
-        ) {
-          return false;
-        }
-        return true;
-      };
-
-      const safeQuery = (root: Document | Element, sel: string): Element[] => {
-        try {
-          return Array.from(root.querySelectorAll(sel));
-        } catch {
-          return [];
-        }
-      };
-
-      // Text-match regex for accept/dismiss buttons. Kept English-first but
-      // tolerant of common aliases / emoji glyphs. NOTE: we intentionally
-      // avoid matching captcha/challenge buttons.
-      const ACCEPT_RX =
-        /\b(accept|agree|got\s*it|allow|understood|ok(?:ay)?|continue|i\s*agree|i\s*accept|allow\s*all|accept\s*all|allow\s*cookies|accept\s*cookies|save\s*and\s*accept)\b/i;
-      const CLOSE_RX = /\b(close|dismiss|no\s*thanks|not\s*now|maybe\s*later|skip|later|×|✕)\b/i;
-      // Findly / DXC career sites show a language confirmation modal.
-      const LANG_CONFIRM_RX =
-        /^(english|anglais|englisch|inglese|inglés|inglês|continue\s+in\s+english)$/i;
-
-      // Known cookie-consent vendor selectors. Each entry is a list of
-      // specific selectors we'll click in order if visible.
-      const VENDOR_BUTTONS: string[][] = [
-        // OneTrust
-        ['#onetrust-accept-btn-handler', '#accept-recommended-btn-handler'],
-        // Cookiebot
-        ['#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', '#CybotCookiebotDialogBodyButtonAccept'],
-        // TrustArc
-        ['#truste-consent-button', '.truste-button2'],
-        // Didomi
-        ['#didomi-notice-agree-button', '.didomi-components-button--primary'],
-        // Quantcast Choice
-        ['.qc-cmp2-summary-buttons button[mode="primary"]'],
-        // OSANO
-        ['.osano-cm-accept-all'],
-        // Klaro
-        ['.klaro .cm-btn-accept-all', '.klaro .cm-btn-accept'],
-        // UserCentrics
-        ['[data-testid="uc-accept-all-button"]', '[data-testid="uc-deny-all-button"]'],
-        // Sourcepoint
-        ['.sp_choice_type_11', '.message-component.message-button.primary'],
-        // Cookie-script
-        ['#cookiescript_accept'],
-        // Iubenda
-        ['.iubenda-cs-accept-btn'],
-        // Generic GDPR / consent DIV IDs/classes
-        ['#gdpr-accept', '#accept-cookies', '.cookie-accept', '.cookie-consent-accept'],
-      ];
-
-      let clicks = 0;
-      const clickEl = (el: Element): boolean => {
-        if (!isVisible(el)) return false;
-        try {
-          (el as HTMLElement).click();
-          clicks++;
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
-      // 1) Vendor-specific buttons, in order. Click the first visible one in
-      //    each vendor group (so we don't click "reject" after "accept").
-      for (const group of VENDOR_BUTTONS) {
-        for (const sel of group) {
-          const el = safeQuery(document, sel)[0];
-          if (el && clickEl(el)) {
-            break;
-          }
-        }
-      }
-
-      // 2) Generic: look for visible accept/close buttons inside anything that
-      //    looks like a consent banner / modal / dialog / overlay.
-      const containerSelectors = [
-        '[role="dialog"]',
-        '[role="alertdialog"]',
-        '[aria-modal="true"]',
-        '[class*="cookie" i]',
-        '[class*="consent" i]',
-        '[id*="cookie" i]',
-        '[id*="consent" i]',
-        '[class*="modal" i]',
-        '[class*="popup" i]',
-        '[class*="overlay" i]',
-        '[class*="banner" i]',
-        '[id*="lang" i]',
-        '[class*="lang" i]',
-      ];
-      const containers: Element[] = [];
-      for (const sel of containerSelectors) {
-        for (const el of safeQuery(document, sel)) {
-          if (isVisible(el)) containers.push(el);
-        }
-      }
-
-      const clickInside = (container: Element, rx: RegExp): boolean => {
-        const buttons = safeQuery(container, 'button, a, [role="button"], input[type="button"], input[type="submit"]');
-        for (const btn of buttons) {
-          if (!isVisible(btn)) continue;
-          const label =
-            (btn.getAttribute('aria-label') || '') +
-            ' ' +
-            (btn.textContent || '') +
-            ' ' +
-            ((btn as HTMLElement).title || '');
-          if (rx.test(label.trim())) {
-            if (clickEl(btn)) return true;
-          }
-        }
-        return false;
-      };
-
-      // 2a) Language confirmation modals (Findly / DXC / multilingual career sites).
-      // Only click English/Anglais inside a modal that mentions language — never the
-      // site nav language switcher (that navigates away from the job list).
-      for (const container of containers) {
-        const blob = (container.textContent || '').toLowerCase();
-        if (!/langue|language|idioma|sprache|言語|ngôn\s*ngữ|confirmation/.test(blob)) continue;
-        const buttons = safeQuery(container, 'button, a, [role="button"]');
-        for (const btn of buttons) {
-          if (!isVisible(btn)) continue;
-          if (LANG_CONFIRM_RX.test((btn.textContent || '').trim()) && clickEl(btn)) break;
-        }
-      }
-
-      for (const container of containers) {
-        // Prefer accept over close so cookie banners actually go away, then
-        // fall back to close/dismiss for generic non-essential modals.
-        if (!clickInside(container, ACCEPT_RX)) {
-          clickInside(container, CLOSE_RX);
-        }
-
-        // Explicit close-icon buttons that don't have text — e.g. "×" / aria-label="close"
-        const closeIconSelectors = [
-          '[aria-label="close" i]',
-          '[aria-label*="dismiss" i]',
-          '.modal-close',
-          '.close-btn',
-          '.btn-close',
-          'button.close',
-        ];
-        for (const sel of closeIconSelectors) {
-          for (const el of safeQuery(container, sel)) {
-            if (isVisible(el)) {
-              clickEl(el);
-              break;
-            }
-          }
-        }
-      }
-
-      return clicks;
-    });
+    // Cast: Playwright PageFunction expects `(arg: void) => R`, but the helper
+    // takes an optional Document for unit tests. Runtime still serializes the
+    // full function body into the page (no Node closure).
+    const dismissed = await page.evaluate(dismissOverlaysInDocument as () => number);
 
     if (dismissed > 0) {
       logger.log('info', `overlayDismisser: dismissed ${dismissed} overlay element(s)`);
     }
     return dismissed;
   } catch (error: any) {
-    logger.log('warn', `overlayDismisser.dismissNow failed: ${error?.message || String(error)}`);
+    const message = error?.message || String(error);
+    const level = CONTEXT_DESTROYED_RX.test(message) ? 'info' : 'warn';
+    logger.log(level, `overlayDismisser.dismissNow failed: ${message}`);
     return 0;
   }
 }

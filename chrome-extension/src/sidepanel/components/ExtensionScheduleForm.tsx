@@ -164,8 +164,8 @@ export function ExtensionScheduleForm({ value, onChange, compact, layout = 'defa
           <div style={styles.headerTitle}>Cloud schedule (optional)</div>
           <div style={{ ...styles.headerSub, fontSize: isModal ? 10 : 11 }}>
             {isModal
-              ? 'Included when you tap Send. Server time zone applies to cron.'
-              : 'Applied on Scout-X when you send this automation. Recurring runs use your server clock.'}
+              ? 'Included when you tap Send. Scout-X assigns a random load-balanced first run.'
+              : 'Applied on Scout-X when you send this automation. First run is randomized and spaced from other scrapes.'}
           </div>
         </div>
       </div>

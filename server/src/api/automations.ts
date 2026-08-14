@@ -35,7 +35,7 @@ import {
   normalizeScoutIdInput,
 } from '../utils/scoutId';
 import { sanitizeAutomationTags } from '../constants/tagCatalog';
-import { FAILURE_REASON_CODES } from '../utils/failureReason';
+import { FAILURE_REASON_CODES, isAllowedFailureReason } from '../utils/failureReason';
 
 const router = Router();
 
@@ -504,7 +504,10 @@ router.get('/schedule/suggestions', async (req: any, res: any) => {
     }
     const slots = suggestPreferredStartSlots(everyMs, timezone);
     return res.json({
-      suggestions: slots.map((d) => d.toISOString()),
+      suggestions: [],
+      sampleNextRunAt: slots[0]?.toISOString() || null,
+      message:
+        'Scout-X assigns a random load-balanced first run; client slot picking is disabled.',
       everyMs,
       gapMs: 90_000,
       timezone,
@@ -806,9 +809,38 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
         nextSaasConfig.previewUrl = (incoming as any).previewUrl;
       }
 
+      // elementsOnly used to ignore tags/company — so "Send to Scout-X" with a
+      // duplicate URL silently dropped catalog tags the user had just picked.
+      // Apply them when the client sends a non-empty list / company string.
+      let tagsToSet: string[] | undefined;
+      if (bodyTags !== undefined || (config && Object.prototype.hasOwnProperty.call(config, 'tags'))) {
+        const tagsResult = sanitizeAutomationTags(
+          bodyTags !== undefined ? bodyTags : (config as any)?.tags
+        );
+        if (!tagsResult.ok) {
+          return res.status(400).json({ error: tagsResult.error });
+        }
+        if (tagsResult.tags.length > 0) {
+          tagsToSet = tagsResult.tags;
+          nextSaasConfig.tags = tagsToSet;
+        }
+      }
+
+      const companyName =
+        typeof bodyCompany === 'string'
+          ? bodyCompany.trim()
+          : typeof (incoming as any).companyName === 'string'
+            ? String((incoming as any).companyName).trim()
+            : undefined;
+      if (companyName) {
+        nextSaasConfig.companyName = companyName;
+      }
+
       const nextMeta = {
         ...robot.recording_meta,
         updatedAt: new Date().toLocaleString(),
+        ...(companyName ? { companyName } : {}),
+        ...(tagsToSet !== undefined ? { tags: tagsToSet } : {}),
         saasConfig: nextSaasConfig,
       };
       robot.recording_meta = nextMeta;
@@ -823,6 +855,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
           scoutId: getScoutId({ recording_meta: nextMeta }),
           name: nextMeta.name,
           companyName: getCompanyName({ recording_meta: nextMeta }),
+          tags: getAutomationTags({ recording_meta: nextMeta }),
           targetUrl: nextMeta.url || '',
           config: nextMeta.saasConfig || {},
           schedule: robot.schedule,
@@ -924,6 +957,12 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     }
     if (!Object.prototype.hasOwnProperty.call(incoming, 'columnOverrides') && (prevSaas as any).columnOverrides) {
       nextSaasConfig.columnOverrides = (prevSaas as any).columnOverrides;
+    }
+    if (tagsToSet !== undefined) {
+      nextSaasConfig.tags = tagsToSet;
+    }
+    if (companyName !== undefined) {
+      nextSaasConfig.companyName = companyName;
     }
 
     const nextMeta = {
@@ -1569,6 +1608,25 @@ router.get('/runs', async (req: any, res: any) => {
       match.anomaly = anomalyRaw;
     }
 
+    const failureReasonRaw =
+      req.query.failureReason != null ? String(req.query.failureReason).trim() : '';
+    if (failureReasonRaw) {
+      const reasons = failureReasonRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => isAllowedFailureReason(s));
+      if (reasons.length === 1) {
+        match.failureReason = reasons[0];
+      } else if (reasons.length > 1) {
+        match.failureReason = { $in: reasons };
+      }
+    }
+
+    // Counts by reason use the same status/robot/q filters, but ignore failureReason
+    // so summary chips stay useful while a reason filter is active.
+    const countsMatch: any = { ...match };
+    delete countsMatch.failureReason;
+
     const pipeline: any[] = [
       { $match: match },
       {
@@ -1604,10 +1662,32 @@ router.get('/runs', async (req: any, res: any) => {
       },
     ];
 
-    const agg = await Run.aggregate(pipeline);
+    const countsPipeline: any[] = [
+      { $match: countsMatch },
+      {
+        $group: {
+          _id: { $ifNull: ['$failureReason', 'unknown'] },
+          count: { $sum: 1 },
+        },
+      },
+    ];
+
+    const [agg, countsAgg] = await Promise.all([
+      Run.aggregate(pipeline),
+      Run.aggregate(countsPipeline),
+    ]);
     const bucket = agg[0] || { pageRuns: [], totals: [] };
     const total = bucket.totals[0]?.total ?? 0;
     const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+
+    const countsByReason: Record<string, number> = {};
+    for (const code of FAILURE_REASON_CODES) {
+      countsByReason[code] = 0;
+    }
+    for (const row of countsAgg || []) {
+      const key = String(row._id || 'unknown');
+      countsByReason[key] = (countsByReason[key] || 0) + (row.count || 0);
+    }
 
     const pageRunsRaw = bucket.pageRuns || [];
     const pageRuns = pageRunsRaw.map((run: any) => {
@@ -1629,6 +1709,7 @@ router.get('/runs', async (req: any, res: any) => {
     return res.json({
       runs: hydratedRuns,
       pagination: { page, limit, total, totalPages },
+      countsByReason,
     });
   } catch (error: any) {
     logger.log('error', `Failed to fetch runs for SaaS API: ${error.message}`);

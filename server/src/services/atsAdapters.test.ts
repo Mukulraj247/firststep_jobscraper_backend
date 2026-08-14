@@ -11,7 +11,10 @@ import {
   confirmSuccessFactorsHtml,
   parseSuccessFactorsJobsHtml,
   normalizeSuccessFactorsStartUrl,
+  mapIbmCareersHtml,
 } from './atsAdapters';
+import fs from 'fs';
+import path from 'path';
 
 describe('detectAts', () => {
   it('detects Greenhouse board URLs', () => {
@@ -45,6 +48,21 @@ describe('detectAts', () => {
     expect(d?.apiUrl).toContain('recruitingCEJobRequisitionDetails');
     expect(d?.apiUrl).toContain('210686668');
     expect(d?.apiUrl).toContain('CX_1001');
+  });
+
+  it('detects IBM Careers JobDetail URLs', () => {
+    const d = detectAts(
+      'https://careers.ibm.com/en_IN/careers/JobDetail?jobId=119566&source=WEB_Search_INDIA'
+    );
+    expect(d?.provider).toBe('ibmcareers');
+    expect(d?.companyHint).toBe('IBM');
+    expect(d?.apiUrl).toContain('jobId=119566');
+  });
+
+  it('does not treat IBM SearchJobs?jobId as a detail page', () => {
+    expect(
+      detectAts('https://careers.ibm.com/en_US/careers/SearchJobs?jobId=119566')
+    ).toBeNull();
   });
 });
 
@@ -94,6 +112,24 @@ describe('detectAtsBoard', () => {
     );
     expect(d?.provider).toBe('successfactors');
     expect(d?.companyHint).toBe('EY');
+  });
+
+  it('detects Oracle Cloud Candidate Experience job lists', () => {
+    const d = detectAtsBoard(
+      'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs?keyword=data+analytics&location=United+States&locationId=300000000289738&selectedPostingDatesFacet=7'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(d?.companyHint).toBe('JPMorgan Chase');
+    expect(d?.listApiUrl).toContain('recruitingCEJobRequisitions');
+  });
+
+  it('detects Bank of America career job search', () => {
+    const d = detectAtsBoard(
+      'https://careers.bankofamerica.com/en-us/job-search?ref=search&search=jobsByLocation&start=0&rows=10&searchstring=United+States&keywords=data+analytics'
+    );
+    expect(d?.provider).toBe('bankofamerica');
+    expect(d?.companyHint).toBe('Bank of America');
+    expect(d?.listApiUrl).toContain('/services/jobssearchservlet');
   });
 
   it('returns null for non-board hosts', () => {
@@ -184,6 +220,7 @@ describe('fetchAtsBoardJobs', () => {
   beforeEach(() => {
     getSpy = vi.spyOn(atsHttpClient, 'get');
     process.env.SF_BOARD_PAGE_DELAY_MS = '0';
+    process.env.ATS_BOARD_PAGE_DELAY_MS = '0';
   });
 
   afterEach(() => {
@@ -232,6 +269,144 @@ describe('fetchAtsBoardJobs', () => {
   it('returns null when API is empty', async () => {
     getSpy.mockResolvedValue({ status: 200, data: { jobs: [] } } as any);
     expect(await fetchAtsBoardJobs('https://boards.greenhouse.io/stripe')).toBeNull();
+  });
+
+  it('maps and paginates Oracle Cloud Candidate Experience jobs', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const finder = decodeURIComponent(new URL(String(url)).searchParams.get('finder') || '');
+      expect(finder).not.toContain('location=New York');
+      expect(finder).toContain('locationId=300000000289738');
+      const offset = Number(finder.match(/offset=(\d+)/)?.[1] || '0');
+      return {
+        status: 200,
+        data: {
+          items: [
+            {
+              TotalJobsCount: 2,
+              requisitionList:
+                offset === 0
+                  ? [
+                      {
+                        Id: '123',
+                        Title: 'Data Engineer',
+                        PrimaryLocation: 'New York, NY, United States',
+                        PostedDate: '2026-08-01',
+                        JobFamily: 'Technology',
+                        JobType: 'Regular',
+                      },
+                    ]
+                  : [
+                      {
+                        Id: '124',
+                        Title: 'Analytics Engineer',
+                        PrimaryLocation: 'Columbus, OH, United States',
+                        PostedDate: '2026-08-02',
+                      },
+                    ],
+            },
+          ],
+        },
+      } as any;
+    });
+
+    const result = await fetchAtsBoardJobs(
+      'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/fr/sites/CX_1001/jobs?keyword=data+analytics&location=New%20York,%20NY,%20United%20States&locationId=300000000289738',
+      { maxPages: 2 }
+    );
+    expect(result?.provider).toBe('oraclecloud');
+    expect(result?.rows).toHaveLength(2);
+    expect(result?.rows[0].jobUrl).toContain('/CandidateExperience/fr/sites/');
+    expect(result?.rows[0].jobUrl).toContain('/job/123');
+    expect(result?.rows[0].companyName).toBe('JPMorgan Chase');
+    const firstFinder = decodeURIComponent(
+      new URL(String(getSpy.mock.calls[0][0])).searchParams.get('finder') || ''
+    );
+    expect(firstFinder).toContain('siteNumber=CX_1001');
+    expect(firstFinder).toContain('keyword=data analytics');
+    expect(firstFinder).toContain('locationId=300000000289738');
+  });
+
+  it('keeps paging Oracle Cloud when TotalJobsCount is missing', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const finder = decodeURIComponent(new URL(String(url)).searchParams.get('finder') || '');
+      const offset = Number(finder.match(/offset=(\d+)/)?.[1] || '0');
+      const mk = (id: number) => ({ Id: String(id), Title: `Role ${id}`, PrimaryLocation: 'US' });
+      return {
+        status: 200,
+        data: {
+          items: [
+            {
+              // No TotalJobsCount — must continue while pages are full.
+              requisitionList: offset === 0 ? Array.from({ length: 100 }, (_, i) => mk(i + 1)) : [mk(101)],
+            },
+          ],
+        },
+      } as any;
+    });
+
+    const result = await fetchAtsBoardJobs(
+      'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs',
+      { maxPages: 2 }
+    );
+    expect(result?.rows).toHaveLength(101);
+    expect(result?.rows[0].jobTitle).toBe('Role 1');
+    expect(result?.rows[100].jobTitle).toBe('Role 101');
+    expect(getSpy.mock.calls.length).toBe(2);
+  });
+
+  it('maps and paginates Bank of America jobs through its search API', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const params = new URL(String(url)).searchParams;
+      const start = Number(params.get('start') || '0');
+      const end = Number(params.get('rows') || '0');
+      // BoA uses inclusive start + exclusive end. start===end returns [].
+      if (!(end > start)) {
+        return { status: 200, data: { totalMatches: 2, jobsList: [] } } as any;
+      }
+      return {
+        status: 200,
+        data: {
+          totalMatches: 2,
+          jobsList:
+            start === 0
+              ? [
+                  {
+                    postingTitle: 'Data Engineer',
+                    jcrURL: '/en-us/job-detail/123/data-engineer',
+                    location: 'Charlotte, NC',
+                    postedDate: '08/01/2026',
+                    lob: 'Global Technology',
+                    workShift: '1st shift',
+                  },
+                ]
+              : [
+                  {
+                    postingTitle: 'Analytics Engineer',
+                    jcrURL: '/en-us/job-detail/124/analytics-engineer',
+                    location: 'New York, NY',
+                    postedDate: '08/02/2026',
+                  },
+                ],
+        },
+      } as any;
+    });
+
+    const result = await fetchAtsBoardJobs(
+      'https://careers.bankofamerica.com/en-us/job-search?ref=search&search=jobsByLocation&start=0&rows=1&searchstring=United+States&keywords=data+analytics',
+      { maxPages: 2 }
+    );
+    expect(result?.provider).toBe('bankofamerica');
+    expect(result?.rows).toHaveLength(2);
+    expect(result?.rows[0].jobUrl).toBe(
+      'https://careers.bankofamerica.com/en-us/job-detail/123/data-engineer'
+    );
+    expect(result?.rows[0].department).toBe('Global Technology');
+    expect(String(getSpy.mock.calls[0][0])).toContain('start=0');
+    expect(String(getSpy.mock.calls[0][0])).toContain('rows=1');
+    expect(String(getSpy.mock.calls[1][0])).toContain('start=1');
+    expect(String(getSpy.mock.calls[1][0])).toContain('rows=2');
+    expect(getSpy.mock.calls[0][0]).toContain('term=data+analytics');
+    expect(getSpy.mock.calls[0][0]).toContain('searchstring=United+States');
   });
 
   it('fetches Findly/m-cloud board via HTML config + job API', async () => {
@@ -350,5 +525,28 @@ describe('fetchAtsBoardJobs', () => {
         'https://careers.ey.com/search-3?optionsFacetsDD_country=US&startrow=0'
       )
     ).toBeNull();
+  });
+});
+
+describe('mapIbmCareersHtml', () => {
+  it('extracts title, location, salary, and description from Avature JobDetail HTML', () => {
+    const fixture = fs.readFileSync(
+      path.join(__dirname, 'fixtures/ibm-careers-jobdetail.html'),
+      'utf8'
+    );
+    const fields = mapIbmCareersHtml(
+      fixture,
+      'https://careers.ibm.com/en_US/careers/JobDetail?jobId=119566'
+    );
+    expect(fields.companyName).toBe('IBM');
+    expect(fields.jobTitle).toBe('Sr. Software Engineer (TS/SCI)');
+    expect(fields.jobDescription.length).toBeGreaterThan(200);
+    expect(fields.jobDescription).toMatch(/Introduction/i);
+    expect(fields.location).toMatch(/Hampton|Virginia|United States|Ashburn/i);
+    expect(fields.location).not.toMatch(/State\s*\/\s*Province/i);
+    expect(fields.remoteType).toBe('Hybrid');
+    expect(fields.jobCategory).toMatch(/Data/i);
+    expect(fields.salaryRange).toMatch(/144/);
+    expect(fields.location).toMatch(/Virginia|United States/i);
   });
 });

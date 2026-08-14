@@ -31,76 +31,28 @@ export function intervalMsFromCronClient(cron: string | null | undefined): numbe
   return INTERVAL_CRON_TO_MS[cron.trim().replace(/\s+/g, ' ')] ?? null;
 }
 
-/** Preferred local hours for first-run suggestions (matches server). */
-export function preferredPhaseHoursForInterval(everyMs: number): number[] {
-  if (everyMs === 6 * 60 * 60 * 1000) return [3, 9, 15, 21];
-  if (everyMs === 12 * 60 * 60 * 1000) return [3, 15];
-  if (everyMs >= 24 * 60 * 60 * 1000) return [3];
+/**
+ * @deprecated Wall-clock phase suggestions removed — Scout-X assigns a random
+ * load-balanced first run server-side.
+ */
+export function preferredPhaseHoursForInterval(_everyMs: number): number[] {
   return [];
 }
 
 /**
- * Build local preferred first-run slot labels for the schedule UI.
- * Returns ISO strings the client can send as preferredNextRunAt.
+ * @deprecated No longer used by ScheduleModal / AutomationConfigPage.
+ * Kept so older imports do not break; always returns [].
  */
 export function buildPreferredStartSuggestions(
-  cron: string | null | undefined,
-  timezone: string = 'UTC',
-  count: number = 4
+  _cron: string | null | undefined,
+  _timezone: string = 'UTC',
+  _count: number = 4
 ): { iso: string; label: string }[] {
-  const everyMs = intervalMsFromCronClient(cron);
-  if (!everyMs) return [];
-  const hours = preferredPhaseHoursForInterval(everyMs);
-  const now = Date.now();
-  const results: { iso: string; label: string }[] = [];
-
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone || 'UTC',
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-
-  if (!hours.length) {
-    const d = new Date(now + everyMs);
-    results.push({
-      iso: d.toISOString(),
-      label: `First run ~${formatter.format(d)}`,
-    });
-    return results;
-  }
-
-  for (let step = 0; step < 24 * 14 && results.length < count; step++) {
-    const probe = new Date(now + step * 60 * 60 * 1000);
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone || 'UTC',
-      hour: 'numeric',
-      hour12: false,
-      minute: 'numeric',
-    }).formatToParts(probe);
-    const hourRaw = parseInt(parts.find((p) => p.type === 'hour')?.value || '-1', 10);
-    const hour = hourRaw === 24 ? 0 : hourRaw;
-    const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
-    if (!hours.includes(hour)) continue;
-    if (minute !== 0) continue;
-    if (probe.getTime() <= now) continue;
-    results.push({
-      iso: probe.toISOString(),
-      label: formatter.format(probe),
-    });
-  }
-
-  if (!results.length) {
-    const d = new Date(now + everyMs);
-    results.push({
-      iso: d.toISOString(),
-      label: formatter.format(d),
-    });
-  }
-  return results;
+  return [];
 }
+
+const LOAD_BALANCED =
+  'Scout-X assigns a random first run and spaces it ≥90s from other scrapes, then repeats on this interval';
 
 export const SCHEDULE_OPTIONS: ScheduleOption[] = [
   {
@@ -111,61 +63,61 @@ export const SCHEDULE_OPTIONS: ScheduleOption[] = [
   },
   {
     label: 'Every 15 minutes',
-    description: 'Runs ~15 minutes after save (90s-spaced), then every 15 minutes',
+    description: LOAD_BALANCED,
     cron: '*/15 * * * *',
     icon: '🕐',
   },
   {
     label: 'Every 30 minutes',
-    description: 'Runs ~30 minutes after save (90s-spaced), then every 30 minutes',
+    description: LOAD_BALANCED,
     cron: '*/30 * * * *',
     icon: '🕐',
   },
   {
     label: 'Every hour',
-    description: 'Runs ~1 hour after save (90s-spaced), then every hour',
+    description: LOAD_BALANCED,
     cron: '0 * * * *',
     icon: '🕐',
   },
   {
     label: 'Every 6 hours',
-    description: 'Suggested phases 3am / 9am / 3pm / 9pm, then every 6 hours',
+    description: LOAD_BALANCED,
     cron: '0 */6 * * *',
     icon: '🕐',
   },
   {
     label: 'Every 12 hours',
-    description: 'Suggested phases 3am / 3pm, then every 12 hours',
+    description: LOAD_BALANCED,
     cron: '0 */12 * * *',
     icon: '🕐',
   },
   {
     label: 'Every day',
-    description: 'Suggested first run ~3am local, then every day (spread per robot)',
+    description: LOAD_BALANCED,
     cron: '0 0 * * *',
     icon: '📅',
   },
   {
     label: 'Every 2 days',
-    description: 'Suggested first run ~3am local, then every 2 days',
+    description: LOAD_BALANCED,
     cron: '0 0 */2 * *',
     icon: '📅',
   },
   {
     label: 'Every 3 days',
-    description: 'Suggested first run ~3am local, then every 3 days',
+    description: LOAD_BALANCED,
     cron: '0 0 */3 * *',
     icon: '📅',
   },
   {
     label: 'Every week',
-    description: 'Suggested first run ~3am local, then every week',
+    description: LOAD_BALANCED,
     cron: '0 0 * * 1',
     icon: '📆',
   },
   {
     label: 'Every month',
-    description: 'Suggested first run ~3am local, then every ~30 days',
+    description: LOAD_BALANCED,
     cron: '0 0 1 * *',
     icon: '📆',
   },

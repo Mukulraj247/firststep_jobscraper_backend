@@ -199,7 +199,9 @@ function resolvePaginationElement(
 
   if (hint === 'loadMore') {
     const byText = searchPool.find((el) =>
-      /\b(load\s*more|show\s*more|see\s*more|view\s*more)\b/i.test((el.textContent || '').trim())
+      /\b(load\s*more|show\s*more|see\s*more|view\s*more)(\s+\w+){0,3}\b/i.test(
+        `${(el.textContent || '').trim()} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`
+      )
     );
     if (byText) return byText;
     return searchPool[0];
@@ -348,10 +350,12 @@ export async function clickPaginationButton(
 /**
  * Capture a snapshot of the list area for comparison.
  */
-function captureSnapshot(element: Element): { html: string; firstItemText: string } {
+function captureSnapshot(element: Element): { html: string; htmlLen: number; firstItemText: string } {
   const firstItem = element.querySelector(':scope > *');
+  const fullHtml = element.innerHTML || '';
   return {
-    html: element.innerHTML.slice(0, 500),
+    html: fullHtml.slice(0, 500),
+    htmlLen: fullHtml.length,
     firstItemText: firstItem ? (firstItem.textContent || '').trim().slice(0, 100) : '',
   };
 }
@@ -383,7 +387,7 @@ function captureListMetrics(listSelector: string): {
  */
 function waitForPageChange(
   listArea: Element,
-  before: { html: string; firstItemText: string },
+  before: { html: string; htmlLen: number; firstItemText: string },
   beforeUrl: string,
   timeoutMs: number,
   listSelector?: string,
@@ -396,7 +400,7 @@ function waitForPageChange(
 
     console.log(
       `[Maxun] waitForPageChange: timeout=${timeoutMs}ms, listSelector=${listSelector || 'n/a'}, ` +
-        `areaChildren=${beforeCount}`
+        `areaChildren=${beforeCount}, htmlLen=${before.htmlLen}`
     );
 
     function succeed(label: string) {
@@ -435,7 +439,9 @@ function waitForPageChange(
           m.firstItemText !== beforeMetrics.firstItemText ||
           m.itemCount !== beforeMetrics.itemCount
         ) {
-          succeed('listSelector-metrics');
+          succeed(
+            `listSelector-metrics (count ${beforeMetrics.itemCount}→${m.itemCount})`
+          );
           return;
         }
       }
@@ -446,9 +452,19 @@ function waitForPageChange(
         return;
       }
 
-      const ratio = listArea.innerHTML.length / Math.max(before.html.length, 1);
-      if (ratio < 0.7 || ratio > 1.3) {
-        succeed('HTML');
+      // Append-style loaders (Oracle "Show More Jobs") often grow HTML gradually;
+      // require a real length delta using full lengths (not the 500-char preview).
+      const beforeLen = Math.max(before.htmlLen || before.html.length || 1, 1);
+      const afterLen = snapshot.htmlLen || listArea.innerHTML.length;
+      const ratio = afterLen / beforeLen;
+      if (ratio < 0.85 || ratio > 1.08 || afterLen - beforeLen > 800) {
+        succeed(`HTML (${beforeLen}→${afterLen})`);
+        return;
+      }
+
+      const afterChildren = listArea.querySelectorAll(':scope > *').length;
+      if (afterChildren !== beforeCount) {
+        succeed(`areaChildren (${beforeCount}→${afterChildren})`);
         return;
       }
     }, 280);

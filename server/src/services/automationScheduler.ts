@@ -16,7 +16,7 @@ import {
   intervalMsFromCron,
   isScheduleOverdue,
   MIN_AUTOMATION_GAP_MS,
-  suggestPreferredStartSlots,
+  randomPreferredStartMs,
 } from '../utils/schedule';
 
 type StoredSchedule = {
@@ -232,18 +232,21 @@ export async function syncAutomationSchedule(
     if (!shouldRepack && hasFutureNext) {
       forcedNextRunAt = new Date(existingMs);
     } else {
-      const preferredRaw = options?.preferredNextRunAt;
+      // Interval presets: ignore client preferred wall-clock slots; assign a random
+      // first run inside the interval window, then pack against other robots.
       let preferredMs: number | null = null;
-      if (preferredRaw != null) {
-        const t = new Date(preferredRaw).getTime();
-        if (!Number.isNaN(t) && t > Date.now()) preferredMs = t;
-      }
-      if (preferredMs == null && everyMs && humanInterval) {
-        const suggestions = suggestPreferredStartSlots(everyMs, finalTz);
-        preferredMs = suggestions[0]?.getTime() ?? Date.now() + everyMs;
-      } else if (preferredMs == null && cronExpr) {
-        const nextCron = computeNextRun(cronExpr, finalTz);
-        preferredMs = nextCron ? nextCron.getTime() : Date.now() + MIN_AUTOMATION_GAP_MS;
+      if (everyMs && humanInterval) {
+        preferredMs = randomPreferredStartMs(everyMs);
+      } else {
+        const preferredRaw = options?.preferredNextRunAt;
+        if (preferredRaw != null) {
+          const t = new Date(preferredRaw).getTime();
+          if (!Number.isNaN(t) && t > Date.now()) preferredMs = t;
+        }
+        if (preferredMs == null && cronExpr) {
+          const nextCron = computeNextRun(cronExpr, finalTz);
+          preferredMs = nextCron ? nextCron.getTime() : Date.now() + MIN_AUTOMATION_GAP_MS;
+        }
       }
       if (preferredMs != null) {
         const occupied = await collectOccupiedNextRunAts(robot.recording_meta.id);

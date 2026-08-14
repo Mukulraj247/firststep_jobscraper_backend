@@ -13,7 +13,8 @@ export type AtsProvider =
   | 'smartrecruiters'
   | 'recruitee'
   | 'oraclecloud'
-  | 'googlecareers';
+  | 'googlecareers'
+  | 'ibmcareers';
 
 export interface AtsFetchResult {
   provider: AtsProvider;
@@ -213,6 +214,22 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
       provider: 'googlecareers',
       apiUrl: clean.toString(),
       companyHint: 'Google',
+    };
+  }
+
+  // IBM Careers (Avature) — AWS WAF blocks scrape.do/http; Playwright renders the JD.
+  // Require JobDetail in the path so SearchJobs?jobId=… does not launch Chromium.
+  if (
+    (host === 'careers.ibm.com' || host === 'ibmglobal.avature.net') &&
+    /JobDetail/i.test(path) &&
+    parsed.searchParams.has('jobId')
+  ) {
+    const clean = new URL(parsed.href);
+    clean.hash = '';
+    return {
+      provider: 'ibmcareers',
+      apiUrl: clean.toString(),
+      companyHint: 'IBM',
     };
   }
 
@@ -477,6 +494,140 @@ export function mapGoogleCareersHtml(html: string, pageUrl: string): ParsedJobFi
   return f;
 }
 
+/** Parse IBM Careers / Avature JobDetail HTML (Playwright-rendered). */
+export function mapIbmCareersHtml(html: string, pageUrl: string): ParsedJobFields {
+  const f = empty();
+  f.companyName = 'IBM';
+  f.applyUrl = pageUrl.split('#')[0];
+  f.companyLogoUrl = 'https://www.google.com/s2/favicons?domain=ibm.com&sz=128';
+  f.source = 'html';
+
+  const $ = cheerio.load(String(html || ''));
+  const bannerTitle = ($('h2.banner__text__title').first().text() || '').trim();
+  const pageTitle = ($('title').first().text() || '')
+    .replace(/\s*[-–—]\s*\d+\s*[-–—]\s*IBM\s*$/i, '')
+    .replace(/\s*[-–—]\s*IBM\s*$/i, '')
+    .trim();
+  f.jobTitle = bannerTitle || pageTitle;
+
+  const details = $('article.article--details').filter((_, el) => {
+    const t = $(el).text().replace(/\s+/g, ' ').trim();
+    return t.length > 200 && !/^Job Title\b/i.test(t);
+  });
+  const detailsHtml = details.first().html() || '';
+  f.jobDescription = stripHtmlTags(detailsHtml);
+
+  const sideText = ($('article.article--sidebar').first().text() || '').replace(/\s+/g, ' ').trim();
+  const field = (label: string): string => {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Labels with "/" (City / Township, State / Province) must not require \b after "/".
+    const re = new RegExp(
+      `${escaped}\\s+(.+?)(?=\\s+(?:Job Title|Date posted|Job ID|City\\s*/|State\\s*/|Country|Work arrangement|Area of work|Employment type|Contract type|Projected|Location)\\b|\\s+State\\s*/|\\s+City\\s*/|$)`,
+      'i'
+    );
+    return (sideText.match(re)?.[1] || '').trim();
+  };
+
+  const city = field('City / Township / Village') || field('City');
+  const state = field('State / Province');
+  const country = field('Country');
+  // Prefer structured parts; never leave raw "State / Province" label residue.
+  const locationParts = [city, state, country]
+    .map((p) => p.replace(/\s*State\s*\/\s*Province.*$/i, '').trim())
+    .filter(Boolean);
+  f.location = normalizeLocation(locationParts.join(', '));
+  if (!f.location && city) f.location = normalizeLocation(city);
+
+  const posted = field('Date posted');
+  if (posted) {
+    const d = new Date(posted);
+    f.date = Number.isNaN(d.getTime()) ? posted : d.toISOString();
+  }
+
+  const category = field('Area of work');
+  if (category) f.jobCategory = category;
+
+  const employment = field('Employment type') || field('Contract type');
+  if (employment) f.employmentType = employment;
+
+  const arrangement = field('Work arrangement');
+  if (/remote/i.test(arrangement) || /\bRemote\b/i.test(sideText)) f.remoteType = 'Remote';
+  else if (/hybrid/i.test(arrangement) || /\bHybrid\b/i.test(sideText)) f.remoteType = 'Hybrid';
+  else if (/on[-\s]?site|office/i.test(arrangement)) f.remoteType = 'Onsite';
+
+  const minSal = sideText.match(/Projected Minimum Salary per year\s+([\d,.]+)/i)?.[1];
+  const maxSal = sideText.match(/Projected Maximum Salary per year\s+([\d,.]+)/i)?.[1];
+  if (minSal && maxSal) {
+    f.salaryRange = `$${minSal.replace(/\.00$/, '')} - $${maxSal.replace(/\.00$/, '')}`;
+  } else if (minSal) {
+    f.salaryRange = `$${minSal.replace(/\.00$/, '')}`;
+  }
+
+  if (!f.jobTitle || !f.jobDescription) {
+    const parsed = parseJobPageHtml(html, pageUrl);
+    if (!f.jobTitle) f.jobTitle = parsed.jobTitle;
+    if (!f.jobDescription) f.jobDescription = parsed.jobDescription;
+    if (!f.location) f.location = parsed.location;
+  }
+
+  return f;
+}
+
+/** Serialize IBM Playwright fetches — WAF + Chromium is heavy; avoid stampedes. */
+let ibmCareersFetchChain: Promise<unknown> = Promise.resolve();
+let ibmCareersFetchQueued = 0;
+const IBM_CAREERS_FETCH_QUEUE_MAX = Math.max(
+  1,
+  parseInt(process.env.IBM_CAREERS_FETCH_QUEUE_MAX || '20', 10) || 20
+);
+
+function withIbmCareersFetchLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (ibmCareersFetchQueued >= IBM_CAREERS_FETCH_QUEUE_MAX) {
+    return Promise.reject(new Error('ibm_careers_fetch_queue_saturated'));
+  }
+  ibmCareersFetchQueued += 1;
+  const run = ibmCareersFetchChain.then(fn, fn).finally(() => {
+    ibmCareersFetchQueued = Math.max(0, ibmCareersFetchQueued - 1);
+  });
+  ibmCareersFetchChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+async function fetchIbmCareersHtml(pageUrl: string): Promise<string> {
+  return withIbmCareersFetchLock(async () => {
+    const { acquirePooledPage, releasePooledPage } = await import('./browserReusePool');
+    const lease = await acquirePooledPage({
+      profile: {
+        browserType: 'playwright',
+        headless: true,
+        useStealth: true,
+        poolIsolationKey: 'ibm-careers-enrich',
+      },
+      maxPagesPerBrowser: 1,
+      blockResources: true,
+    });
+    try {
+      const page = lease.page;
+      await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await page
+        .getByRole('button', { name: /accept all/i })
+        .click({ timeout: 4_000 })
+        .catch(() => {});
+      await page
+        .waitForSelector('h2.banner__text__title, article.article--details', { timeout: 25_000 })
+        .catch(() => {});
+      // Allow Avature sidebar widgets to hydrate.
+      await page.waitForTimeout(2_000);
+      return await page.content();
+    } finally {
+      await releasePooledPage(lease);
+    }
+  });
+}
+
 /**
  * Fetch structured job fields from a public ATS API. Returns null when the URL
  * is not an ATS page or the API call fails / returns unusable data.
@@ -508,6 +659,21 @@ export async function fetchAtsJob(pageUrl: string): Promise<AtsFetchResult | nul
         provider: 'googlecareers',
         fields,
         externalJobId: idMatch?.[1],
+      };
+    }
+
+    if (detected.provider === 'ibmcareers') {
+      const html = await fetchIbmCareersHtml(detected.apiUrl);
+      const fields = mapIbmCareersHtml(html, pageUrl);
+      fields.companyName = 'IBM';
+      const jobId =
+        new URL(pageUrl).searchParams.get('jobId') ||
+        (html.match(/\bJob ID\s+(\d+)\b/i)?.[1] || '');
+      if (!fields.jobTitle && !fields.jobDescription) return null;
+      return {
+        provider: 'ibmcareers',
+        fields,
+        externalJobId: jobId || undefined,
       };
     }
 
@@ -572,7 +738,9 @@ export type AtsBoardProvider =
   | 'ashby'
   | 'smartrecruiters'
   | 'findly'
-  | 'successfactors';
+  | 'successfactors'
+  | 'oraclecloud'
+  | 'bankofamerica';
 
 export interface AtsBoardDetection {
   provider: AtsBoardProvider;
@@ -1185,6 +1353,33 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
     };
   }
 
+  // Oracle Cloud HCM Candidate Experience board.
+  if (/\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(host)) {
+    const sitesIdx = parts.indexOf('sites');
+    const siteNumber = sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
+    const tenant = host.split('.')[0];
+    if (tenant && siteNumber && /\/CandidateExperience\/.*\/sites\/[^/]+\/jobs?\/?$/i.test(path)) {
+      return {
+        provider: 'oraclecloud',
+        companyHint: oracleTenantCompany(tenant),
+        listApiUrl: `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`,
+      };
+    }
+  }
+
+  // Bank of America renders its job list client-side, but exposes the same public
+  // search endpoint used by its own career page.
+  if (
+    host === 'careers.bankofamerica.com' &&
+    /^\/(?:[a-z]{2}-[a-z]{2}\/)?job-search(?:\.html)?\/?$/i.test(path)
+  ) {
+    return {
+      provider: 'bankofamerica',
+      companyHint: 'Bank of America',
+      listApiUrl: `https://${host}/services/jobssearchservlet`,
+    };
+  }
+
   return null;
 }
 
@@ -1298,6 +1493,214 @@ function mapSmartRecruitersBoardJobs(data: any, companyHint: string): AtsBoardJo
     .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
 }
 
+function mapOracleCloudBoardJobs(
+  data: any,
+  companyHint: string,
+  host: string,
+  siteNumber: string,
+  locale = 'en'
+): AtsBoardJobRow[] {
+  const search = Array.isArray(data?.items) ? data.items[0] : null;
+  const jobs = Array.isArray(search?.requisitionList) ? search.requisitionList : [];
+  const lang = String(locale || 'en').trim() || 'en';
+  return jobs
+    .map((job: any) =>
+      rowFromParts({
+        jobUrl: job?.Id
+          ? `https://${host}/hcmUI/CandidateExperience/${encodeURIComponent(lang)}/sites/${encodeURIComponent(siteNumber)}/job/${encodeURIComponent(String(job.Id))}`
+          : '',
+        title: String(job?.Title || '').trim(),
+        company: companyHint,
+        location: String(job?.PrimaryLocation || '').trim(),
+        employmentType: String(job?.JobType || job?.WorkerType || job?.ContractType || '').trim(),
+        date: String(job?.PostedDate || '').trim(),
+        department: String(job?.JobFamily || job?.JobFunction || '').trim(),
+      })
+    )
+    .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
+}
+
+function mapBankOfAmericaBoardJobs(data: any, companyHint: string, origin: string): AtsBoardJobRow[] {
+  const jobs = Array.isArray(data?.jobsList) ? data.jobsList : [];
+  return jobs
+    .map((job: any) =>
+      rowFromParts({
+        jobUrl: job?.jcrURL ? new URL(String(job.jcrURL), origin).toString() : '',
+        title: String(job?.postingTitle || '').trim(),
+        company: String(job?.brand || companyHint).trim(),
+        location: String(job?.location || job?.primaryLocation || '').trim(),
+        employmentType: String(job?.job_type_text || job?.timeType || job?.workShift || '').trim(),
+        date: String(job?.postedDate || job?.indexedDate || '').trim(),
+        department: String(job?.lob || job?.area || job?.division || '').trim(),
+      })
+    )
+    .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
+}
+
+const BOARD_MAX_JOBS_DEFAULT = 5000;
+
+function limitedPages(options?: AtsBoardFetchOptions): number {
+  return typeof options?.maxPages === 'number' && options.maxPages > 0
+    ? Math.floor(options.maxPages)
+    : 200;
+}
+
+function boardMaxJobs(): number {
+  return Math.max(
+    1,
+    parseInt(process.env.ATS_BOARD_MAX_JOBS || String(BOARD_MAX_JOBS_DEFAULT), 10) || BOARD_MAX_JOBS_DEFAULT
+  );
+}
+
+function boardPageDelayMs(): number {
+  return Math.max(0, parseInt(process.env.ATS_BOARD_PAGE_DELAY_MS || '150', 10) || 0);
+}
+
+/** Oracle findReqs is comma-delimited; never inject raw values that contain commas. */
+function oracleFinderValue(raw: string): string | null {
+  const value = String(raw || '').trim();
+  if (!value || value.includes(',')) return null;
+  return value;
+}
+
+function oracleCandidateLocale(pathname: string): string {
+  const parts = pathname.split('/').filter(Boolean);
+  const idx = parts.findIndex((p) => p.toLowerCase() === 'candidateexperience');
+  const locale = idx >= 0 ? parts[idx + 1] : '';
+  return locale && locale.toLowerCase() !== 'sites' ? locale : 'en';
+}
+
+async function fetchOracleCloudBoardJobs(
+  pageUrl: string,
+  companyHint: string,
+  listApiUrl: string,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  const source = new URL(pageUrl);
+  const parts = source.pathname.split('/').filter(Boolean);
+  const sitesIdx = parts.indexOf('sites');
+  const siteNumber = sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
+  if (!siteNumber) return null;
+  const locale = oracleCandidateLocale(source.pathname);
+
+  const copiedFinderParams = [
+    'keyword',
+    'locationId',
+    'selectedPostingDatesFacet',
+    'selectedTitlesFacet',
+    'selectedCategoriesFacet',
+    'selectedLocationsFacet',
+    'selectedWorkLocationsFacet',
+    'selectedWorkplaceTypesFacet',
+    'workplaceType',
+  ];
+  // Free-text location often contains commas ("New York, NY, United States") which
+  // corrupt Oracle's comma-delimited finder. Prefer locationId; only copy safe text.
+  const pageSize = 100;
+  const maxPages = limitedPages(options);
+  const maxJobs = boardMaxJobs();
+  const all: any[] = [];
+  let total = Infinity;
+  let offset = 0;
+  let pages = 0;
+  while (offset < total && pages < maxPages && all.length < maxJobs) {
+    const finderParts = [`siteNumber=${siteNumber}`];
+    for (const key of copiedFinderParams) {
+      const value = oracleFinderValue(source.searchParams.get(key) || '');
+      if (value) finderParts.push(`${key}=${value}`);
+    }
+    if (!source.searchParams.get('locationId')) {
+      const location = oracleFinderValue(source.searchParams.get('location') || '');
+      if (location) finderParts.push(`location=${location}`);
+    }
+    finderParts.push(`limit=${pageSize}`, `offset=${offset}`);
+    const api = new URL(listApiUrl);
+    api.searchParams.set('onlyData', 'true');
+    api.searchParams.set('expand', 'requisitionList');
+    api.searchParams.set('finder', `findReqs;${finderParts.join(',')}`);
+    const res = await httpClient.get(api.toString(), {
+      headers: { Accept: 'application/json', 'Ora-Irc-Language': locale },
+    });
+    if (res.status >= 400 || !res.data) break;
+    const search = Array.isArray(res.data?.items) ? res.data.items[0] : null;
+    const batch = Array.isArray(search?.requisitionList) ? search.requisitionList : [];
+    if (typeof search?.TotalJobsCount === 'number') total = search.TotalJobsCount;
+    all.push(...batch);
+    pages += 1;
+    if (!batch.length) break;
+    offset += batch.length;
+    if (offset >= total) break;
+    // Without a published total, a short page means the end of the list.
+    if (batch.length < pageSize && total === Infinity) break;
+    if (pages < maxPages && all.length < maxJobs && offset < total) {
+      await sleepMs(boardPageDelayMs());
+    }
+  }
+  const rows = mapOracleCloudBoardJobs(
+    { items: [{ requisitionList: all.slice(0, maxJobs) }] },
+    companyHint,
+    source.host,
+    siteNumber,
+    locale
+  );
+  return rows.length ? { provider: 'oraclecloud', companyHint, rows } : null;
+}
+
+async function fetchBankOfAmericaBoardJobs(
+  pageUrl: string,
+  companyHint: string,
+  listApiUrl: string,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  const source = new URL(pageUrl);
+  // BoA's servlet uses inclusive start + exclusive end (`rows`), not offset/limit.
+  // Example: start=0&rows=10, then start=10&rows=20. start=10&rows=10 returns [].
+  const urlStart = Math.max(0, Number(source.searchParams.get('start')) || 0);
+  const urlRows = Number(source.searchParams.get('rows'));
+  const pageSize = Math.min(
+    100,
+    Math.max(1, Number.isFinite(urlRows) && urlRows > urlStart ? urlRows - urlStart : urlRows || 100)
+  );
+  const maxPages = limitedPages(options);
+  const maxJobs = boardMaxJobs();
+  const all: any[] = [];
+  let total = Infinity;
+  let start = 0;
+  let pages = 0;
+  while (start < total && pages < maxPages && all.length < maxJobs) {
+    const end = start + pageSize;
+    const api = new URL(listApiUrl);
+    api.searchParams.set('start', String(start));
+    api.searchParams.set('rows', String(end));
+    api.searchParams.set('search', source.searchParams.get('search') || 'getAllJobs');
+    const keywords = source.searchParams.get('keywords');
+    if (keywords) api.searchParams.set('term', keywords);
+    for (const key of ['searchstring', 'city', 'state', 'country', 'filters', 'sort']) {
+      const value = source.searchParams.get(key);
+      if (value) api.searchParams.set(key, value);
+    }
+    const res = await httpClient.get(api.toString(), { headers: { Accept: 'application/json' } });
+    if (res.status >= 400 || !res.data) break;
+    const batch = Array.isArray(res.data?.jobsList) ? res.data.jobsList : [];
+    if (typeof res.data?.totalMatches === 'number') total = res.data.totalMatches;
+    all.push(...batch);
+    pages += 1;
+    if (!batch.length) break;
+    start = end;
+    if (start >= total) break;
+    if (batch.length < pageSize && total === Infinity) break;
+    if (pages < maxPages && all.length < maxJobs && start < total) {
+      await sleepMs(boardPageDelayMs());
+    }
+  }
+  const rows = mapBankOfAmericaBoardJobs(
+    { jobsList: all.slice(0, maxJobs) },
+    companyHint,
+    source.origin
+  );
+  return rows.length ? { provider: 'bankofamerica', companyHint, rows } : null;
+}
+
 async function fetchSmartRecruitersAllPages(listApiUrl: string): Promise<any> {
   const limit = 100;
   let offset = 0;
@@ -1335,6 +1738,22 @@ export async function fetchAtsBoardJobs(
     }
     if (detected.provider === 'successfactors') {
       return await fetchSuccessFactorsBoardJobs(pageUrl, detected.companyHint, options);
+    }
+    if (detected.provider === 'oraclecloud') {
+      return await fetchOracleCloudBoardJobs(
+        pageUrl,
+        detected.companyHint,
+        detected.listApiUrl,
+        options
+      );
+    }
+    if (detected.provider === 'bankofamerica') {
+      return await fetchBankOfAmericaBoardJobs(
+        pageUrl,
+        detected.companyHint,
+        detected.listApiUrl,
+        options
+      );
     }
 
     let data: any;

@@ -131,6 +131,7 @@ export interface SaasRunsListResponse {
     total: number;
     totalPages: number;
   };
+  countsByReason?: Record<string, number>;
 }
 
 /** Paginated SaaS runs list (`GET /api/runs`). Optional `robotMetaId` scopes to one automation you own. */
@@ -140,6 +141,7 @@ export const listSaasRuns = async (params?: {
   robotMetaId?: string;
   status?: string;
   anomaly?: string;
+  failureReason?: string;
   q?: string;
 }): Promise<SaasRunsListResponse> => {
   const page = params?.page ?? 1;
@@ -151,6 +153,7 @@ export const listSaasRuns = async (params?: {
       ...(params?.robotMetaId ? { robotMetaId: params.robotMetaId } : {}),
       ...(params?.status ? { status: params.status } : {}),
       ...(params?.anomaly ? { anomaly: params.anomaly } : {}),
+      ...(params?.failureReason ? { failureReason: params.failureReason } : {}),
       ...(params?.q ? { q: params.q } : {}),
     },
     withCredentials: true,
@@ -159,6 +162,7 @@ export const listSaasRuns = async (params?: {
   return {
     runs: data.runs || [],
     pagination: data.pagination || { page: 1, limit, total: 0, totalPages: 1 },
+    countsByReason: data.countsByReason || {},
   };
 };
 

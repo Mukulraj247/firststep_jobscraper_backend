@@ -3,6 +3,10 @@ import JobBoardListing, { IJobBoardListing } from '../models/JobBoardListing';
 import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import { getLlmUsageToday, addLlmUsage } from '../models/LlmUsageBudget';
 import { fetchAtsJob, detectAts } from '../services/atsAdapters';
+import {
+  fetchBrowserJobFallback,
+  shouldTryBrowserJobFallback,
+} from '../services/browserJobFallback';
 import { scrapeJobPage } from '../services/scrapeDoClient';
 import {
   descriptionQualityScore,
@@ -32,14 +36,16 @@ import {
 import logger from '../logger';
 
 export const JOB_ENRICHMENT_CONCURRENCY = parseInt(process.env.JOB_ENRICHMENT_CONCURRENCY || '5', 10);
-export const JOB_ENRICHMENT_BATCH = parseInt(process.env.JOB_ENRICHMENT_BATCH || '20', 10);
+/** Keep modest — IBM Playwright enrichments are serialized and long-leased. */
+export const JOB_ENRICHMENT_BATCH = parseInt(process.env.JOB_ENRICHMENT_BATCH || '8', 10);
 export const JOB_ENRICHMENT_RATE_PER_MIN = parseInt(process.env.JOB_ENRICHMENT_RATE_PER_MIN || '12', 10);
 export const JOB_ENRICHMENT_MAX_ATTEMPTS = parseInt(process.env.JOB_ENRICHMENT_MAX_ATTEMPTS || '4', 10);
 export const SCRAPE_DO_DAILY_CREDIT_BUDGET = parseInt(
   process.env.SCRAPE_DO_DAILY_CREDIT_BUDGET || '15000',
   10
 );
-const LEASE_MS = 5 * 60 * 1000;
+/** Long enough for serialized browser enrichments (e.g. IBM WAF) within a batch. */
+const LEASE_MS = 15 * 60 * 1000;
 
 export interface EnrichmentPassMetrics {
   claimed: number;
@@ -251,7 +257,7 @@ async function persistResult(
   fields: ParsedJobFields,
   opts: {
     status: 'ready' | 'partial' | 'failed' | 'expired' | 'queued';
-    method: 'ats' | 'scrape.do' | 'llm' | 'none';
+    method: 'ats' | 'scrape.do' | 'browser' | 'llm' | 'none';
     tier: number;
     creditsSpent: number;
     error?: string;
@@ -531,6 +537,32 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   }
 
   if (!result.ok) {
+    if (shouldTryBrowserJobFallback(result)) {
+      const browser = await fetchBrowserJobFallback(doc.jobUrl);
+      await yieldEventLoop();
+      if (browser) {
+        const merged = mergeParsedFields(browser.fields, listFields);
+        const status =
+          merged.jobTitle && merged.jobDescription && descriptionQualityScore(merged.jobDescription) > 0
+            ? 'ready'
+            : merged.jobTitle || merged.jobDescription
+              ? 'partial'
+              : 'failed';
+        await persistResult(doc, merged, {
+          status,
+          method: 'browser',
+          tier: 0,
+          creditsSpent: result.creditsSpent,
+          incrementAttempts: true,
+        });
+        if (status === 'ready') metrics.ready += 1;
+        else if (status === 'partial') metrics.partial += 1;
+        else metrics.failed += 1;
+        circuitBreaker.recordSuccess();
+        return;
+      }
+    }
+
     circuitBreaker.recordFailure();
     const attempts = (doc.enrichment?.attempts || 0) + 1;
     if (attempts >= JOB_ENRICHMENT_MAX_ATTEMPTS) {

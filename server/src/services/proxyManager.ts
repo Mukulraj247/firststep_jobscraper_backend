@@ -7,10 +7,29 @@ export interface ProxyProfile {
   password?: string;
 }
 
+/** When false, scrapers ignore env/user/robot proxy config (credentials can stay in .env). */
+export const isScraperProxyEnabled = (): boolean => {
+  const raw = String(process.env.SCRAPER_PROXY_ENABLED ?? 'true').trim().toLowerCase();
+  return !(raw === 'false' || raw === '0' || raw === 'no' || raw === 'off');
+};
+
+let loggedProxyDisabled = false;
+
 export const resolveProxyPool = async (
   userId: string,
   runtimeConfig?: Record<string, any>
 ): Promise<ProxyProfile[]> => {
+  if (!isScraperProxyEnabled()) {
+    if (!loggedProxyDisabled) {
+      loggedProxyDisabled = true;
+      logger.log(
+        'info',
+        'SCRAPER_PROXY_ENABLED=false — scraper will not use proxies (env / user / robot pool ignored)'
+      );
+    }
+    return [];
+  }
+
   const browserLocation = runtimeConfig?.browserLocation || {};
   const configuredPool = Array.isArray(browserLocation.proxyPool) ? browserLocation.proxyPool : [];
 

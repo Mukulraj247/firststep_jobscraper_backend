@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export type JobBoardStatus = 'queued' | 'enriching' | 'ready' | 'partial' | 'failed' | 'expired';
 
-export type EnrichmentMethod = 'list' | 'ats' | 'scrape.do' | 'llm' | 'none';
+export type EnrichmentMethod = 'list' | 'ats' | 'scrape.do' | 'browser' | 'llm' | 'none';
 
 export interface IJobBoardListSnapshot {
   jobTitle?: string;
@@ -94,7 +94,7 @@ const EnrichmentSchema = new Schema(
   {
     method: {
       type: String,
-      enum: ['list', 'ats', 'scrape.do', 'llm', 'none'],
+      enum: ['list', 'ats', 'scrape.do', 'browser', 'llm', 'none'],
       default: 'none',
     },
     tier: { type: Number, default: 0 },

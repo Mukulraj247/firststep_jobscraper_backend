@@ -853,6 +853,15 @@ const resolveNextButtonIndex = async (
 
         const indexOf = (el: HTMLElement) => matches.indexOf(el);
 
+        // Prefer Load More / Show More Jobs (Oracle HCM) before classic Next controls.
+        const byLoadMore = searchPool.find((el) => {
+          const combined = `${(el.textContent || '').trim()} ${el.getAttribute('aria-label') || ''} ${
+            el.getAttribute('title') || ''
+          }`;
+          return /\b(load\s*more|show\s*more|see\s*more|view\s*more)(\s+\w+){0,3}\b/i.test(combined);
+        });
+        if (byLoadMore) return indexOf(byLoadMore);
+
         const byRel = searchPool.find((el) => (el.getAttribute('rel') || '').toLowerCase() === 'next');
         if (byRel) return indexOf(byRel);
 

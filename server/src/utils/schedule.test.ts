@@ -6,6 +6,9 @@ import {
   intervalMsFromCron,
   computeNextRunFromInterval,
   isScheduleOverdue,
+  randomPreferredStartMs,
+  findPackedNextRunAt,
+  MIN_FIRST_RUN_DELAY_MS,
 } from './schedule';
 
 describe('validateCron', () => {
@@ -174,5 +177,25 @@ describe('isScheduleOverdue', () => {
         now: new Date('2026-08-08T08:01:00.000Z'),
       })
     ).toBe(false);
+  });
+});
+
+describe('randomPreferredStartMs', () => {
+  it('returns a timestamp between now+floor and now+everyMs', () => {
+    const now = new Date('2026-08-14T12:00:00.000Z');
+    const everyMs = 6 * 60 * 60 * 1000;
+    for (let i = 0; i < 20; i++) {
+      const ms = randomPreferredStartMs(everyMs, now);
+      expect(ms).toBeGreaterThanOrEqual(now.getTime() + MIN_FIRST_RUN_DELAY_MS);
+      expect(ms).toBeLessThanOrEqual(now.getTime() + everyMs);
+    }
+  });
+});
+
+describe('findPackedNextRunAt', () => {
+  it('slides past occupied slots by gap', () => {
+    const preferred = Date.parse('2026-08-14T12:00:00.000Z');
+    const packed = findPackedNextRunAt([preferred], preferred, 90_000);
+    expect(packed.getTime()).toBe(preferred + 90_000);
   });
 });

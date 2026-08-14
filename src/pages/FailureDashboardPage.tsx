@@ -23,8 +23,19 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from 'react-router-dom';
-import { listSaasRuns, runAutomation } from '../api/automation';
+import { listSaasRuns, runAutomation, updateRunFailureReason } from '../api/automation';
 import { useGlobalInfoStore } from '../context/globalInfo';
+import { useSocketStore } from '../context/socket';
+
+const FAILURE_REASON_OPTIONS: { code: string; label: string }[] = [
+  { code: 'layout_change', label: 'Layout change' },
+  { code: 'captcha', label: 'CAPTCHA' },
+  { code: 'browser_closed', label: 'Browser closed' },
+  { code: 'navigation_error', label: 'Navigation error' },
+  { code: 'timeout', label: 'Timeout' },
+  { code: 'circuit_open', label: 'Host circuit open' },
+  { code: 'unknown', label: 'Unknown' },
+];
 
 function formatDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
@@ -56,14 +67,18 @@ function anomalyLabel(anomaly: string | null | undefined, meta?: any): string | 
 export const FailureDashboardPage = () => {
   const navigate = useNavigate();
   const { notify } = useGlobalInfoStore();
+  const { queueSocket } = useSocketStore();
   const [runs, setRuns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [updatingReasonId, setUpdatingReasonId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<'failed,dead' | 'failed' | 'dead'>('failed,dead');
   const [anomalyFilter, setAnomalyFilter] = useState<string>('');
+  const [reasonFilter, setReasonFilter] = useState<string>('');
+  const [countsByReason, setCountsByReason] = useState<Record<string, number>>({});
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
 
@@ -80,10 +95,12 @@ export const FailureDashboardPage = () => {
         limit: rowsPerPage,
         status: statusFilter,
         ...(anomalyFilter ? { anomaly: anomalyFilter } : {}),
+        ...(reasonFilter ? { failureReason: reasonFilter } : {}),
         ...(qDebounced ? { q: qDebounced } : {}),
       });
       setRuns(result.runs || []);
       setTotal(result.pagination?.total ?? 0);
+      setCountsByReason(result.countsByReason || {});
     } catch (error: any) {
       if (error?.response?.status !== 429) {
         notify('error', error?.response?.data?.error || 'Failed to load failed runs');
@@ -91,7 +108,7 @@ export const FailureDashboardPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, rowsPerPage, statusFilter, anomalyFilter, qDebounced, notify]);
+  }, [page, rowsPerPage, statusFilter, anomalyFilter, reasonFilter, qDebounced, notify]);
 
   useEffect(() => {
     load();
@@ -99,7 +116,18 @@ export const FailureDashboardPage = () => {
 
   useEffect(() => {
     setPage(0);
-  }, [statusFilter, anomalyFilter, qDebounced]);
+  }, [statusFilter, anomalyFilter, reasonFilter, qDebounced]);
+
+  useEffect(() => {
+    if (!queueSocket) return;
+    const refresh = () => {
+      load();
+    };
+    queueSocket.on('run-completed', refresh);
+    return () => {
+      queueSocket.off('run-completed', refresh);
+    };
+  }, [queueSocket, load]);
 
   const handleRetry = async (run: any) => {
     const automationId = run.automationId || run.robotMetaId;
@@ -118,6 +146,27 @@ export const FailureDashboardPage = () => {
       setRetryingId(null);
     }
   };
+
+  const handleReasonOverride = async (run: any, nextReason: string) => {
+    if (!run?.runId) return;
+    const current = run.failureReason || '';
+    if (nextReason === current) return;
+    try {
+      setUpdatingReasonId(run.runId);
+      await updateRunFailureReason(run.runId, {
+        failureReason: nextReason || null,
+        confirmed: false,
+      });
+      notify('success', 'Failure reason updated');
+      await load();
+    } catch (error: any) {
+      notify('error', error?.response?.data?.error || 'Failed to update failure reason');
+    } finally {
+      setUpdatingReasonId(null);
+    }
+  };
+
+  const totalCounted = Object.values(countsByReason).reduce((a, b) => a + (b || 0), 0);
 
   return (
     <Box sx={{ p: 3 }}>
@@ -139,6 +188,33 @@ export const FailureDashboardPage = () => {
       </Stack>
 
       <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle2" fontWeight={700} mb={1}>
+          By reason {totalCounted > 0 ? `(${totalCounted})` : ''}
+        </Typography>
+        <Stack direction="row" flexWrap="wrap" gap={1} mb={2}>
+          <Chip
+            label={`All${totalCounted ? ` · ${totalCounted}` : ''}`}
+            color={!reasonFilter ? 'primary' : 'default'}
+            variant={!reasonFilter ? 'filled' : 'outlined'}
+            onClick={() => setReasonFilter('')}
+            sx={{ cursor: 'pointer' }}
+          />
+          {FAILURE_REASON_OPTIONS.map((opt) => {
+            const count = countsByReason[opt.code] || 0;
+            const selected = reasonFilter === opt.code;
+            return (
+              <Chip
+                key={opt.code}
+                label={`${opt.label} · ${count}`}
+                color={selected ? 'primary' : 'default'}
+                variant={selected ? 'filled' : 'outlined'}
+                onClick={() => setReasonFilter(selected ? '' : opt.code)}
+                sx={{ cursor: 'pointer' }}
+              />
+            );
+          })}
+        </Stack>
+
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
           <TextField
             size="small"
@@ -157,6 +233,21 @@ export const FailureDashboardPage = () => {
               <MenuItem value="failed,dead">Failed + Dead</MenuItem>
               <MenuItem value="failed">Failed only</MenuItem>
               <MenuItem value="dead">Dead only</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel>Failure reason</InputLabel>
+            <Select
+              label="Failure reason"
+              value={reasonFilter}
+              onChange={(e) => setReasonFilter(e.target.value)}
+            >
+              <MenuItem value="">Any</MenuItem>
+              {FAILURE_REASON_OPTIONS.map((opt) => (
+                <MenuItem key={opt.code} value={opt.code}>
+                  {opt.label}
+                </MenuItem>
+              ))}
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 160 }}>
@@ -226,23 +317,31 @@ export const FailureDashboardPage = () => {
                     <TableCell>
                       <Chip size="small" label={run.status} color={statusColor(run.status)} />
                     </TableCell>
-                    <TableCell>
-                      {run.failureReason ? (
-                        <Stack spacing={0.5}>
-                          <Chip
-                            size="small"
-                            label={run.failureReasonLabel || run.failureReason}
-                            variant="outlined"
-                          />
-                          {run.failureReasonSource ? (
-                            <Typography variant="caption" color="text.secondary">
-                              {run.failureReasonSource}
-                            </Typography>
-                          ) : null}
-                        </Stack>
-                      ) : (
-                        '—'
-                      )}
+                    <TableCell sx={{ minWidth: 180 }}>
+                      <FormControl size="small" fullWidth>
+                        <Select
+                          displayEmpty
+                          value={run.failureReason || ''}
+                          disabled={updatingReasonId === run.runId}
+                          onChange={(e) => handleReasonOverride(run, String(e.target.value))}
+                          renderValue={(selected) => {
+                            if (!selected) return '—';
+                            const opt = FAILURE_REASON_OPTIONS.find((o) => o.code === selected);
+                            return opt?.label || String(selected);
+                          }}
+                        >
+                          {FAILURE_REASON_OPTIONS.map((opt) => (
+                            <MenuItem key={opt.code} value={opt.code}>
+                              {opt.label}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      {run.failureReasonSource ? (
+                        <Typography variant="caption" color="text.secondary">
+                          {run.failureReasonSource}
+                        </Typography>
+                      ) : null}
                     </TableCell>
                     <TableCell sx={{ maxWidth: 280 }}>
                       <Typography

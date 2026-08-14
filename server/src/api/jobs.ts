@@ -76,7 +76,7 @@ function boardMatch(ownerId: string): Record<string, any> {
   return {
     ownerId,
     status: { $in: ['ready', 'partial'] },
-    'enrichment.method': { $in: ['ats', 'scrape.do', 'list', 'llm'] },
+    'enrichment.method': { $in: ['ats', 'scrape.do', 'browser', 'list', 'llm'] },
     $or: [
       {
         jobDescription: { $exists: true, $type: 'string', $ne: '' },

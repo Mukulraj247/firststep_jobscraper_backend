@@ -28,6 +28,9 @@ interface ExtractionSession {
   scrollSteps: number;
   /** Auto-scroll: whether end-of-page has been reported. */
   scrollEndReached: boolean;
+  /** Raw row count from the last EXTRACT_PAGE (before dedupe) — used by
+   *  clickLoadMore fallback when waitForPageChange times out on SPA appends. */
+  lastPageRawCount: number;
 }
 
 /** Max consecutive empty scroll steps tolerated before we conclude there's no more data. */
@@ -63,6 +66,7 @@ export async function startExtraction(
     autoScroll: isAutoScroll,
     scrollSteps: 0,
     scrollEndReached: false,
+    lastPageRawCount: 0,
   };
 
   if (isAutoScroll) {
@@ -285,6 +289,7 @@ async function extractionLoop(): Promise<void> {
   // Extract current page
   const pageRows = await extractCurrentPage();
   const newRows = deduplicateRows(pageRows);
+  activeSession.lastPageRawCount = pageRows.length;
 
   console.log(`[Maxun] Page ${pageNum}: ${pageRows.length} raw rows, ${newRows.length} new (after dedup), total: ${activeSession.allRows.length + newRows.length}`);
 
@@ -488,6 +493,24 @@ async function executePagination(): Promise<boolean> {
       console.log('[Maxun] CLICK_NEXT: confirmed via tab URL change →', activeSession.pageUrl);
       await waitForTabComplete(tabId, 15_000);
       return true;
+    }
+
+    // Load More SPAs (Oracle "Show More Jobs") often keep the same URL and
+    // the content-script wait can time out even after rows appended. Re-extract
+    // and treat a larger row set as a successful advance.
+    if (type === 'clickLoadMore') {
+      await delay(Math.max(activeSession.pagination.pageDelayMs || 2000, 2500));
+      const afterRows = await extractCurrentPage();
+      const prevRaw = activeSession.lastPageRawCount || 0;
+      const liveCount = afterRows.length;
+      console.log(
+        `[Maxun] clickLoadMore fallback: liveRows=${liveCount}, prevRaw=${prevRaw}, knownTotal=${activeSession.allRows.length}`
+      );
+      if (liveCount > prevRaw || liveCount > activeSession.allRows.length) {
+        console.log('[Maxun] clickLoadMore: confirmed via row-count growth');
+        activeSession.lastPageRawCount = liveCount;
+        return true;
+      }
     }
 
     // Last resort for Naukri-style path pages: …-bangalore → …-bangalore-2

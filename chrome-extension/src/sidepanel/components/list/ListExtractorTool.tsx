@@ -908,7 +908,7 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
                     style={{ ...styles.input, marginBottom: 8 }}
                     value={sendToMaxunCompany}
                     onChange={(e) => setSendToMaxunCompany(e.target.value)}
-                    disabled={sendToMaxunSubmitting || !!pendingUpdate}
+                    disabled={sendToMaxunSubmitting}
                     maxLength={120}
                     placeholder="e.g. EY"
                     required
@@ -916,7 +916,7 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
                   <ExtensionTagPicker
                     value={sendToMaxunTags}
                     onChange={setSendToMaxunTags}
-                    disabled={sendToMaxunSubmitting || !!pendingUpdate}
+                    disabled={sendToMaxunSubmitting}
                   />
                   <label style={styles.label}>Scout-X ID (optional)</label>
                   <input
@@ -940,7 +940,7 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
                       Automation already exists
                       {pendingUpdate.scoutId ? ` (${pendingUpdate.scoutId})` : ''}
                       {pendingUpdate.name ? `: ${pendingUpdate.name}` : ''}.
-                      Update elements only (selectors) and keep name, schedule, and history?
+                      Update selectors (and apply tags/company if set) while keeping schedule and history?
                     </div>
                   )}
                   {sendToMaxunError && (

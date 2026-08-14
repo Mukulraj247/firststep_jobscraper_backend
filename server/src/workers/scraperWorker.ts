@@ -17,7 +17,12 @@ import {
 } from '../services/runDrift';
 import { detectCaptcha, detectCloudflareChallenge, waitForCloudflareToClear, applyHumanDelay, simulateHumanMouse, detectAmazonChallengeAndWait, detectMicrosoftChallengeAndWait } from '../services/unblocker';
 import { CaptchaEncounteredError, describe as describeCaptcha } from '../services/scraping/captchaGate';
-import { resolveProxyPool, selectRotatedProxy, type ProxyProfile } from '../services/proxyManager';
+import {
+  isScraperProxyEnabled,
+  resolveProxyPool,
+  selectRotatedProxy,
+  type ProxyProfile,
+} from '../services/proxyManager';
 import { normalizeProxyServer } from '../services/proxyConfig';
 import { selectRotatedUserAgent } from '../services/userAgentManager';
 import { getSessionStatePath, sessionStateExists } from '../storage/sessionState';
@@ -90,6 +95,9 @@ const isAntiBotTarget = (url?: string): boolean => {
 
 /** Prefer Camoufox residential proxy, then DEFAULT_PROXY_URL — used when escalating after CAPTCHA/blocks. */
 const getEnvFallbackProxy = (): ProxyProfile | null => {
+  if (!isScraperProxyEnabled()) {
+    return null;
+  }
   const camoufoxServer = normalizeProxyServer(process.env.CAMOUFOX_PROXY_SERVER);
   if (camoufoxServer) {
     return {
@@ -302,8 +310,9 @@ async function finalizeExtractedListRows(opts: {
 
 /**
  * Prefer public ATS board JSON when the start URL is Greenhouse / Lever / Ashby /
- * SmartRecruiters / Findly (m-cloud) / SuccessFactors RMK. Returns true when
- * collection finished without Chromium.
+ * SmartRecruiters / Findly (m-cloud) / SuccessFactors RMK / Oracle Cloud CE /
+ * Bank of America careers search. Returns true when collection finished without
+ * Chromium.
  */
 async function tryAtsBoardCollection(
   run: any,

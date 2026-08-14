@@ -142,15 +142,35 @@ async function handleMessage(
 
       // From content script: list was selected
       case MSG.LIST_SELECTED: {
-        const { listSelector, itemCount, fields, previewRows, previewText, previewUrl } = message.payload || {};
-        await updateListState({
+        const { listSelector, itemCount, fields, previewRows, previewText, previewUrl, pagination } =
+          message.payload || {};
+        const patch: Record<string, unknown> = {
           phase: 'configuring',
           listSelector,
           itemCount,
           fields,
           previewRows,
           ...(typeof previewUrl === 'string' && previewUrl ? { previewUrl } : {}),
-        });
+        };
+        // Only apply auto-detected pagination when the user hasn't configured one yet
+        if (
+          pagination &&
+          typeof pagination === 'object' &&
+          pagination.type &&
+          pagination.selector
+        ) {
+          const cur = (await getState()).list.pagination;
+          if (!cur?.type || !cur?.selector) {
+            patch.pagination = {
+              type: pagination.type,
+              selector: pagination.selector,
+              confidence: pagination.confidence || 'medium',
+              maxPages: pagination.maxPages || 20,
+              pageDelayMs: pagination.pageDelayMs || 1500,
+            };
+          }
+        }
+        await updateListState(patch as any);
         sendResponse({ ok: true });
         break;
       }

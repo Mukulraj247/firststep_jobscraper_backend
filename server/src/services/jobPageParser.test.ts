@@ -7,6 +7,7 @@ import {
   isGenericJobTitle,
   isJunkDescription,
   isPortalCompanyName,
+  isThinParse,
   makeDescriptionSnippet,
   normalizeJobDescription,
   parseJobPageHtml,
@@ -153,6 +154,38 @@ describe('jobPageParser', () => {
         'Overview Who we are Collaborative. Respectful. A place to dream and do. These are just a few words that describe what life is like at Toyota.'
       )
     ).toBe(true);
+  });
+
+  it('rejects SPA og:description teasers that are not real JDs (any employer)', () => {
+    expect(
+      isJunkDescription(
+        'Apply for a Senior Business Operations Analyst, Enterprise Technology Services job at Apple. Read about the role and find out if it’s right for you.'
+      )
+    ).toBe(true);
+    expect(
+      isJunkDescription(
+        'Apply for a Software Engineer job at Acme Corp. Learn more about the role and see if it’s right for you.'
+      )
+    ).toBe(true);
+    expect(
+      isJunkDescription(
+        'Join our product team building delightful UIs. Requirements include React experience.'
+      )
+    ).toBe(false);
+  });
+
+  it('treats meta-only SPA shells as thin so scrape.do escalates to JS render', () => {
+    const appleShell = `<!DOCTYPE html><html><head>
+<meta property="og:title" content="Senior Business Operations Analyst, Enterprise Technology Services" />
+<meta property="og:description" content="Apply for a Senior Business Operations Analyst, Enterprise Technology Services job at Apple. Read about the role and find out if it’s right for you." />
+<meta property="og:site_name" content="Apple" />
+</head><body><div id="root"></div></body></html>`;
+    const parsed = parseJobPageHtml(
+      appleShell,
+      'https://jobs.apple.com/en-us/details/200677755-3956/senior-business-operations-analyst'
+    );
+    expect(isJunkDescription(parsed.jobDescription)).toBe(true);
+    expect(isThinParse(parsed, Buffer.byteLength(appleShell, 'utf8'))).toBe(true);
   });
 
   it('canonicalizes Carrier / Meta / Ford / Toyota aliases', () => {

@@ -70,12 +70,31 @@ const adAndAnalyticsPatterns = [
   'googletagmanager.com',
   'google-analytics.com',
   'adservice.google.com',
-  'analytics',
   'segment.io',
   'facebook.net',
   'hotjar.com',
   'intercom.io',
+  'scorecardresearch.com',
+  // Intentionally NOT a bare "analytics" substring — that aborted main-frame
+  // navigations to job boards whose query contained keywords like "data+analytics".
 ];
+
+/** Exported for unit tests. Used by pooled contexts when blockResources is on. */
+export const shouldBlockRequest = (url: string, resourceType: string) => {
+  // Never abort navigations / websockets. Substring ad rules must not match
+  // the document URL (e.g. ?keyword=data+analytics → net::ERR_FAILED).
+  if (resourceType === 'document' || resourceType === 'websocket') {
+    return false;
+  }
+  if (resourceType === 'image' || resourceType === 'font' || resourceType === 'media') {
+    return true;
+  }
+  if (isLowMemoryMode() && resourceType === 'stylesheet') {
+    return true;
+  }
+  const lower = url.toLowerCase();
+  return adAndAnalyticsPatterns.some((pattern) => lower.includes(pattern));
+};
 
 const buildPoolKey = (profile?: AcquirePooledPageOptions['profile']) =>
   JSON.stringify({
@@ -86,16 +105,6 @@ const buildPoolKey = (profile?: AcquirePooledPageOptions['profile']) =>
     proxyUsername: profile?.proxy?.username || '',
     isolationKey: profile?.poolIsolationKey || '',
   });
-
-const shouldBlockRequest = (url: string, resourceType: string) => {
-  if (resourceType === 'image' || resourceType === 'font' || resourceType === 'media') {
-    return true;
-  }
-  if (isLowMemoryMode() && resourceType === 'stylesheet') {
-    return true;
-  }
-  return adAndAnalyticsPatterns.some((pattern) => url.includes(pattern));
-};
 
 setOrphanReaperPoolEmptyCheck(() => pooledBrowsers.size === 0);
 

@@ -27,6 +27,8 @@ import { autoDetectFields, fieldsToConfig } from './fieldAutoDetector';
 import { extractPageData, clickPaginationButton, scrollForMore, autoScrollAndExtract } from './extractionRunner';
 import type { AutoScrollProgress } from './extractionRunner';
 import { clientListExtractor } from '../shared/clientListExtractor';
+import { clientPaginationDetector } from '../shared/clientPaginationDetector';
+import { clientSelectorGenerator } from '../shared/clientSelectorGenerator';
 import { detectTables, extractTableData } from './tableDetector';
 import { extractPageText } from './textExtractor';
 
@@ -414,6 +416,34 @@ function init() {
 
     const previewText = (elements[0]?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
 
+    // Auto-detect Load More / Next so Oracle-style boards paginate without manual setup
+    let pagination: {
+      type: string;
+      selector: string | null;
+      confidence: string;
+      maxPages: number;
+      pageDelayMs: number;
+    } | null = null;
+    try {
+      const detected = clientPaginationDetector.autoDetectPagination(
+        document,
+        selector,
+        clientSelectorGenerator
+      );
+      if (detected.type && detected.selector) {
+        pagination = {
+          type: detected.type,
+          selector: detected.selector,
+          confidence: detected.confidence || 'medium',
+          maxPages: 20,
+          pageDelayMs: detected.type === 'clickLoadMore' ? 2000 : 1500,
+        };
+        console.log('[Maxun] Auto-detected pagination:', pagination);
+      }
+    } catch (err) {
+      console.warn('[Maxun] Pagination auto-detect failed:', err);
+    }
+
     chrome.runtime.sendMessage({
       type: MSG.LIST_SELECTED,
       payload: {
@@ -423,6 +453,7 @@ function init() {
         previewRows,
         previewText,
         previewUrl: window.location.href,
+        ...(pagination ? { pagination } : {}),
       },
     });
   }

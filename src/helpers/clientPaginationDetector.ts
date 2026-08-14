@@ -33,11 +33,14 @@ const nextButtonArrowPatterns = [
 ];
 
 const loadMorePatterns = [
-  /^\s*load\s+more\s*$/i,
-  /^\s*show\s+more\s*$/i,
-  /^\s*view\s+more\s*$/i,
-  /^\s*see\s+more\s*$/i,
-  /^\s*more\s+results\s*$/i,
+  /^\s*load\s+more(\s+\w+)*\s*$/i,
+  /^\s*show\s+more(\s+\w+)*\s*$/i,
+  /^\s*view\s+more(\s+\w+)*\s*$/i,
+  /^\s*see\s+more(\s+\w+)*\s*$/i,
+  /^\s*more\s+(results|jobs|listings|openings|positions)\s*$/i,
+  // Oracle HCM / Workday-style: "Show More Jobs", "Load More Results"
+  /\b(show|load|view|see)\s+more\s+(jobs?|results?|listings?|openings?|positions?)\b/i,
+  /\b(show|load|view|see)\s+more\b/i,
   /^\s*plus\s+de\s+résultats\s*$/i,
   /^\s*más\s+resultados\s*$/i,
   /^\s*weitere\s+ergebnisse\s*$/i,

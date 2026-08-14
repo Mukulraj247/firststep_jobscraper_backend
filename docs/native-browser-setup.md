@@ -74,6 +74,8 @@ CAMOUFOX_HEALTH_PORT=3004
 
 Optional: `CAMOUFOX_PROXY_SERVER`, `CAMOUFOX_PROXY_USERNAME`, `CAMOUFOX_PROXY_PASSWORD`.
 
+Set `SCRAPER_PROXY_ENABLED=false` to scrape without a proxy while leaving those credentials in `.env`. Default is enabled (`true`).
+
 Start the server:
 
 ```bash

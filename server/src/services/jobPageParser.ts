@@ -15,6 +15,20 @@ const BOT_WALL_RE = /cf-challenge|captcha|just a moment|attention required|acces
 const JOB_DESC_SIGNAL_RE =
   /responsibilit|requirement|qualification|about\s+(?:the\s+)?(?:role|job|position)|what\s+you.?ll|you\s+will|we\s+(?:are\s+)?looking|benefits|experience\s+(?:required|preferred)|job\s+description|key\s+duties|who\s+you\s+are/i;
 
+/** Stronger JD language — used to keep short-but-real metas from being treated as SPA shells. */
+const STRONG_JD_SIGNAL_RE =
+  /responsibilit|requirements?|qualifications?|minimum qualifications?|preferred qualifications?|you will\b|what you.?ll\b|job description|key duties|we are looking|experience (?:required|preferred)/i;
+
+/**
+ * og:description / social teasers from JS career SPAs (Apple, etc.).
+ * These look “valid” to length checks but contain no real JD — without rejecting them,
+ * scrape.do stays on tier 1 (no render) and never loads the actual posting.
+ */
+const ROLE_TEASER_RE =
+  /apply for (?:a|an|the)\s+[\s\S]{5,200}?\s+(?:job|role|position|opening)\s+at\b/i;
+const ROLE_TEASER_CTA_RE =
+  /(?:read about|learn more about)\s+(?:the|this)\s+role\b[\s\S]{0,60}(?:find out|see if|right for you)/i;
+
 const NAV_CHROME_RE =
   /home\s*>|former\s+former|explore\s+explore|cookie\s+policy|privacy\s+policy|all\s+rights\s+reserved|terms\s+(?:of\s+)?(?:use|service)|skip\s+to\s+(?:main\s+)?content|accept\s+(?:all\s+)?cookies|sign\s+in\s+create\s+account|keyword\(s\)|radius\s+unit|\bradius\s+\d+|search\s+(?:carrier\s+)?jobs\b|search\s+jobs\s+search\s+jobs|select\s+(?:a\s+)?(?:category|location|communications|job\s+category)|browse\s+available\s+job\s+openings/i;
 
@@ -163,6 +177,9 @@ export function canonicalizeCompanyName(name: string): string {
     return 'JPMorgan Chase';
   }
   if (key === 'metacareers' || key === 'meta careers' || key === 'facebook') return 'Meta';
+  if (key === 'ibm' || key === 'ibm corporation' || key === 'international business machines') {
+    return 'IBM';
+  }
   if (key === 'sia partners' || key === 'siapartners' || key === 'sia-partners') return 'Sia Partners';
   if (
     key === 'carrier' ||
@@ -291,6 +308,12 @@ export function isJunkDescription(text: string): boolean {
   if (!raw) return true;
   if (raw.length < 40) return true;
   if (NAV_CHROME_RE.test(raw)) return true;
+
+  // SPA/social teaser copy — not a job description (any employer, not Apple-specific).
+  if (ROLE_TEASER_RE.test(raw) || ROLE_TEASER_CTA_RE.test(raw)) return true;
+
+  // Short meta/shell blurbs with no real JD language → force harder scrape tier.
+  if (raw.length < 280 && !STRONG_JD_SIGNAL_RE.test(raw)) return true;
 
   // Employer "Overview / Who we are" marketing with no role-specific JD signals.
   if (MARKETING_OVERVIEW_RE.test(raw) && !JOB_DESC_SIGNAL_RE.test(raw)) return true;
@@ -1023,10 +1046,26 @@ export function parseJobPageHtml(html: string, pageUrl?: string): ParsedJobField
 export function isThinParse(fields: ParsedJobFields, htmlBytes: number): boolean {
   if (htmlBytes < 1500) return true;
   if (!fields.jobTitle && !fields.jobDescription) return true;
-  // Chrome walls are long but score 0 — still escalate to a harder scrape tier.
+  // Chrome walls / teasers score 0 — escalate to JS render (tier 2+) for any host.
   if (fields.jobDescription && descriptionQualityScore(fields.jobDescription) === 0) return true;
   if (fields.jobTitle && isGenericJobTitle(fields.jobTitle)) return true;
   if (!fields.jobDescription && fields.jobTitle) return true;
   if (fields.jobDescription && fields.jobDescription.length < 80 && !fields.jobTitle) return true;
+  // Meta-only shells often look “complete” (title + short blurb) but need render.
+  if (
+    fields.source === 'meta' &&
+    (!fields.jobDescription ||
+      (fields.jobDescription.length < 400 && !STRONG_JD_SIGNAL_RE.test(fields.jobDescription)))
+  ) {
+    return true;
+  }
+  // Any short description without strong JD language is almost certainly a teaser shell.
+  if (
+    fields.jobDescription &&
+    fields.jobDescription.length < 400 &&
+    !STRONG_JD_SIGNAL_RE.test(fields.jobDescription)
+  ) {
+    return true;
+  }
   return false;
 }

@@ -1,6 +1,6 @@
 /**
  * Dedicated low-CPU job-board enrichment process.
- * Fetches detail pages via ATS APIs / scrape.do — never launches a browser.
+ * Fetches detail pages via ATS APIs / scrape.do / Playwright (IBM Careers WAF).
  *
  *   UV_THREADPOOL_SIZE=8 NODE_OPTIONS='--max-old-space-size=512' npm run worker:enrichment
  *   Dev (ts-node needs more heap): npm run worker:enrichment:dev
