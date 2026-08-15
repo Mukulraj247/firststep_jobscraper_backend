@@ -164,6 +164,38 @@ async function computeAccountRobotSummary(userId: any) {
 }
 
 /**
+ * Sum latest-run row counts + success/fail chips for every robot matching `ownerFilter`
+ * (same filter as the dashboard list, across all pages).
+ */
+async function computeFilteredDashboardRunTotals(robotMetaIds: string[]): Promise<{
+  rowsExtractedTotal: number;
+  successfulCount: number;
+  failedCount: number;
+  latestRuns: Map<string, any>;
+  rowCounts: Map<string, number>;
+}> {
+  const latestRuns = await fetchLatestRunPerRobotMetaIds(robotMetaIds);
+  let successfulCount = 0;
+  let failedCount = 0;
+  const runIds: string[] = [];
+
+  for (const run of latestRuns.values()) {
+    const status = buildDashboardStatus(run);
+    if (status === 'completed') successfulCount += 1;
+    if (status === 'failed') failedCount += 1;
+    if (run?.runId) runIds.push(String(run.runId));
+  }
+
+  const rowCounts = await batchExtractedRowCounts(runIds);
+  let rowsExtractedTotal = 0;
+  for (const count of rowCounts.values()) {
+    rowsExtractedTotal += count;
+  }
+
+  return { rowsExtractedTotal, successfulCount, failedCount, latestRuns, rowCounts };
+}
+
+/**
  * Latest run per robot for the dashboard. Projects only status/time fields and
  * sorts by `_id` (insert order) so we never ship serializableOutput/logs through
  * the aggregation pipeline — that was the main refresh latency source.
@@ -273,7 +305,7 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
       ownerFilter['recording_meta.tags'] = { $all: tagsFilter };
     }
 
-    const [summary, total, robots] = await Promise.all([
+    const [summary, total, robots, allMetaIdRows] = await Promise.all([
       computeAccountRobotSummary(req.user.id),
       Robot.countDocuments(ownerFilter),
       Robot.find(ownerFilter)
@@ -296,29 +328,30 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
         .skip(skip)
         .limit(limit)
         .lean(),
+      Robot.find(ownerFilter).select('recording_meta.id').lean(),
     ]);
+
+    const allMetaIds = allMetaIdRows
+      .map((robot: any) => robot.recording_meta?.id)
+      .filter(Boolean)
+      .map(String);
+
+    const runTotals = await computeFilteredDashboardRunTotals(allMetaIds);
 
     const summaryOut = {
       totalAutomations: total,
       activeScheduledCount: summary.activeScheduledCount,
       pausedScheduleCount: summary.pausedScheduleCount,
+      rowsExtractedTotal: runTotals.rowsExtractedTotal,
+      successfulCount: runTotals.successfulCount,
+      failedCount: runTotals.failedCount,
     };
 
-    const pageIds = robots
-      .map((robot: any) => robot.recording_meta?.id)
-      .filter(Boolean);
-    const latestRuns = await fetchLatestRunPerRobotMetaIds(pageIds);
-
-    const runIds = pageIds
-      .map((id: string) => latestRuns.get(id)?.runId)
-      .filter(Boolean)
-      .map(String);
-    const rowCounts = await batchExtractedRowCounts(runIds);
-
     const automations = robots.map((robot: any) => {
-      const latestRun = latestRuns.get(robot.recording_meta.id);
+      const metaId = robot.recording_meta.id;
+      const latestRun = runTotals.latestRuns.get(metaId);
       const rowsExtracted = latestRun?.runId
-        ? rowCounts.get(String(latestRun.runId)) || 0
+        ? runTotals.rowCounts.get(String(latestRun.runId)) || 0
         : 0;
       return mapAutomation(robot, latestRun, rowsExtracted);
     });

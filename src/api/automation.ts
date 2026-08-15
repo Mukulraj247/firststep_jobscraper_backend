@@ -83,6 +83,12 @@ export interface DashboardAutomationsSummary {
   totalAutomations: number;
   activeScheduledCount: number;
   pausedScheduleCount: number;
+  /** Sum of latest-run extracted rows across all matching automations (all pages). */
+  rowsExtractedTotal: number;
+  /** Automations whose latest run is completed/success (all pages). */
+  successfulCount: number;
+  /** Automations whose latest run is failed (all pages). */
+  failedCount: number;
 }
 
 export interface DashboardAutomationsResponse {
@@ -119,6 +125,9 @@ export const getDashboardAutomations = async (params?: {
       totalAutomations: 0,
       activeScheduledCount: 0,
       pausedScheduleCount: 0,
+      rowsExtractedTotal: 0,
+      successfulCount: 0,
+      failedCount: 0,
     },
   };
 };

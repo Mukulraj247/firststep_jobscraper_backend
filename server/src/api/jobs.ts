@@ -75,7 +75,10 @@ function companyFilterClause(company: string): Record<string, any> | null {
 function boardMatch(ownerId: string): Record<string, any> {
   return {
     ownerId,
-    status: { $in: ['ready', 'partial'] },
+    // `partial` rows are incomplete enrichment results and are never
+    // board-eligible. Excluding them keeps pagination totals and badges aligned
+    // with the cards that pass the final in-process quality gate.
+    status: 'ready',
     'enrichment.method': { $in: ['ats', 'scrape.do', 'browser', 'list', 'llm'] },
     $or: [
       {
@@ -315,7 +318,7 @@ router.get('/jobs', async (req: any, res: any) => {
       }
     }
 
-    const countKey = JSON.stringify({ ownerId, company, category, q, v: 7 });
+    const countKey = JSON.stringify({ ownerId, company, category, q, v: 8 });
     const useText = q.length >= 3;
     const projection: Record<string, any> = {
       jobUrl: 1,

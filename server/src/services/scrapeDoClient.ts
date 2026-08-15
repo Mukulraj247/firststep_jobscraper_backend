@@ -9,6 +9,7 @@ import {
   parseJobPageHtml,
   ParsedJobFields,
   MAX_PARSE_BYTES,
+  truncateForParse,
 } from './jobPageParser';
 import logger from '../logger';
 
@@ -26,13 +27,23 @@ export interface ScrapeDoResult {
   error?: string;
 }
 
+/**
+ * Axios aborts before we can truncate when the download cap is hit.
+ * Career SPAs (e.g. Truist) often return 2–6MB HTML; allow a larger download
+ * then truncate to MAX_PARSE_BYTES for parsing / memory.
+ */
+const MAX_DOWNLOAD_BYTES = Math.max(
+  MAX_PARSE_BYTES,
+  parseInt(process.env.SCRAPE_DO_MAX_DOWNLOAD_BYTES || String(8 * 1024 * 1024), 10) || 8 * 1024 * 1024
+);
+
 const keepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 16 });
 const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 16 });
 
 const client: AxiosInstance = axios.create({
   timeout: 60_000,
-  maxContentLength: MAX_PARSE_BYTES,
-  maxBodyLength: MAX_PARSE_BYTES,
+  maxContentLength: MAX_DOWNLOAD_BYTES,
+  maxBodyLength: MAX_DOWNLOAD_BYTES,
   httpsAgent: keepAliveAgent,
   httpAgent: keepAliveHttpAgent,
   // Accept all so we can inspect scrape.do / target status codes
@@ -148,7 +159,15 @@ async function fetchTier(url: string, tier: ScrapeTier): Promise<{
     ...tierParams(tier),
   };
   const res = await client.get('https://api.scrape.do/', { params });
-  const html = typeof res.data === 'string' ? res.data : res.data == null ? '' : String(res.data);
+  const raw = typeof res.data === 'string' ? res.data : res.data == null ? '' : String(res.data);
+  const rawBytes = Buffer.byteLength(raw || '', 'utf8');
+  if (rawBytes > MAX_PARSE_BYTES) {
+    logger.log(
+      'info',
+      `scrape.do response truncated host=${jobUrlHost(url) || '?'} rawBytes=${rawBytes} keep=${MAX_PARSE_BYTES}`
+    );
+  }
+  const html = truncateForParse(raw);
   const headerCost = parseCostHeader(res.headers as any);
   // Credits consumed on 2xx/400/404/410 per scrape.do docs
   const charged =

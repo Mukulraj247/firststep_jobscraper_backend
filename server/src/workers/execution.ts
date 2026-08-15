@@ -23,6 +23,7 @@ import {
 } from '../services/unblocker';
 import { destroyRemoteBrowser } from '../browser-management/controller';
 import { AddGeneratedFlags, withTimeout } from '../utils/workflowHelpers';
+import { killScrapeChildForRun } from './scrapeJobSupervisor';
 
 export interface ExecuteRunData {
   userId: string;
@@ -574,14 +575,16 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
 
 export async function abortRun(runId: string, userId: string): Promise<boolean> {
   try {
+    // Hard-stop child-isolated scrapes in this process (no-op on API-only processes).
+    await killScrapeChildForRun(runId).catch((error: any) => {
+      logger.log('warn', `killScrapeChildForRun failed for ${runId}: ${error?.message || error}`);
+    });
+
     const run = await Run.findOne({ runId });
     if (!run) {
       logger.log('warn', `Run ${runId} not found or does not belong to user ${userId}`);
       return false;
     }
-
-    run.status = 'aborting';
-    await run.save();
 
     const plainRun = run.toJSON();
     const recording: any = await Robot.findOne({ 'recording_meta.id': plainRun.robotMetaId }).lean();
@@ -590,10 +593,29 @@ export async function abortRun(runId: string, userId: string): Promise<boolean> 
     let browser;
     try {
       const { browserPool } = require('../server');
-      browser = browserPool.getRemoteBrowser(plainRun.browserId);
+      browser = plainRun.browserId ? browserPool.getRemoteBrowser(plainRun.browserId) : null;
     } catch {
       browser = null;
     }
+
+    // Already aborted (e.g. delete cascade) — still destroy browser if this process owns it.
+    if (run.status === 'aborted') {
+      if (browser && plainRun.browserId) {
+        try {
+          await destroyRemoteBrowser(plainRun.browserId, userId);
+        } catch (cleanupError) {
+          logger.log('warn', `Failed to clean up browser for already-aborted run ${runId}: ${cleanupError}`);
+        }
+      }
+      return true;
+    }
+
+    if (run.status === 'completed' || run.status === 'success' || run.status === 'failed' || run.status === 'dead') {
+      return false;
+    }
+
+    run.status = 'aborting';
+    await run.save();
 
     if (!browser) {
       run.status = 'aborted';

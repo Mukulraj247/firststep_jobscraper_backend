@@ -1,9 +1,16 @@
 import axios, { AxiosInstance } from 'axios';
 import http from 'http';
 import https from 'https';
+import { isIP } from 'net';
 import * as cheerio from 'cheerio';
 import { ParsedJobFields } from './jobPageParser';
-import { stripHtmlTags, isPortalCompanyName, parseJobPageHtml, normalizeLocation } from './jobPageParser';
+import {
+  stripHtmlTags,
+  isPortalCompanyName,
+  parseJobPageHtml,
+  normalizeLocation,
+  normalizeSalaryRange,
+} from './jobPageParser';
 
 export type AtsProvider =
   | 'greenhouse'
@@ -14,7 +21,8 @@ export type AtsProvider =
   | 'recruitee'
   | 'oraclecloud'
   | 'googlecareers'
-  | 'ibmcareers';
+  | 'ibmcareers'
+  | 'workday';
 
 export interface AtsFetchResult {
   provider: AtsProvider;
@@ -25,6 +33,86 @@ export interface AtsFetchResult {
 
 const keepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 16 });
 const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 16 });
+
+/**
+ * Career-site hosts that front a Greenhouse board under a vanity URL.
+ * Key = hostname without www.; value = Greenhouse board token.
+ * Extend when we discover more `?gh_jid=` / `/careers/listing/{slug}/{id}` sites.
+ */
+const GREENHOUSE_VANITY_BOARDS: Record<string, string> = {
+  'stripe.com': 'stripe',
+};
+
+const SALESFORCE_WORKDAY_BASE =
+  'https://salesforce.wd12.myworkdayjobs.com/wday/cxs/salesforce/External_Career_Site';
+
+const ORACLE_HCM_VANITY_HOST_COMPANIES: Record<string, string> = {
+  'enterpriseplatform.dell.com': 'Dell',
+};
+
+const ORACLE_HCM_VANITY_HOSTS = new Set(
+  (process.env.ORACLE_HCM_VANITY_HOSTS || '')
+    .split(',')
+    .map((host) => host.trim().toLowerCase().replace(/^www\./, ''))
+    .filter(Boolean)
+);
+
+function isSafeOracleHcmVanityHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^www\./, '');
+  return (
+    normalized.split('.').length >= 3 &&
+    normalized !== 'localhost' &&
+    !normalized.endsWith('.localhost') &&
+    isIP(normalized) === 0
+  );
+}
+
+function greenhouseBoardForHost(hostname: string): string | null {
+  const host = hostname.replace(/^www\./i, '').toLowerCase();
+  return GREENHOUSE_VANITY_BOARDS[host] || null;
+}
+
+/** Resolve Greenhouse job id + board from vanity career URLs. */
+export function detectGreenhouseVanity(
+  parsed: URL
+): { provider: 'greenhouse'; apiUrl: string; companyHint: string } | null {
+  const board = greenhouseBoardForHost(parsed.hostname);
+  if (!board) return null;
+
+  const ghJid = (parsed.searchParams.get('gh_jid') || '').trim();
+  const path = parsed.pathname;
+  // stripe.com/careers/listing/{slug}/{numericId}
+  const listingMatch = path.match(/\/careers\/listing\/[^/]+\/(\d+)\/?$/i);
+  // stripe.com/jobs/... ?gh_jid= or /jobs/listing/...
+  const jobsListingMatch = path.match(/\/jobs\/(?:listing\/)?[^/]+\/(\d+)\/?$/i);
+  const id = (ghJid && /^\d+$/.test(ghJid) ? ghJid : '') || listingMatch?.[1] || jobsListingMatch?.[1] || '';
+  if (!id || !/^\d+$/.test(id)) return null;
+
+  return {
+    provider: 'greenhouse',
+    apiUrl: `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs/${id}`,
+    companyHint: board,
+  };
+}
+
+/**
+ * Salesforce's legacy `salesforce.com/company/careers/jobs/...` URLs render a
+ * generic landing page. The actual posting is available from its public Workday
+ * CXS JSON API, keyed by its JR requisition id.
+ */
+function detectSalesforceWorkday(
+  parsed: URL
+): { provider: 'workday'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./i, '');
+  if (host !== 'salesforce.com' && host !== 'careers.salesforce.com') return null;
+  const jobId = parsed.pathname.match(/\b(jr\d+)\b/i)?.[1];
+  if (!jobId) return null;
+  return {
+    provider: 'workday',
+    apiUrl: SALESFORCE_WORKDAY_BASE,
+    companyHint: 'Salesforce',
+  };
+}
 
 const httpClient: AxiosInstance = axios.create({
   timeout: 20_000,
@@ -99,6 +187,11 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
       }
     }
   }
+
+  // Greenhouse-backed vanity career sites (e.g. stripe.com/careers/listing/{slug}/{id}
+  // or ?gh_jid=). Prefer free boards-api over scrape.do for these hosts.
+  const greenhouseVanity = detectGreenhouseVanity(parsed);
+  if (greenhouseVanity) return greenhouseVanity;
 
   // jobs.lever.co/{company}/{id}
   if (host === 'jobs.lever.co' || host.endsWith('.lever.co')) {
@@ -181,9 +274,40 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
     }
   }
 
-  // Oracle Cloud HCM Candidate Experience
-  // https://{tenant}.fa.oraclecloud.com/hcmUI/CandidateExperience/{lang}/sites/{site}/job/{id}
-  if (/\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(host)) {
+  // Oracle's branded vanity host proxies Oracle HCM Candidate Experience.
+  // Its public detail API is more complete than a rendered page snapshot.
+  if (host === 'careers.oracle.com') {
+    const parts = path.split('/').filter(Boolean);
+    const sitesIdx = parts.indexOf('sites');
+    const jobIdx = parts.indexOf('job');
+    const siteNumber = sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
+    const jobId = jobIdx >= 0 ? (parts[jobIdx + 1] || '').split('?')[0] : '';
+    if (siteNumber && jobId && /^\d+$/.test(jobId)) {
+      const finder = encodeURIComponent(`ById;Id="${jobId}",siteNumber=${siteNumber}`);
+      const apiHost =
+        (process.env.ORACLE_CAREERS_HCM_HOST || 'eeho.fa.us2.oraclecloud.com').trim() ||
+        'eeho.fa.us2.oraclecloud.com';
+      return {
+        provider: 'oraclecloud',
+        apiUrl:
+          `https://${apiHost}/hcmRestApi/resources/latest/` +
+          `recruitingCEJobRequisitionDetails?expand=all&onlyData=true&finder=${finder}`,
+        companyHint: 'Oracle',
+      };
+    }
+  }
+
+  // Oracle HCM Candidate Experience is sometimes served from an explicitly
+  // trusted employer vanity domain (e.g. enterpriseplatform.dell.com).
+  // Keep this allowlisted so extracted URLs cannot turn into arbitrary SSRF.
+  const isOracleCloudHost = /\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(host);
+  const isAllowedOracleVanityHost =
+    isSafeOracleHcmVanityHost(host) &&
+    (Boolean(ORACLE_HCM_VANITY_HOST_COMPANIES[host]) || ORACLE_HCM_VANITY_HOSTS.has(host));
+  if (
+    (isOracleCloudHost || isAllowedOracleVanityHost) &&
+    /\/hcmUI\/CandidateExperience\//i.test(path)
+  ) {
     const tenant = host.split('.')[0];
     const parts = path.split('/').filter(Boolean);
     const sitesIdx = parts.indexOf('sites');
@@ -195,7 +319,8 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
       return {
         provider: 'oraclecloud',
         apiUrl: `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails?expand=all&onlyData=true&finder=${finder}`,
-        companyHint: oracleTenantCompany(tenant),
+        companyHint:
+          ORACLE_HCM_VANITY_HOST_COMPANIES[host] || oracleTenantCompany(tenant),
       };
     }
   }
@@ -233,6 +358,9 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
     };
   }
 
+  const salesforceWorkday = detectSalesforceWorkday(parsed);
+  if (salesforceWorkday) return salesforceWorkday;
+
   return null;
 }
 
@@ -247,6 +375,52 @@ function mapGreenhouse(data: any, companyHint: string, pageUrl: string): ParsedJ
   f.applyUrl = data.absolute_url || pageUrl;
   f.employmentType = '';
   return f;
+}
+
+function mapWorkday(data: any, companyHint: string, pageUrl: string): ParsedJobFields {
+  const info = data?.jobPostingInfo || data || {};
+  const f = empty();
+  f.jobTitle = String(info.title || '').trim();
+  f.companyName = companyOrEmpty(companyHint);
+  f.jobDescription = stripHtmlTags(info.jobDescription || info.description || '');
+  const locations = [
+    info.location,
+    info.locationsText,
+    ...(Array.isArray(info.additionalLocations) ? info.additionalLocations : []),
+  ].filter(Boolean);
+  f.location = locations.map((value: any) => (typeof value === 'string' ? value : value?.name || '')).filter(Boolean).join(', ');
+  f.date = info.startDate || info.postedOn || '';
+  f.employmentType = String(info.timeType || '').trim();
+  f.applyUrl = pageUrl;
+  return f;
+}
+
+async function fetchWorkdayJob(
+  baseUrl: string,
+  jobId: string,
+  companyHint: string,
+  pageUrl: string
+): Promise<AtsFetchResult | null> {
+  const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+  const list = await httpClient.post(
+    `${baseUrl}/jobs`,
+    { appliedFacets: {}, limit: 20, offset: 0, searchText: jobId },
+    { headers }
+  );
+  if (list.status >= 400 || !Array.isArray(list.data?.jobPostings)) return null;
+  const normalizedJobId = jobId.toLowerCase();
+  const posting = list.data.jobPostings.find((item: any) => {
+    const externalPath = String(item?.externalPath || '').toLowerCase();
+    return new RegExp(`(?:^|_)${normalizedJobId}(?:$|[/?])`).test(externalPath);
+  });
+  const externalPath = String(posting?.externalPath || '');
+  if (!externalPath.startsWith('/')) return null;
+
+  const detail = await httpClient.get(`${baseUrl}${externalPath}`, { headers });
+  if (detail.status >= 400 || !detail.data) return null;
+  const fields = mapWorkday(detail.data, companyHint, pageUrl);
+  if (!fields.jobTitle && !fields.jobDescription) return null;
+  return { provider: 'workday', fields, externalJobId: jobId };
 }
 
 function mapLever(data: any, companyHint: string, pageUrl: string): ParsedJobFields {
@@ -329,24 +503,29 @@ function mapOracleCloud(data: any, companyHint: string, pageUrl: string): Parsed
   f.employmentType = String(item.JobSchedule || item.WorkerType || item.JobType || '').trim();
   f.date = String(item.ExternalPostedStartDate || '').trim();
   f.applyUrl = pageUrl.split('?')[0];
+  if (companyHint.trim().toLowerCase() === 'oracle') {
+    f.companyLogoUrl = 'https://www.google.com/s2/favicons?domain=oracle.com&sz=128';
+  }
   if (String(item.WorkplaceType || item.WorkplaceTypeCode || '').toLowerCase().includes('remote')) {
     f.remoteType = 'Remote';
   }
 
   const flex = Array.isArray(item.requisitionFlexFields) ? item.requisitionFlexFields : [];
+  let jobExperience = 0;
   for (const field of flex) {
     const prompt = String(field?.Prompt || '').toLowerCase();
     const value = String(field?.Value || '').trim();
     if (!value) continue;
     if (/pay|salary|compensation|base\s*pay/i.test(prompt)) {
-      f.salaryRange = value.replace(/^[^$€£₹]*/, (prefix) => {
-        // Keep location prefix if present: "New York,NY $122,550..."
-        return prefix;
-      });
-      // Prefer just the money part when possible
-      const money = value.match(/[$€£₹]\s*[\d,]+(?:\.\d+)?\s*[-–—]\s*[$€£₹]?\s*[\d,]+(?:\.\d+)?/);
-      if (money) f.salaryRange = money[0].replace(/\s+/g, '');
-      else f.salaryRange = value;
+      f.salaryRange = normalizeSalaryRange(value, { location: f.location });
+    }
+    if (/\byears?\b|\bexperience\b/i.test(prompt)) {
+      // Prefer the minimum of a range ("3 to 5+ years" → 3), capped like deriveFieldsFromDescription.
+      const years = value.match(/\d+(?:\.\d+)?/)?.[0];
+      if (years) {
+        const n = Math.floor(Number(years));
+        if (n > 0 && n <= 30) jobExperience = Math.max(jobExperience, n);
+      }
     }
   }
 
@@ -366,6 +545,15 @@ function mapOracleCloud(data: any, companyHint: string, pageUrl: string): Parsed
   // Never use ShortDescriptionStr alone when we have the full HTML description.
   if (!f.jobDescription) {
     f.jobDescription = stripHtmlTags(item.ShortDescriptionStr || '');
+  }
+  if (!f.salaryRange) {
+    f.salaryRange = normalizeSalaryRange(
+      item.ExternalQualificationsStr || item.InternalQualificationsStr || '',
+      { location: f.location }
+    );
+  }
+  if (jobExperience > 0) {
+    f._jobExperience = jobExperience;
   }
   return f;
 }
@@ -675,6 +863,12 @@ export async function fetchAtsJob(pageUrl: string): Promise<AtsFetchResult | nul
         fields,
         externalJobId: jobId || undefined,
       };
+    }
+
+    if (detected.provider === 'workday') {
+      const jobId = pageUrl.match(/\b(jr\d+)\b/i)?.[1];
+      if (!jobId) return null;
+      return await fetchWorkdayJob(detected.apiUrl, jobId, detected.companyHint, pageUrl);
     }
 
     const res = await httpClient.get(detected.apiUrl, {

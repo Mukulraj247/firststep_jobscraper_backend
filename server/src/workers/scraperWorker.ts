@@ -47,6 +47,7 @@ import {
   isChildProcessIsolationEnabled,
   runScraperJobInChild,
   ScraperJobTimeoutError,
+  ScraperJobCancelledError,
   killAllActiveScrapeChildren,
 } from './scrapeJobSupervisor';
 import { detectAtsBoard, fetchAtsBoardJobs } from '../services/atsAdapters';
@@ -162,6 +163,34 @@ async function markFailed(run: any, errorMessage: string, finalState: 'pending' 
   await run.save();
 }
 
+function isRunCancelledError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof ScraperJobCancelledError) return true;
+  const name = (error as any)?.name;
+  if (name === 'ScraperJobCancelledError') return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /disappeared during execution/i.test(message) ||
+    /disappeared after list extraction/i.test(message) ||
+    /Automation .+ not found/i.test(message) ||
+    /Run .+ not found/i.test(message) ||
+    /Run aborted/i.test(message) ||
+    /Automation deleted/i.test(message)
+  );
+}
+
+/** Throws ScraperJobCancelledError when the run was deleted or aborted mid-flight. */
+async function assertRunStillActive(runId: string): Promise<void> {
+  const current = await Run.findOne({ runId }).select('status').lean();
+  if (!current) {
+    throw new ScraperJobCancelledError(runId, 'Run deleted');
+  }
+  const status = String((current as any).status || '');
+  if (status === 'aborted' || status === 'aborting') {
+    throw new ScraperJobCancelledError(runId, 'Run aborted');
+  }
+}
+
 async function forceCleanupJobBrowsers(
   browserId: string | null,
   extractionPoolKey: string | null,
@@ -274,7 +303,10 @@ async function finalizeExtractedListRows(opts: {
 
   const refreshedRun = await Run.findOne({ runId: run.runId });
   if (!refreshedRun) {
-    throw new Error(`Run ${run.runId} disappeared after list extraction`);
+    throw new ScraperJobCancelledError(String(run.runId), 'Run disappeared after list extraction');
+  }
+  if (refreshedRun.status === 'aborted' || refreshedRun.status === 'aborting') {
+    throw new ScraperJobCancelledError(String(run.runId), 'Run aborted');
   }
 
   const persistedRows = await persistExtractedDataForRun(refreshedRun, automation);
@@ -644,6 +676,7 @@ export async function runScraperJobPayload(
   const queueJobId = data.queueJobId || 'unknown';
   const agendaJob = options?.agendaJob;
   let heartbeatTimer: NodeJS.Timeout | null = null;
+  let cancelReason: string | null = null;
 
   const stopHeartbeat = () => {
     if (heartbeatTimer) {
@@ -652,8 +685,15 @@ export async function runScraperJobPayload(
     }
   };
 
+  const throwIfCancelled = () => {
+    if (cancelReason) {
+      throw new ScraperJobCancelledError(runId, cancelReason);
+    }
+  };
+
   const beatOnce = async () => {
     try {
+      await assertRunStillActive(runId);
       const iso = new Date().toISOString();
       await Run.updateOne({ runId }, { $set: { heartbeatAt: iso } });
       if (agendaJob?.attrs) {
@@ -664,6 +704,11 @@ export async function runScraperJobPayload(
         }
       }
     } catch (err: any) {
+      if (isRunCancelledError(err)) {
+        cancelReason = err instanceof Error ? err.message : String(err);
+        logger.log('info', `Scrape heartbeat detected cancel for ${runId}: ${cancelReason}`);
+        return;
+      }
       logger.log('warn', `Scrape heartbeat failed for ${runId}: ${err?.message || err}`);
     }
   };
@@ -681,7 +726,7 @@ export async function runScraperJobPayload(
   const run = await Run.findOne({ runId });
 
   if (!run) {
-    throw new Error(`Run ${runId} not found`);
+    throw new ScraperJobCancelledError(runId, 'Run not found');
   }
 
   const automation: any = await Robot.findOne({
@@ -689,8 +734,17 @@ export async function runScraperJobPayload(
   }).lean();
 
   if (!automation) {
-    await markFailed(run, `Automation ${automationId} not found`, 'failed');
-    throw new Error(`Automation ${automationId} not found`);
+    // Robot gone (deleted mid-queue) — do not markFailed if run is about to be deleted too.
+    try {
+      await markFailed(run, `Automation ${automationId} not found`, 'failed');
+    } catch {
+      /* run may already be deleted */
+    }
+    throw new ScraperJobCancelledError(runId, `Automation ${automationId} not found`);
+  }
+
+  if (run.status === 'aborted' || run.status === 'aborting') {
+    throw new ScraperJobCancelledError(runId, 'Run aborted');
   }
 
   const targetHost = hostnameFromUrl(automation?.recording_meta?.url);
@@ -738,6 +792,7 @@ export async function runScraperJobPayload(
     };
     await run.save();
     startHeartbeat();
+    throwIfCancelled();
 
     await emitQueuedRunEvent(String(userId), 'run-started', {
       runId: run.runId,
@@ -908,8 +963,12 @@ export async function runScraperJobPayload(
 
     const refreshedRun = await Run.findOne({ runId });
     if (!refreshedRun) {
-      throw new Error(`Run ${runId} disappeared during execution`);
+      throw new ScraperJobCancelledError(runId, 'Run disappeared during execution');
     }
+    if (refreshedRun.status === 'aborted' || refreshedRun.status === 'aborting') {
+      throw new ScraperJobCancelledError(runId, 'Run aborted');
+    }
+    throwIfCancelled();
 
     // Safety net: list extraction must never report success with 0 rows, even if
     // finalize was skipped or an older path marked the run completed early.
@@ -1006,6 +1065,17 @@ export async function runScraperJobPayload(
       } catch (cleanupError: any) {
         logger.log('warn', `Failed to cleanup browser ${browserId} for run ${runId}: ${cleanupError.message}`);
       }
+    }
+
+    // Deleted/aborted automation: free the slot quietly — do not retry or overwrite status.
+    if (
+      isRunCancelledError(error) ||
+      !latestRun ||
+      latestRun.status === 'aborted' ||
+      latestRun.status === 'aborting'
+    ) {
+      logger.log('info', `Scraper job cancelled for run ${runId}: ${message}`);
+      return;
     }
 
     // Drift hard-fail already persisted status/anomaly/webhook — do not retry or overwrite.
@@ -1234,6 +1304,17 @@ export async function startScraperWorker() {
         logger.log('info', `Scraper job ${job.attrs._id?.toString() || 'unknown'} completed`);
       } catch (error: any) {
         const message = error instanceof Error ? error.message : String(error);
+        if (
+          error instanceof ScraperJobCancelledError ||
+          error?.name === 'ScraperJobCancelledError' ||
+          isRunCancelledError(error)
+        ) {
+          logger.log(
+            'info',
+            `Scraper job ${job.attrs._id?.toString() || 'unknown'} cancelled: ${message}`
+          );
+          return;
+        }
         if (error instanceof ScraperJobTimeoutError || error?.name === 'ScraperJobTimeoutError') {
           logger.log(
             'error',

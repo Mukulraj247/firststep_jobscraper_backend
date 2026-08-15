@@ -298,8 +298,7 @@ export function mapGeminiJsonToResult(
     source: 'html',
   };
 
-  // Attach experience via a side channel on the returned object for the worker
-  (fields as any)._jobExperience = asExperience(parsed.jobExperience);
+  fields._jobExperience = asExperience(parsed.jobExperience);
 
   return { fields, structured };
 }

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { fork } from 'child_process';
 import path from 'path';
-import { killChildTree, isChildProcessIsolationEnabled } from './scrapeJobSupervisor';
+import {
+  killChildTree,
+  killScrapeChildForRun,
+  isChildProcessIsolationEnabled,
+  ScraperJobCancelledError,
+} from './scrapeJobSupervisor';
 
 describe('scrapeJobSupervisor', () => {
   it('defaults child isolation to enabled', () => {
@@ -19,6 +24,17 @@ describe('scrapeJobSupervisor', () => {
     else process.env.SCRAPE_JOB_CHILD_PROCESS = prev;
     if (prevChild === undefined) delete process.env.SCRAPE_JOB_CHILD;
     else process.env.SCRAPE_JOB_CHILD = prevChild;
+  });
+
+  it('killScrapeChildForRun is a no-op for unknown runIds', async () => {
+    expect(await killScrapeChildForRun('no-such-run')).toBe(false);
+  });
+
+  it('ScraperJobCancelledError carries runId', () => {
+    const err = new ScraperJobCancelledError('r1', 'Automation deleted');
+    expect(err.name).toBe('ScraperJobCancelledError');
+    expect(err.runId).toBe('r1');
+    expect(err.message).toMatch(/Automation deleted/);
   });
 
   it('killChildTree stops a hung child within timeout', async () => {

@@ -12,6 +12,7 @@ import {
   parseSuccessFactorsJobsHtml,
   normalizeSuccessFactorsStartUrl,
   mapIbmCareersHtml,
+  mapOracleCloud,
 } from './atsAdapters';
 import fs from 'fs';
 import path from 'path';
@@ -21,6 +22,30 @@ describe('detectAts', () => {
     const d = detectAts('https://boards.greenhouse.io/stripe/jobs/12345');
     expect(d?.provider).toBe('greenhouse');
     expect(d?.apiUrl).toContain('boards-api.greenhouse.io/v1/boards/stripe/jobs/12345');
+  });
+
+  it('detects Stripe Greenhouse vanity career listing URLs', () => {
+    const d = detectAts(
+      'https://stripe.com/careers/listing/backend-engineer-core-technology/6042172'
+    );
+    expect(d?.provider).toBe('greenhouse');
+    expect(d?.companyHint).toBe('stripe');
+    expect(d?.apiUrl).toContain('boards-api.greenhouse.io/v1/boards/stripe/jobs/6042172');
+  });
+
+  it('detects Stripe Greenhouse vanity URLs with gh_jid', () => {
+    const d = detectAts('https://stripe.com/jobs/search?gh_jid=6042172');
+    expect(d?.provider).toBe('greenhouse');
+    expect(d?.apiUrl).toContain('/boards/stripe/jobs/6042172');
+  });
+
+  it('detects Salesforce legacy URLs as Workday postings', () => {
+    const d = detectAts(
+      'https://salesforce.com/company/careers/jobs/JR334544/lead-software-engineer-cloud-erp-finance'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Salesforce');
+    expect(d?.apiUrl).toContain('salesforce.wd12.myworkdayjobs.com/wday/cxs/salesforce');
   });
 
   it('detects Lever posting URLs', () => {
@@ -50,6 +75,39 @@ describe('detectAts', () => {
     expect(d?.apiUrl).toContain('CX_1001');
   });
 
+  it('detects Oracle HCM Candidate Experience on an employer vanity host', () => {
+    const d = detectAts(
+      'https://enterpriseplatform.dell.com/hcmUI/CandidateExperience/en/sites/careers/job/R288262'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(d?.companyHint).toBe('Dell');
+    expect(d?.apiUrl).toContain('enterpriseplatform.dell.com/hcmRestApi');
+    expect(decodeURIComponent(d?.apiUrl || '')).toContain('Id="R288262"');
+  });
+
+  it('does not trust arbitrary Oracle HCM vanity hosts', () => {
+    expect(
+      detectAts('https://127.0.0.1/hcmUI/CandidateExperience/en/sites/careers/job/123')
+    ).toBeNull();
+  });
+
+  it('detects Oracle careers vanity job URLs and targets the HCM detail API', () => {
+    const d = detectAts(
+      'https://careers.oracle.com/en/sites/jobsearch/job/342043?lastSelectedFacet=CATEGORIES'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(d?.companyHint).toBe('Oracle');
+    expect(d?.apiUrl).toContain('eeho.fa.us2.oraclecloud.com');
+    expect(decodeURIComponent(d?.apiUrl || '')).toContain('Id="342043"');
+    expect(decodeURIComponent(d?.apiUrl || '')).toContain('siteNumber=jobsearch');
+  });
+
+  it('ignores Oracle vanity non-job paths', () => {
+    expect(
+      detectAts('https://careers.oracle.com/en/sites/jobsearch/join-talent-community')
+    ).toBeNull();
+  });
+
   it('detects IBM Careers JobDetail URLs', () => {
     const d = detectAts(
       'https://careers.ibm.com/en_IN/careers/JobDetail?jobId=119566&source=WEB_Search_INDIA'
@@ -63,6 +121,65 @@ describe('detectAts', () => {
     expect(
       detectAts('https://careers.ibm.com/en_US/careers/SearchJobs?jobId=119566')
     ).toBeNull();
+  });
+});
+
+describe('mapOracleCloud', () => {
+  it('maps full Oracle HCM details, flex experience, salary, and a usable brand logo', () => {
+    const fields = mapOracleCloud(
+      {
+        items: [
+          {
+            Id: '342043',
+            Title: 'Senior Platform Software Engineer - Agentic AI Project',
+            Category: 'Product and Research',
+            PrimaryLocation: 'Nashville, TN, United States',
+            JobSchedule: 'Full time',
+            ExternalPostedStartDate: '2026-08-13T23:05:17+00:00',
+            ExternalDescriptionStr: '<p>Build the region automation service using AI.</p>',
+            ExternalResponsibilitiesStr:
+              '<p>Responsibilities</p><ul><li>Design distributed cloud services</li></ul>',
+            ExternalQualificationsStr:
+              'Basic Qualifications<br>4+ years of software development<br>' +
+              'US: Hiring Range in USD from: $92,500 to $209,500 per annum.',
+            CorporateDescriptionStr: '<p>About Oracle and its benefits.</p>',
+            requisitionFlexFields: [
+              { Prompt: 'Years', Value: '3 to 5+ years' },
+              { Prompt: 'Role', Value: 'Individual Contributor' },
+            ],
+          },
+        ],
+      },
+      'Oracle',
+      'https://careers.oracle.com/en/sites/jobsearch/job/342043'
+    );
+
+    expect(fields.jobDescription).toContain('Design distributed cloud services');
+    expect(fields.jobDescription).toContain('Hiring Range');
+    expect(fields.jobDescription.length).toBeGreaterThan(200);
+    expect(fields.location).toBe('Nashville, TN, United States');
+    expect(fields.jobCategory).toBe('Product and Research');
+    expect(fields.employmentType).toBe('Full time');
+    expect(fields.salaryRange).toBe('$92,500 – $209,500');
+    expect(fields._jobExperience).toBe(3);
+    expect(fields.companyLogoUrl).toContain('oracle.com');
+  });
+
+  it('caps Oracle flex-field years of experience at 30', () => {
+    const fields = mapOracleCloud(
+      {
+        items: [
+          {
+            Title: 'Engineer',
+            ExternalDescriptionStr: '<p>Build systems.</p>',
+            requisitionFlexFields: [{ Prompt: 'Years', Value: '99 years of experience' }],
+          },
+        ],
+      },
+      'Oracle',
+      'https://careers.oracle.com/en/sites/jobsearch/job/1'
+    );
+    expect(fields._jobExperience).toBeUndefined();
   });
 });
 

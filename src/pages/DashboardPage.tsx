@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -271,17 +271,11 @@ export const DashboardPage = () => {
     };
   }, [queueSocket, loadAutomations]);
 
-  const totals = useMemo(() => {
-    return automations.reduce(
-      (acc, automation) => {
-        acc.rows += automation.rowsExtracted || 0;
-        if (automation.status === 'success' || automation.status === 'completed') acc.success += 1;
-        if (automation.status === 'failed') acc.failed += 1;
-        return acc;
-      },
-      { rows: 0, success: 0, failed: 0 }
-    );
-  }, [automations]);
+  const totals = {
+    rows: summary?.rowsExtractedTotal ?? 0,
+    success: summary?.successfulCount ?? 0,
+    failed: summary?.failedCount ?? 0,
+  };
 
   const handleCreate = async () => {
     if (!form.companyName.trim()) {
@@ -343,7 +337,7 @@ export const DashboardPage = () => {
     if (!deleteTarget) return;
     try {
       await deleteAutomation(deleteTarget.id);
-      notify('success', `Deleted “${deleteTarget.name}” and all related runs, data, and jobs`);
+      notify('success', `Deleted “${deleteTarget.name}” (in-flight scrapes aborted) and related runs, data, and jobs`);
       setDeleteTarget(null);
       await loadAutomations();
     } catch (error: any) {
@@ -509,21 +503,21 @@ export const DashboardPage = () => {
           <Typography variant="overline">Rows Extracted</Typography>
           <Typography variant="h5">{totals.rows}</Typography>
           <Typography variant="caption" color="text.secondary" display="block">
-            This page only
+            All pages
           </Typography>
         </Paper>
         <Paper sx={{ p: 2, minWidth: 180 }}>
           <Typography variant="overline">Successful</Typography>
           <Typography variant="h5">{totals.success}</Typography>
           <Typography variant="caption" color="text.secondary" display="block">
-            This page only
+            All pages
           </Typography>
         </Paper>
         <Paper sx={{ p: 2, minWidth: 180 }}>
           <Typography variant="overline">Failed</Typography>
           <Typography variant="h5">{totals.failed}</Typography>
           <Typography variant="caption" color="text.secondary" display="block">
-            This page only
+            All pages
           </Typography>
         </Paper>
         {activeScheduledCount > 0 && (

@@ -4,11 +4,11 @@ export const MAX_PARSE_BYTES = parseInt(process.env.MAX_PARSE_BYTES || String(1.
 export const DESCRIPTION_SNIPPET_LEN = 280;
 
 const PORTAL_COMPANY_RE =
-  /^(careers?|jobs?|hiring|job\s*board|greenhouse|lever|workday|icims|taleo|smartrecruiters|jobvite|bamboohr|successfactors|workable|ashby|linkedin|indeed|glassdoor)$/i;
+  /^(careers?|jobs?|hiring|job\s*board|greenhouse|lever|workday|icims|taleo|smartrecruiters|jobvite|bamboohr|successfactors|workable|ashby|linkedin|indeed|glassdoor|search\s+results?|search\s+for|amazon\.jobs)$/i;
 
 /** Portal / ATS chrome mistaken for employer names (e.g. "JPMC Candidate Experience page"). */
 const BAD_COMPANY_RE =
-  /candidate\s*experience|careers?\s*page|career\s*site|job\s*(?:board|portal|search|listing|opportunit)|hiring\s*portal|talent\s*(?:community|network)|welcome\s*to\s*our|workday|greenhouse|lever\.co|myworkdayjobs|smartrecruiters|successfactors|icims|taleo|oraclecloud|^jobs?\s+at\b|^\s*careers?\s*$/i;
+  /candidate\s*experience|careers?\s*page|career\s*site|job\s*(?:board|portal|search|listing|opportunit)|hiring\s*portal|talent\s*(?:community|network)|welcome\s*to\s*our|workday|greenhouse|lever\.co|myworkdayjobs|smartrecruiters|successfactors|icims|taleo|oraclecloud|^jobs?\s+at\b|^\s*careers?\s*$|^\s*search\s+results?\s*$|^\s*search\s+for\s*$|amazon\.jobs/i;
 
 const BOT_WALL_RE = /cf-challenge|captcha|just a moment|attention required|access denied|bot.?detection/i;
 
@@ -18,6 +18,14 @@ const JOB_DESC_SIGNAL_RE =
 /** Stronger JD language — used to keep short-but-real metas from being treated as SPA shells. */
 const STRONG_JD_SIGNAL_RE =
   /responsibilit|requirements?|qualifications?|minimum qualifications?|preferred qualifications?|you will\b|what you.?ll\b|job description|key duties|we are looking|experience (?:required|preferred)/i;
+
+/**
+ * Role-section language that establishes the text is an actual posting rather than
+ * shared navigation or a legal footer. Intentionally excludes weaker phrases such
+ * as "benefits" and "you will", which can also appear in search-page chrome.
+ */
+const ROLE_BODY_SIGNAL_RE =
+  /responsibilit|requirements?|qualifications?|minimum qualifications?|preferred qualifications?|about\s+(?:the\s+)?(?:role|job|position)|what you.?ll do|job description|key duties|we are looking/i;
 
 /**
  * og:description / social teasers from JS career SPAs (Apple, etc.).
@@ -52,6 +60,8 @@ export interface ParsedJobFields {
   companyLogoUrl: string;
   jobCategory: string;
   source: 'jsonld' | 'meta' | 'html' | 'none';
+  /** Minimum years inferred from a structured ATS field. */
+  _jobExperience?: number;
 }
 
 const emptyFields = (): ParsedJobFields => ({
@@ -177,6 +187,7 @@ export function canonicalizeCompanyName(name: string): string {
     return 'JPMorgan Chase';
   }
   if (key === 'metacareers' || key === 'meta careers' || key === 'facebook') return 'Meta';
+  if (key === 'stripe') return 'Stripe';
   if (key === 'ibm' || key === 'ibm corporation' || key === 'international business machines') {
     return 'IBM';
   }
@@ -256,7 +267,7 @@ function humanizeJobSlug(slug: string): string {
     .join(' ');
 }
 
-/** Recover a display title from Ford/Carrier/Toyota job URL slugs. */
+/** Recover a display title from Ford/Carrier/Toyota/Stripe-style job URL slugs. */
 export function titleFromJobUrl(url: string): string {
   try {
     const path = new URL(String(url || '').trim()).pathname;
@@ -266,6 +277,9 @@ export function titleFromJobUrl(url: string): string {
     if (toyota?.[1]) return humanizeJobSlug(toyota[1]);
     const google = path.match(/\/jobs\/results\/\d+-([^/?#]+)/i);
     if (google?.[1]) return humanizeJobSlug(google[1]);
+    // stripe.com/careers/listing/{slug}/{id} (and similar Greenhouse vanity paths)
+    const listing = path.match(/\/(?:careers|jobs)\/listing\/([^/]+)\/\d+\/?$/i);
+    if (listing?.[1]) return humanizeJobSlug(listing[1]);
     return '';
   } catch {
     return '';
@@ -307,7 +321,12 @@ export function isJunkDescription(text: string): boolean {
   const raw = normalizeJobDescription(text);
   if (!raw) return true;
   if (raw.length < 40) return true;
-  if (NAV_CHROME_RE.test(raw)) return true;
+
+  const hasRoleBodySignal = ROLE_BODY_SIGNAL_RE.test(raw);
+
+  // Nav/search chrome — real Greenhouse/ATS JDs often append "Privacy Policy" or
+  // "Terms of Use" in a legal footer. Keep only documents with actual role sections.
+  if (NAV_CHROME_RE.test(raw) && !hasRoleBodySignal) return true;
 
   // SPA/social teaser copy — not a job description (any employer, not Apple-specific).
   if (ROLE_TEASER_RE.test(raw) || ROLE_TEASER_CTA_RE.test(raw)) return true;
@@ -993,7 +1012,7 @@ export function mergeParsedFields(
     if (yt && !isGenericJobTitle(yt)) return yt;
     return xt || yt;
   };
-  return {
+  const merged: ParsedJobFields = {
     jobTitle: pickTitle(a.jobTitle, b.jobTitle),
     companyName: sanitizeCompanyName(pick(a.companyName, b.companyName)),
     jobDescription: pickBestDescription(a.jobDescription, b.jobDescription),
@@ -1009,6 +1028,14 @@ export function mergeParsedFields(
     jobCategory: pick(a.jobCategory, b.jobCategory),
     source: a.source !== 'none' ? a.source : b.source,
   };
+  const jobExperience = Math.max(
+    Number(a._jobExperience) || 0,
+    Number(b._jobExperience) || 0
+  );
+  if (jobExperience > 0) {
+    merged._jobExperience = jobExperience;
+  }
+  return merged;
 }
 
 /**

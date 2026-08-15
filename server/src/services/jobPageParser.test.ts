@@ -9,6 +9,7 @@ import {
   isPortalCompanyName,
   isThinParse,
   makeDescriptionSnippet,
+  mergeParsedFields,
   normalizeJobDescription,
   parseJobPageHtml,
   parseJsonLdJobPosting,
@@ -114,6 +115,17 @@ describe('jobPageParser', () => {
     expect(parsed.jobTitle).toBe('Senior Software Engineer');
   });
 
+  it('preserves extracted experience when parsed fields are merged', () => {
+    const primary = {
+      jobTitle: 'Software Engineer',
+      jobDescription: 'Responsibilities include building distributed systems.',
+      source: 'html',
+      _jobExperience: 3,
+    } as any;
+    const merged = mergeParsedFields(primary, null);
+    expect(merged._jobExperience).toBe(3);
+  });
+
   it('strips HTML job descriptions into readable plain text', () => {
     const html =
       '<p style="text-align:left"><b>Overview</b></p><p>Collaborative. Respectful.</p><ul><li><p>Design apps</p></li></ul>';
@@ -174,6 +186,65 @@ describe('jobPageParser', () => {
     ).toBe(false);
   });
 
+  it('keeps real Greenhouse JDs that mention Privacy Policy in the legal footer', () => {
+    const redditStyle = [
+      'Reddit is a community of communities. About the Job The Deployment Infrastructure team builds platforms.',
+      'Responsibilities include designing CI/CD systems and mentoring engineers.',
+      'Requirements: 5+ years of software engineering experience.',
+      'Please refer to our Candidate Privacy Policy for Potential Employees and Contractors.',
+      'Reddit is proud to be an equal opportunity employer.',
+    ].join(' ');
+    expect(isJunkDescription(redditStyle)).toBe(false);
+    expect(
+      isBoardQualityPass({
+        title: 'Senior Software Engineer - Full Stack Internal Tooling',
+        description: redditStyle,
+        jobUrl: 'https://job-boards.greenhouse.io/reddit/jobs/7976852',
+      })
+    ).toBe(true);
+  });
+
+  it('keeps Robinhood-style ATS JDs with Privacy Policy footer', () => {
+    const robinhoodStyle = [
+      'Join us in building the future of finance. Our mission is to democratize finance for all.',
+      'About the role: you will build Android experiences for government products.',
+      'Responsibilities include shipping features and collaborating with product.',
+      'Requirements: 3+ years of Android development.',
+      'Please review the Privacy Policy for your country of application.',
+    ].join(' ');
+    expect(isJunkDescription(robinhoodStyle)).toBe(false);
+    expect(
+      isBoardQualityPass({
+        title: 'Android Engineer, Government Products',
+        description: robinhoodStyle,
+        jobUrl: 'https://robinhood.com/us/en/careers/openings/?gh_jid=123',
+      })
+    ).toBe(true);
+  });
+
+  it('rejects legal-only and search chrome that use weak job-like wording', () => {
+    const legalOnly = [
+      'Candidate Privacy Policy Terms of Service. This policy explains how we collect, use, and protect your data.',
+      'You will find information about benefits, cookies, and your legal rights when applying for opportunities.',
+      'Please read this Privacy Policy carefully before using the careers website.',
+    ].join(' ');
+    const searchChrome = [
+      'Search Jobs Keyword(s) Location Radius Browse available job openings.',
+      'You will find benefits information and career resources after creating an account.',
+      'Search Jobs Search Jobs Select a Category Select a Location.',
+    ].join(' ');
+
+    expect(isJunkDescription(legalOnly)).toBe(true);
+    expect(isJunkDescription(searchChrome)).toBe(true);
+    expect(
+      isBoardQualityPass({
+        title: 'Software Engineer',
+        description: legalOnly,
+        jobUrl: 'https://careers.example.com/privacy',
+      })
+    ).toBe(false);
+  });
+
   it('treats meta-only SPA shells as thin so scrape.do escalates to JS render', () => {
     const appleShell = `<!DOCTYPE html><html><head>
 <meta property="og:title" content="Senior Business Operations Analyst, Enterprise Technology Services" />
@@ -209,6 +280,19 @@ describe('jobPageParser', () => {
     expect(isCareersJobDetailUrl('https://jobs.carrier.com/candidate-hub')).toBe(false);
     expect(titleFromJobUrl(ford).toLowerCase()).toContain('manager');
     expect(titleFromJobUrl(toyota).toLowerCase()).toContain('cyber');
+  });
+
+  it('recovers titles from Stripe-style /careers/listing/{slug}/{id} URLs', () => {
+    expect(
+      titleFromJobUrl(
+        'https://stripe.com/careers/listing/backend-engineer-core-technology/6042172'
+      ).toLowerCase()
+    ).toContain('backend');
+    expect(
+      titleFromJobUrl(
+        'https://stripe.com/careers/listing/cloud-security-engineer/7867389'
+      ).toLowerCase()
+    ).toContain('security');
   });
 
   it('fails board quality for hub URLs and junk shells', () => {

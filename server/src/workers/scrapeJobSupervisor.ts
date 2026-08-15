@@ -15,6 +15,10 @@ const execFileAsync = promisify(execFile);
 
 /** Active scrape child PIDs — killed on parent drain/shutdown. */
 const activeScrapeChildPids = new Set<number>();
+/** runId → child pid so abort/delete can hard-stop one scrape without killing others. */
+const scrapeChildPidByRunId = new Map<string, number>();
+/** runIds cancelled via killScrapeChildForRun — exit handler maps these to CancelledError. */
+const cancelledScrapeRunIds = new Set<string>();
 
 setOrphanReaperScrapeChildrenCheck(() => activeScrapeChildPids.size > 0);
 
@@ -29,6 +33,34 @@ export class ScraperJobTimeoutError extends Error {
     this.name = 'ScraperJobTimeoutError';
     this.runId = runId;
   }
+}
+
+/** Thrown when a scrape child is killed because the run/automation was aborted or deleted. */
+export class ScraperJobCancelledError extends Error {
+  readonly runId: string;
+  constructor(runId: string, reason = 'Run aborted or automation deleted') {
+    super(`${reason} (runId=${runId})`);
+    this.name = 'ScraperJobCancelledError';
+    this.runId = runId;
+  }
+}
+
+/**
+ * Hard-kill the scrape child (and Chromium tree) for a specific runId, if tracked in this process.
+ * No-op when called from the API process (map is empty) — enqueue `abort-run` so the scraper worker does this.
+ */
+export async function killScrapeChildForRun(runId: string): Promise<boolean> {
+  const pid = scrapeChildPidByRunId.get(runId);
+  if (!pid) return false;
+  cancelledScrapeRunIds.add(runId);
+  logger.log('warn', `Killing scrape child for cancelled run ${runId} pid=${pid}`);
+  try {
+    await killChildTree(pid);
+  } finally {
+    scrapeChildPidByRunId.delete(runId);
+    activeScrapeChildPids.delete(pid);
+  }
+  return true;
 }
 
 export type ChildResultMessage =
@@ -96,6 +128,8 @@ export async function killAllActiveScrapeChildren(): Promise<number> {
   logger.log('warn', `Killing ${pids.length} active scrape child process(es) on shutdown`);
   await Promise.all(pids.map((pid) => killChildTree(pid).catch(() => {})));
   activeScrapeChildPids.clear();
+  scrapeChildPidByRunId.clear();
+  cancelledScrapeRunIds.clear();
   return pids.length;
 }
 
@@ -174,6 +208,7 @@ export async function runScraperJobInChild(
   }
 
   activeScrapeChildPids.add(pid);
+  scrapeChildPidByRunId.set(data.runId, pid);
   logger.log('info', `Forked scrape child pid=${pid} runId=${data.runId}`);
 
   return new Promise<void>((resolve, reject) => {
@@ -183,6 +218,9 @@ export async function runScraperJobInChild(
 
     const cleanup = () => {
       activeScrapeChildPids.delete(pid);
+      if (scrapeChildPidByRunId.get(data.runId) === pid) {
+        scrapeChildPidByRunId.delete(data.runId);
+      }
       child.removeAllListeners();
     };
 
@@ -236,6 +274,11 @@ export async function runScraperJobInChild(
       if (settled) return;
       if (timedOut) {
         finishErr(new ScraperJobTimeoutError(data.runId, timeoutMs));
+        return;
+      }
+      if (cancelledScrapeRunIds.has(data.runId)) {
+        cancelledScrapeRunIds.delete(data.runId);
+        finishErr(new ScraperJobCancelledError(data.runId));
         return;
       }
       if (resultError) {

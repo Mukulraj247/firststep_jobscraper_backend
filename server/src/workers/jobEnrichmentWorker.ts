@@ -20,7 +20,7 @@ import {
   normalizeSalaryRange,
   normalizeLocation,
   deriveFieldsFromDescription,
-  isGenericJobTitle,
+  isBoardQualityPass,
   preferJobUrlTitle,
   htmlToPlainText,
 } from '../services/jobPageParser';
@@ -252,6 +252,21 @@ function yieldEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/**
+ * Keep the persisted status aligned with Job Board eligibility. Previously a
+ * generic landing-page title with an empty description became `partial`, while
+ * the API correctly hid it — causing confusing non-zero board badges.
+ */
+function boardListingStatus(fields: ParsedJobFields, jobUrl: string): 'ready' | 'failed' {
+  return isBoardQualityPass({
+    title: fields.jobTitle,
+    description: fields.jobDescription,
+    jobUrl,
+  })
+    ? 'ready'
+    : 'failed';
+}
+
 async function persistResult(
   doc: IJobBoardListing,
   fields: ParsedJobFields,
@@ -318,8 +333,8 @@ async function persistResult(
   const geminiExp =
     typeof opts.jobExperienceOverride === 'number' && opts.jobExperienceOverride > 0
       ? opts.jobExperienceOverride
-      : typeof (fields as any)._jobExperience === 'number' && (fields as any)._jobExperience > 0
-        ? (fields as any)._jobExperience
+      : typeof fields._jobExperience === 'number' && fields._jobExperience > 0
+        ? fields._jobExperience
         : 0;
   const jobExperience =
     geminiExp ||
@@ -418,12 +433,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) {
     metrics.ats_hit += 1;
     const merged = mergeParsedFields(ats.fields, listFields);
-    const status =
-      merged.jobTitle && merged.jobDescription && descriptionQualityScore(merged.jobDescription) > 0
-        ? 'ready'
-        : merged.jobTitle || merged.jobDescription
-          ? 'partial'
-          : 'failed';
+    const status = boardListingStatus(merged, doc.jobUrl);
     await persistResult(doc, merged, {
       status,
       method: 'ats',
@@ -433,23 +443,34 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       externalJobId: ats.externalJobId,
     });
     if (status === 'ready') metrics.ready += 1;
-    else if (status === 'partial') metrics.partial += 1;
     else metrics.failed += 1;
     circuitBreaker.recordSuccess();
     return;
   }
 
-  // Oracle/Workday-style ATS URL but API returned nothing → posting is gone.
-  // Do not fall through to scrape.do (that only keeps the short list teaser).
+  // Direct ATS API hosts are authoritative. A miss means the requisition is
+  // gone, so do not spend scrape.do credits on a generic landing page.
   const detected = detectAts(doc.jobUrl);
-  if (detected?.provider === 'oraclecloud') {
+  let isDirectOracleHcm = false;
+  try {
+    isDirectOracleHcm = /\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(new URL(doc.jobUrl).hostname);
+  } catch {
+    isDirectOracleHcm = false;
+  }
+  if (
+    (detected?.provider === 'oraclecloud' && isDirectOracleHcm) ||
+    detected?.provider === 'workday'
+  ) {
     metrics.expired += 1;
     await persistResult(doc, listFields, {
       status: 'expired',
       method: 'ats',
       tier: 0,
       creditsSpent: 0,
-      error: 'oraclecloud_requisition_not_found',
+      error:
+        detected?.provider === 'workday'
+          ? 'workday_requisition_not_found'
+          : 'oraclecloud_requisition_not_found',
       incrementAttempts: true,
     });
     return;
@@ -542,12 +563,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       await yieldEventLoop();
       if (browser) {
         const merged = mergeParsedFields(browser.fields, listFields);
-        const status =
-          merged.jobTitle && merged.jobDescription && descriptionQualityScore(merged.jobDescription) > 0
-            ? 'ready'
-            : merged.jobTitle || merged.jobDescription
-              ? 'partial'
-              : 'failed';
+        const status = boardListingStatus(merged, doc.jobUrl);
         await persistResult(doc, merged, {
           status,
           method: 'browser',
@@ -556,7 +572,6 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
           incrementAttempts: true,
         });
         if (status === 'ready') metrics.ready += 1;
-        else if (status === 'partial') metrics.partial += 1;
         else metrics.failed += 1;
         circuitBreaker.recordSuccess();
         return;
@@ -655,8 +670,8 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
         llmInputHash = gemini.inputHash;
         llmTokens = gemini.usage.tokens;
         jobExperienceOverride =
-          typeof (gemini.fields as any)._jobExperience === 'number'
-            ? (gemini.fields as any)._jobExperience
+          typeof gemini.fields._jobExperience === 'number'
+            ? gemini.fields._jobExperience
             : 0;
       } else if (gemini.error) {
         logger.log('info', `Gemini skipped for ${doc.jobUrl}: ${gemini.error}`);
@@ -664,12 +679,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     }
   }
 
-  const hasTitle = Boolean(merged.jobTitle && !isGenericJobTitle(merged.jobTitle));
-  const hasGoodDesc = Boolean(
-    merged.jobDescription && descriptionQualityScore(merged.jobDescription) > 0
-  );
-  const status =
-    hasTitle && hasGoodDesc ? 'ready' : hasTitle || merged.jobDescription ? 'partial' : 'failed';
+  const status = boardListingStatus(merged, doc.jobUrl);
   await persistResult(doc, merged, {
     status,
     method,
@@ -683,7 +693,6 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     llmTokens,
   });
   if (status === 'ready') metrics.ready += 1;
-  else if (status === 'partial') metrics.partial += 1;
   else metrics.failed += 1;
 }
 

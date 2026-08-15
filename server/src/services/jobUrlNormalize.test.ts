@@ -45,6 +45,17 @@ describe('normalizeJobUrl', () => {
     expect(normalizeJobUrl('')).toBeNull();
     expect(normalizeJobUrl(null)).toBeNull();
   });
+
+  it('forces www for Ford careers job URLs', () => {
+    const apex =
+      'https://careers.ford.com/job/brook-park/manager-hr-business-partners/48560/98473354336';
+    const www =
+      'https://www.careers.ford.com/job/brook-park/manager-hr-business-partners/48560/98473354336';
+    expect(normalizeJobUrl(apex)).toBe(www);
+    expect(normalizeJobUrl(www)).toBe(www);
+    expect(jobUrlKey(apex)).toBe(jobUrlKey(www));
+    expect(jobUrlHost(apex)).toBe('careers.ford.com');
+  });
 });
 
 describe('jobUrlKey', () => {

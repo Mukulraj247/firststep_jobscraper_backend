@@ -53,6 +53,12 @@ function isGoogleCareersJobPath(pathname: string): boolean {
 }
 
 /**
+ * Hosts whose apex domain redirects job-detail paths to a marketing homepage.
+ * Keep these canonicalized on `www.` so enrichment hits the real posting.
+ */
+const FORCE_WWW_JOB_HOSTS = new Set(['careers.ford.com']);
+
+/**
  * Normalize a job listing URL for deduplication.
  * Returns null when the input is not a usable http(s) URL.
  */
@@ -79,7 +85,8 @@ export function normalizeJobUrl(raw: unknown): string | null {
   }
 
   parsed.hash = '';
-  parsed.hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const apexHost = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  parsed.hostname = FORCE_WWW_JOB_HOSTS.has(apexHost) ? `www.${apexHost}` : apexHost;
   parsed.protocol = 'https:';
   parsed.username = '';
   parsed.password = '';
@@ -129,7 +136,7 @@ export function jobUrlHost(raw: unknown): string | null {
   const normalized = normalizeJobUrl(raw);
   if (!normalized) return null;
   try {
-    return new URL(normalized).hostname;
+    return new URL(normalized).hostname.replace(/^www\./, '');
   } catch {
     return null;
   }
