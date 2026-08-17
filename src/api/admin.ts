@@ -193,3 +193,100 @@ export async function sendAdminDigestTest(): Promise<{
   const response = await axios.post(`${apiUrl}/api/admin/digest/test`, {}, withCreds);
   return response.data;
 }
+
+export type AdminUserSummary = {
+  id: string;
+  email: string | null;
+  automationCount: number;
+  orphan?: boolean;
+};
+
+export type AdminAutomationSchedule = {
+  enabled: boolean;
+  cron: string;
+  every?: number | null;
+  timezone: string;
+  paused?: boolean;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+} | null;
+
+export type AdminAutomationSummary = {
+  id: string;
+  scoutId?: string | null;
+  name: string;
+  companyName?: string;
+  tags?: string[];
+  targetUrl?: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  status?: string;
+  lastRunTime?: string | null;
+  rowsExtracted?: number;
+  latestRunId?: string | null;
+  webhookUrl?: string;
+  schedule?: AdminAutomationSchedule;
+  ownerUserId?: string | null;
+};
+
+export type AdminAutomationUpdatePayload = {
+  name?: string;
+  startUrl?: string;
+  companyName?: string;
+  tags?: string[];
+  webhookUrl?: string;
+  schedule?: {
+    enabled?: boolean;
+    cron?: string | null;
+    timezone?: string;
+  };
+};
+
+export async function listAdminUsers(params?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+}): Promise<{
+  users: AdminUserSummary[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}> {
+  const response = await axios.get(`${apiUrl}/api/admin/users`, {
+    ...withCreds,
+    params,
+  });
+  return response.data;
+}
+
+export async function listAdminUserAutomations(
+  userId: string,
+  params?: { page?: number; limit?: number }
+): Promise<{
+  automations: AdminAutomationSummary[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}> {
+  const response = await axios.get(
+    `${apiUrl}/api/admin/users/${encodeURIComponent(userId)}/automations`,
+    { ...withCreds, params }
+  );
+  return response.data;
+}
+
+export async function updateAdminAutomation(
+  id: string,
+  payload: AdminAutomationUpdatePayload
+): Promise<{ success: boolean; automation: AdminAutomationSummary }> {
+  const response = await axios.put(
+    `${apiUrl}/api/admin/automations/${encodeURIComponent(id)}`,
+    payload,
+    withCreds
+  );
+  return response.data;
+}
+
+export async function deleteAdminAutomation(id: string): Promise<{ success: boolean }> {
+  const response = await axios.delete(
+    `${apiUrl}/api/admin/automations/${encodeURIComponent(id)}`,
+    withCreds
+  );
+  return response.data;
+}

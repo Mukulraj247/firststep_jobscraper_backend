@@ -8,14 +8,20 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   FormControl,
+  FormControlLabel,
   InputAdornment,
   InputLabel,
   MenuItem,
   Paper,
   Select,
   Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -31,15 +37,21 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import {
   adminLogin,
   adminLogout,
+  deleteAdminAutomation,
   getAdminDigitalOcean,
   getAdminDigestStatus,
   getAdminOverview,
   getAdminRun,
   getAdminSession,
   listAdminRuns,
+  listAdminUserAutomations,
+  listAdminUsers,
   sendAdminDigestTest,
+  updateAdminAutomation,
+  type AdminAutomationSummary,
   type AdminOverview,
   type AdminRunSummary,
+  type AdminUserSummary,
   type DigitalOceanDashboard,
   type OpsDigestStatus,
 } from '../api/admin';
@@ -294,6 +306,38 @@ export const AdminPage = () => {
   const [digestSending, setDigestSending] = useState(false);
   const [digestMessage, setDigestMessage] = useState<string | null>(null);
 
+  const [users, setUsers] = useState<AdminUserSummary[]>([]);
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersLimit] = useState(20);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersTotalPages, setUsersTotalPages] = useState(1);
+  const [usersDraftQ, setUsersDraftQ] = useState('');
+  const [usersAppliedQ, setUsersAppliedQ] = useState('');
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState<string | null>(null);
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [automationsByUserId, setAutomationsByUserId] = useState<
+    Record<string, AdminAutomationSummary[]>
+  >({});
+  const [automationsLoadingId, setAutomationsLoadingId] = useState<string | null>(null);
+  const [automationsError, setAutomationsError] = useState<string | null>(null);
+
+  const [editAutomation, setEditAutomation] = useState<AdminAutomationSummary | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
+  const [editCompany, setEditCompany] = useState('');
+  const [editTags, setEditTags] = useState('');
+  const [editWebhook, setEditWebhook] = useState('');
+  const [editScheduleEnabled, setEditScheduleEnabled] = useState(false);
+  const [editCron, setEditCron] = useState('');
+  const [editTimezone, setEditTimezone] = useState('UTC');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<AdminAutomationSummary | null>(null);
+  const [deleteSaving, setDeleteSaving] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const bootstrap = useCallback(async () => {
     setChecking(true);
     try {
@@ -381,6 +425,130 @@ export const AdminPage = () => {
     }
   }, [page, limit, applied]);
 
+  const loadUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError(null);
+    try {
+      const list = await listAdminUsers({
+        page: usersPage,
+        limit: usersLimit,
+        q: usersAppliedQ || undefined,
+      });
+      setUsers(list.users || []);
+      setUsersTotal(list.pagination?.total ?? 0);
+      setUsersTotalPages(list.pagination?.totalPages ?? 1);
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        setAuthenticated(false);
+        setLoginError('Admin session expired. Sign in again.');
+      } else {
+        setUsersError(error?.response?.data?.error || 'Failed to load users');
+      }
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [usersPage, usersLimit, usersAppliedQ]);
+
+  const loadUserAutomations = useCallback(async (userId: string) => {
+    setAutomationsLoadingId(userId);
+    setAutomationsError(null);
+    try {
+      const list = await listAdminUserAutomations(userId, { page: 1, limit: 50 });
+      setAutomationsByUserId((prev) => ({
+        ...prev,
+        [userId]: list.automations || [],
+      }));
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        setAuthenticated(false);
+        setLoginError('Admin session expired. Sign in again.');
+      } else {
+        setAutomationsError(error?.response?.data?.error || 'Failed to load automations');
+      }
+    } finally {
+      setAutomationsLoadingId(null);
+    }
+  }, []);
+
+  const openEditDialog = (automation: AdminAutomationSummary) => {
+    setEditAutomation(automation);
+    setEditName(automation.name || '');
+    setEditUrl(automation.targetUrl || '');
+    setEditCompany(automation.companyName || '');
+    setEditTags((automation.tags || []).join(', '));
+    setEditWebhook(automation.webhookUrl || '');
+    setEditScheduleEnabled(!!automation.schedule?.enabled);
+    setEditCron(automation.schedule?.cron || '');
+    setEditTimezone(automation.schedule?.timezone || 'UTC');
+    setEditError(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editAutomation?.id) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const tags = editTags
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const result = await updateAdminAutomation(editAutomation.id, {
+        name: editName.trim(),
+        startUrl: editUrl.trim() || undefined,
+        companyName: editCompany.trim(),
+        tags,
+        webhookUrl: editWebhook.trim(),
+        schedule: {
+          enabled: editScheduleEnabled,
+          cron: editCron.trim() || null,
+          timezone: editTimezone.trim() || 'UTC',
+        },
+      });
+      const ownerId = result.automation.ownerUserId || editAutomation.ownerUserId || expandedUserId;
+      if (ownerId) {
+        setAutomationsByUserId((prev) => {
+          const list = prev[ownerId] || [];
+          return {
+            ...prev,
+            [ownerId]: list.map((a) => (a.id === result.automation.id ? result.automation : a)),
+          };
+        });
+      }
+      setEditAutomation(null);
+      loadUsers();
+      loadOverview();
+    } catch (error: any) {
+      setEditError(error?.response?.data?.error || 'Failed to update automation');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget?.id) return;
+    setDeleteSaving(true);
+    setDeleteError(null);
+    try {
+      await deleteAdminAutomation(deleteTarget.id);
+      const ownerId = deleteTarget.ownerUserId || expandedUserId;
+      if (ownerId) {
+        setAutomationsByUserId((prev) => ({
+          ...prev,
+          [ownerId]: (prev[ownerId] || []).filter((a) => a.id !== deleteTarget.id),
+        }));
+      }
+      setDeleteTarget(null);
+      loadUsers();
+      loadOverview();
+    } catch (error: any) {
+      setDeleteError(error?.response?.data?.error || 'Failed to delete automation');
+    } finally {
+      setDeleteSaving(false);
+    }
+  };
+
   useEffect(() => {
     if (!authenticated) return;
     loadOverview();
@@ -396,6 +564,11 @@ export const AdminPage = () => {
     loadRuns();
   }, [authenticated, loadRuns]);
 
+  useEffect(() => {
+    if (!authenticated) return;
+    loadUsers();
+  }, [authenticated, loadUsers]);
+
   const applyFilters = () => {
     setApplied({
       status: draftStatus,
@@ -403,6 +576,12 @@ export const AdminPage = () => {
       q: draftQ.trim(),
     });
     setPage(1);
+  };
+
+  const applyUsersFilter = () => {
+    setUsersAppliedQ(usersDraftQ.trim());
+    setUsersPage(1);
+    setExpandedUserId(null);
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -432,6 +611,11 @@ export const AdminPage = () => {
       setDoDash(null);
       setDigestStatus(null);
       setDigestMessage(null);
+      setUsers([]);
+      setAutomationsByUserId({});
+      setExpandedUserId(null);
+      setEditAutomation(null);
+      setDeleteTarget(null);
     }
   };
 
@@ -552,8 +736,10 @@ export const AdminPage = () => {
               loadOverview();
               loadRuns();
               loadDigitalOcean();
+              loadUsers();
+              if (expandedUserId) loadUserAutomations(expandedUserId);
             }}
-            disabled={listLoading || overviewLoading || doLoading}
+            disabled={listLoading || overviewLoading || doLoading || usersLoading}
           >
             Refresh
           </Button>
@@ -876,6 +1062,234 @@ export const AdminPage = () => {
             DO metrics as of {formatWhen(doDash.generatedAt)} (window {doWindow})
           </Typography>
         ) : null}
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          justifyContent="space-between"
+          alignItems={{ sm: 'center' }}
+          spacing={1}
+          mb={1.5}
+        >
+          <Box>
+            <Typography variant="subtitle1" fontWeight={700}>
+              Accounts &amp; automations
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Per-user automation inventory. Expand a row to edit, change schedule, or delete.
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <TextField
+              size="small"
+              placeholder="Search email or user id…"
+              value={usersDraftQ}
+              onChange={(e) => setUsersDraftQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') applyUsersFilter();
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+              }}
+              sx={{ minWidth: 220 }}
+            />
+            <Button size="small" variant="contained" onClick={applyUsersFilter} disabled={usersLoading}>
+              Search
+            </Button>
+          </Stack>
+        </Stack>
+
+        {usersError ? (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            {usersError}
+          </Alert>
+        ) : null}
+        {automationsError ? (
+          <Alert severity="error" sx={{ mb: 1.5 }}>
+            {automationsError}
+          </Alert>
+        ) : null}
+
+        {usersLoading && !users.length ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress size={28} />
+          </Box>
+        ) : (
+          <>
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              justifyContent="space-between"
+              alignItems={{ sm: 'center' }}
+              spacing={1}
+              sx={{ mb: 1 }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                {usersLoading
+                  ? 'Loading accounts…'
+                  : usersTotal === 0
+                    ? 'No accounts'
+                    : `${usersTotal.toLocaleString()} account${usersTotal === 1 ? '' : 's'}`}
+              </Typography>
+              <Stack direction="row" spacing={1}>
+                <Button
+                  size="small"
+                  disabled={usersPage <= 1 || usersLoading}
+                  onClick={() => setUsersPage((p) => p - 1)}
+                >
+                  Previous
+                </Button>
+                <Button
+                  size="small"
+                  disabled={usersPage >= usersTotalPages || usersLoading}
+                  onClick={() => setUsersPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </Stack>
+            </Stack>
+
+            <Stack spacing={1}>
+              {users.map((user) => {
+                const open = expandedUserId === user.id;
+                const automations = automationsByUserId[user.id] || [];
+                const loadingAutos = automationsLoadingId === user.id;
+                return (
+                  <Accordion
+                    key={user.id}
+                    expanded={open}
+                    onChange={(_, isOpen) => {
+                      setExpandedUserId(isOpen ? user.id : null);
+                      if (isOpen) loadUserAutomations(user.id);
+                    }}
+                    disableGutters
+                    variant="outlined"
+                  >
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Stack
+                        direction={{ xs: 'column', sm: 'row' }}
+                        spacing={1}
+                        alignItems={{ sm: 'center' }}
+                        sx={{ width: '100%', pr: 1 }}
+                      >
+                        <Typography fontWeight={600} sx={{ flex: 1, minWidth: 0 }}>
+                          {user.email || '(no email)'}
+                          {user.orphan ? (
+                            <Chip size="small" label="orphan owner" sx={{ ml: 1 }} color="warning" />
+                          ) : null}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                          {user.id}
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={`${user.automationCount} automation${user.automationCount === 1 ? '' : 's'}`}
+                          color={user.automationCount > 0 ? 'primary' : 'default'}
+                          variant="outlined"
+                        />
+                      </Stack>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      {loadingAutos ? (
+                        <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                          <CircularProgress size={24} />
+                        </Box>
+                      ) : automations.length === 0 ? (
+                        <Typography variant="body2" color="text.secondary">
+                          No automations for this account.
+                        </Typography>
+                      ) : (
+                        <Box sx={{ overflowX: 'auto' }}>
+                          <Table size="small">
+                            <TableHead>
+                              <TableRow>
+                                <TableCell>Name</TableCell>
+                                <TableCell>Scout ID</TableCell>
+                                <TableCell>URL</TableCell>
+                                <TableCell>Company</TableCell>
+                                <TableCell>Tags</TableCell>
+                                <TableCell>Schedule</TableCell>
+                                <TableCell>Status</TableCell>
+                                <TableCell>Last run</TableCell>
+                                <TableCell align="right">Actions</TableCell>
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {automations.map((auto) => (
+                                <TableRow key={auto.id} hover>
+                                  <TableCell sx={{ maxWidth: 160 }}>
+                                    <Typography variant="body2" noWrap title={auto.name}>
+                                      {auto.name || '—'}
+                                    </Typography>
+                                  </TableCell>
+                                  <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                    {auto.scoutId || '—'}
+                                  </TableCell>
+                                  <TableCell sx={{ maxWidth: 200 }}>
+                                    <Typography variant="caption" noWrap title={auto.targetUrl || ''}>
+                                      {auto.targetUrl || '—'}
+                                    </Typography>
+                                  </TableCell>
+                                  <TableCell>{auto.companyName || '—'}</TableCell>
+                                  <TableCell sx={{ maxWidth: 140 }}>
+                                    {(auto.tags || []).length
+                                      ? (auto.tags || []).slice(0, 3).join(', ') +
+                                        ((auto.tags || []).length > 3 ? '…' : '')
+                                      : '—'}
+                                  </TableCell>
+                                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                    {auto.schedule
+                                      ? auto.schedule.enabled
+                                        ? auto.schedule.cron || 'on'
+                                        : auto.schedule.paused
+                                          ? 'paused'
+                                          : 'off'
+                                      : '—'}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Chip
+                                      size="small"
+                                      label={auto.status || 'idle'}
+                                      color={STATUS_COLORS[auto.status || ''] || 'default'}
+                                    />
+                                  </TableCell>
+                                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                    {formatWhen(auto.lastRunTime)}
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                                      <Button size="small" onClick={() => openEditDialog(auto)}>
+                                        Edit
+                                      </Button>
+                                      <Button
+                                        size="small"
+                                        color="error"
+                                        onClick={() => {
+                                          setDeleteError(null);
+                                          setDeleteTarget(auto);
+                                        }}
+                                      >
+                                        Delete
+                                      </Button>
+                                    </Stack>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </Box>
+                      )}
+                    </AccordionDetails>
+                  </Accordion>
+                );
+              })}
+            </Stack>
+          </>
+        )}
       </Paper>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -1249,6 +1663,109 @@ export const AdminPage = () => {
           </Button>
         </Stack>
       </Stack>
+
+      <Dialog open={!!editAutomation} onClose={() => !editSaving && setEditAutomation(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Edit automation</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {editError ? <Alert severity="error">{editError}</Alert> : null}
+            <TextField
+              label="Name"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Start URL"
+              value={editUrl}
+              onChange={(e) => setEditUrl(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Company"
+              value={editCompany}
+              onChange={(e) => setEditCompany(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Tags"
+              value={editTags}
+              onChange={(e) => setEditTags(e.target.value)}
+              helperText="Comma-separated"
+              fullWidth
+            />
+            <TextField
+              label="Webhook URL"
+              value={editWebhook}
+              onChange={(e) => setEditWebhook(e.target.value)}
+              fullWidth
+            />
+            <Divider />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editScheduleEnabled}
+                  onChange={(e) => setEditScheduleEnabled(e.target.checked)}
+                />
+              }
+              label="Schedule enabled"
+            />
+            <TextField
+              label="Cron"
+              value={editCron}
+              onChange={(e) => setEditCron(e.target.value)}
+              placeholder="e.g. 0 */6 * * *"
+              fullWidth
+              helperText={editScheduleEnabled ? 'Required when schedule is enabled' : 'Kept when pausing'}
+            />
+            <TextField
+              label="Timezone"
+              value={editTimezone}
+              onChange={(e) => setEditTimezone(e.target.value)}
+              fullWidth
+            />
+            {editAutomation?.scoutId || editAutomation?.id ? (
+              <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                {editAutomation.scoutId ? `Scout ${editAutomation.scoutId} · ` : ''}
+                {editAutomation.id}
+              </Typography>
+            ) : null}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditAutomation(null)} disabled={editSaving}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleSaveEdit} disabled={editSaving || !editName.trim()}>
+            {editSaving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onClose={() => !deleteSaving && setDeleteTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Delete automation?</DialogTitle>
+        <DialogContent>
+          {deleteError ? (
+            <Alert severity="error" sx={{ mb: 1.5 }}>
+              {deleteError}
+            </Alert>
+          ) : null}
+          <Typography variant="body2">
+            Permanently delete <strong>{deleteTarget?.name || 'this automation'}</strong>
+            {deleteTarget?.scoutId ? ` (${deleteTarget.scoutId})` : ''}. This removes runs, extracted
+            data, and schedules.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleteSaving}>
+            Cancel
+          </Button>
+          <Button color="error" variant="contained" onClick={handleConfirmDelete} disabled={deleteSaving}>
+            {deleteSaving ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

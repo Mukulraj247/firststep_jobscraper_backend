@@ -41,6 +41,10 @@ import {
   recordHostFailure,
   recordHostSuccess,
 } from '../services/scrapeBackpressure';
+import {
+  isHttp2ProtocolNavigationError,
+  probeHttp11,
+} from '../services/navigationDiagnostics';
 import { emitQueuedRunEvent } from './scrapeSocket';
 import { applyLayoutChangeSuggestion, resolveFailureReason } from '../utils/failureReason';
 import {
@@ -1088,6 +1092,21 @@ export async function runScraperJobPayload(
         `Run ${runId} terminal drift failure (${(error as RunDriftError).outcome}): ${message}`
       );
       throw error;
+    }
+
+    if (latestRun && isHttp2ProtocolNavigationError(error)) {
+      const targetUrl = String(automation?.recording_meta?.url || '');
+      if (targetUrl) {
+        try {
+          const probe = await probeHttp11(targetUrl);
+          await appendRunLog(latestRun, `HTTP/2 navigation diagnostic: ${probe}`, { flush: true });
+        } catch (diagnosticError: any) {
+          logger.log(
+            'warn',
+            `HTTP/2 navigation diagnostic failed for run ${runId}: ${diagnosticError?.message || diagnosticError}`
+          );
+        }
+      }
     }
 
     // Host pressure: navigation/CAPTCHA/timeout style failures (not config/drift).

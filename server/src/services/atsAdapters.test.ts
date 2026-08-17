@@ -13,6 +13,9 @@ import {
   normalizeSuccessFactorsStartUrl,
   mapIbmCareersHtml,
   mapOracleCloud,
+  parseOracleCandidateExperienceRoute,
+  parseOracleVanityFusionHost,
+  looksLikeOracleVanityHashBoard,
 } from './atsAdapters';
 import fs from 'fs';
 import path from 'path';
@@ -240,6 +243,35 @@ describe('detectAtsBoard', () => {
     expect(d?.listApiUrl).toContain('recruitingCEJobRequisitions');
   });
 
+  it('detects Oracle CE vanity hash-router boards (e.g. Hexaware)', () => {
+    const d = detectAtsBoard(
+      'https://jobs.hexaware.com/#en/sites/CX_1/jobs?location=United+States&locationId=300000000446660&locationLevel=country&mode=location'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(d?.companyHint).toBe('Hexaware');
+    expect(d?.listApiUrl).toBe('oracle-vanity://resolve');
+  });
+
+  it('detects Oracle CE path vanity boards (e.g. Dell)', () => {
+    const d = detectAtsBoard(
+      'https://enterpriseplatform.dell.com/hcmUI/CandidateExperience/en/sites/careers/jobs?location=United+States&locationId=300000000471434&locationLevel=country&mode=location'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(d?.companyHint).toBe('Dell');
+    expect(d?.listApiUrl).toContain('enterpriseplatform.dell.com/hcmRestApi/');
+    expect(d?.listApiUrl).toContain('recruitingCEJobRequisitions');
+  });
+
+  it('detects careers.oracle.com CE boards via configured HCM host', () => {
+    const d = detectAtsBoard(
+      'https://careers.oracle.com/en/sites/jobsearch/jobs?location=United+States&locationId=300000000149325&locationLevel=country&mode=location'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(d?.companyHint).toBe('Oracle');
+    expect(d?.listApiUrl).toContain('eeho.fa.us2.oraclecloud.com/hcmRestApi/');
+    expect(d?.listApiUrl).toContain('recruitingCEJobRequisitions');
+  });
+
   it('detects Bank of America career job search', () => {
     const d = detectAtsBoard(
       'https://careers.bankofamerica.com/en-us/job-search?ref=search&search=jobsByLocation&start=0&rows=10&searchstring=United+States&keywords=data+analytics'
@@ -251,6 +283,66 @@ describe('detectAtsBoard', () => {
 
   it('returns null for non-board hosts', () => {
     expect(detectAtsBoard('https://careers.example.com/jobs')).toBeNull();
+  });
+});
+
+describe('Oracle vanity helpers', () => {
+  it('parseOracleCandidateExperienceRoute reads path-based CE boards', () => {
+    const route = parseOracleCandidateExperienceRoute(
+      'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/fr/sites/CX_1001/jobs?keyword=x&locationId=1'
+    );
+    expect(route).toEqual(
+      expect.objectContaining({
+        locale: 'fr',
+        siteNumber: 'CX_1001',
+        isJobsList: true,
+      })
+    );
+    expect(route?.searchParams.get('locationId')).toBe('1');
+  });
+
+  it('parseOracleCandidateExperienceRoute reads hash-router vanity boards', () => {
+    const route = parseOracleCandidateExperienceRoute(
+      'https://jobs.hexaware.com/#en/sites/CX_1/jobs?location=United+States&locationId=300000000446660&mode=location'
+    );
+    expect(route).toEqual(
+      expect.objectContaining({
+        locale: 'en',
+        siteNumber: 'CX_1',
+        isJobsList: true,
+      })
+    );
+    expect(route?.searchParams.get('locationId')).toBe('300000000446660');
+    expect(route?.searchParams.get('location')).toBe('United States');
+  });
+
+  it('parseOracleVanityFusionHost extracts only trusted Fusion CE hosts', () => {
+    const html = `
+      const host = 'https://fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com'  ;
+      const ceBaseURL = host + '/hcmUI/CandidateExperience/';
+      xhr.setRequestHeader('ora-irc-vanity-domain', 'Y');
+    `;
+    expect(parseOracleVanityFusionHost(html)).toBe(
+      'fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com'
+    );
+    expect(parseOracleVanityFusionHost('<html>evil.com</html>')).toBeNull();
+    expect(
+      parseOracleVanityFusionHost("const host = 'https://evil.example.com';")
+    ).toBeNull();
+  });
+
+  it('looksLikeOracleVanityHashBoard matches hash CE jobs lists only', () => {
+    expect(
+      looksLikeOracleVanityHashBoard(
+        'https://jobs.hexaware.com/#en/sites/CX_1/jobs?locationId=1'
+      )
+    ).toBe(true);
+    expect(
+      looksLikeOracleVanityHashBoard(
+        'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs'
+      )
+    ).toBe(false);
+    expect(looksLikeOracleVanityHashBoard('https://jobs.example.com/#/careers')).toBe(false);
   });
 });
 
@@ -469,6 +561,132 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.rows[0].jobTitle).toBe('Role 1');
     expect(result?.rows[100].jobTitle).toBe('Role 101');
     expect(getSpy.mock.calls.length).toBe(2);
+  });
+
+  it('resolves Oracle CE vanity hash boards via Fusion host HTML then list API', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const href = String(url);
+      if (href === 'https://jobs.hexaware.com/' || href === 'https://jobs.hexaware.com') {
+        return {
+          status: 200,
+          data: `
+            const host = 'https://fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com';
+            const ceBaseURL = host + '/hcmUI/CandidateExperience/';
+            xhr.setRequestHeader('ora-irc-vanity-domain', 'Y');
+          `,
+        } as any;
+      }
+      if (href.includes('recruitingCEJobRequisitions')) {
+        const finder = decodeURIComponent(new URL(href).searchParams.get('finder') || '');
+        expect(href).toContain('fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com');
+        expect(finder).toContain('siteNumber=CX_1');
+        expect(finder).toContain('locationId=300000000446660');
+        return {
+          status: 200,
+          data: {
+            items: [
+              {
+                TotalJobsCount: 1,
+                requisitionList: [
+                  {
+                    Id: '672523',
+                    Title: 'DevOps Track Sr.Engineer',
+                    PrimaryLocation: 'United States',
+                    PostedDate: '2026-08-01',
+                  },
+                ],
+              },
+            ],
+          },
+        } as any;
+      }
+      throw new Error(`unexpected url ${href}`);
+    });
+
+    const result = await fetchAtsBoardJobs(
+      'https://jobs.hexaware.com/#en/sites/CX_1/jobs?location=United+States&locationId=300000000446660&locationLevel=country&mode=location'
+    );
+    expect(result?.provider).toBe('oraclecloud');
+    expect(result?.companyHint).toBe('Hexaware');
+    expect(result?.rows).toHaveLength(1);
+    expect(result?.rows[0].jobTitle).toBe('DevOps Track Sr.Engineer');
+    expect(result?.rows[0].jobUrl).toContain(
+      'fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/672523'
+    );
+  });
+
+  it('fetches Dell path-vanity Oracle CE boards from the vanity host API', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const href = String(url);
+      expect(href).toContain('enterpriseplatform.dell.com/hcmRestApi/');
+      const finder = decodeURIComponent(new URL(href).searchParams.get('finder') || '');
+      expect(finder).toContain('siteNumber=careers');
+      expect(finder).toContain('locationId=300000000471434');
+      return {
+        status: 200,
+        data: {
+          items: [
+            {
+              TotalJobsCount: 1,
+              requisitionList: [
+                {
+                  Id: 'R288262',
+                  Title: 'Software Engineer',
+                  PrimaryLocation: 'United States',
+                },
+              ],
+            },
+          ],
+        },
+      } as any;
+    });
+
+    const result = await fetchAtsBoardJobs(
+      'https://enterpriseplatform.dell.com/hcmUI/CandidateExperience/en/sites/careers/jobs?location=United+States&locationId=300000000471434'
+    );
+    expect(result?.provider).toBe('oraclecloud');
+    expect(result?.companyHint).toBe('Dell');
+    expect(result?.rows).toHaveLength(1);
+    expect(result?.rows[0].jobUrl).toContain(
+      'enterpriseplatform.dell.com/hcmUI/CandidateExperience/en/sites/careers/job/R288262'
+    );
+  });
+
+  it('fetches careers.oracle.com boards via HCM host and builds vanity job URLs', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const href = String(url);
+      expect(href).toContain('eeho.fa.us2.oraclecloud.com/hcmRestApi/');
+      const finder = decodeURIComponent(new URL(href).searchParams.get('finder') || '');
+      expect(finder).toContain('siteNumber=jobsearch');
+      expect(finder).toContain('locationId=300000000149325');
+      return {
+        status: 200,
+        data: {
+          items: [
+            {
+              TotalJobsCount: 1,
+              requisitionList: [
+                {
+                  Id: '342043',
+                  Title: 'Principal Engineer',
+                  PrimaryLocation: 'United States',
+                },
+              ],
+            },
+          ],
+        },
+      } as any;
+    });
+
+    const result = await fetchAtsBoardJobs(
+      'https://careers.oracle.com/en/sites/jobsearch/jobs?location=United+States&locationId=300000000149325'
+    );
+    expect(result?.provider).toBe('oraclecloud');
+    expect(result?.companyHint).toBe('Oracle');
+    expect(result?.rows).toHaveLength(1);
+    expect(result?.rows[0].jobUrl).toBe(
+      'https://careers.oracle.com/en/sites/jobsearch/job/342043'
+    );
   });
 
   it('maps and paginates Bank of America jobs through its search API', async () => {

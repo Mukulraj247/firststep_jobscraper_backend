@@ -147,7 +147,7 @@ Many big companies don’t need scrape.do at all. Their career sites talk to a p
 | Workable       | `apply.workable.com`                   |
 | SmartRecruiters| `jobs.smartrecruiters.com`             |
 | Recruitee      | `*.recruitee.com`                      |
-| Oracle HCM     | `*.fa.oraclecloud.com`, `careers.oracle.com` |
+| Oracle HCM     | `*.fa.oraclecloud.com`, `*.fa.ocs.oraclecloud.com`, `careers.oracle.com`, allowlisted path vanities (e.g. Dell), hash-router vanities (e.g. Hexaware) |
 | Google Careers | Google careers job result URLs         |
 | IBM Careers    | IBM JobDetail pages                    |
 | Findly / SF    | Various board list APIs                |

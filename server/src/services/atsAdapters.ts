@@ -57,6 +57,24 @@ const ORACLE_HCM_VANITY_HOSTS = new Set(
     .filter(Boolean)
 );
 
+/** Sentinel listApiUrl: Fusion CE host is discovered from vanity landing HTML at fetch. */
+const ORACLE_VANITY_RESOLVE_MARKER = 'oracle-vanity://resolve';
+
+function isOracleCloudFaHost(host: string): boolean {
+  return /\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(host);
+}
+
+function oracleCareersHcmHost(): string {
+  return (
+    (process.env.ORACLE_CAREERS_HCM_HOST || 'eeho.fa.us2.oraclecloud.com').trim() ||
+    'eeho.fa.us2.oraclecloud.com'
+  );
+}
+
+function oracleRecruitingListApi(apiHost: string): string {
+  return `https://${apiHost}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`;
+}
+
 function isSafeOracleHcmVanityHost(host: string): boolean {
   const normalized = host.trim().toLowerCase().replace(/^www\./, '');
   return (
@@ -143,6 +161,7 @@ const ORACLE_TENANT_COMPANY: Record<string, string> = {
   jpmc: 'JPMorgan Chase',
   chase: 'Chase',
   oracle: 'Oracle',
+  ibpwjb: 'Independent Bank',
 };
 
 function companyOrEmpty(name: string): string {
@@ -284,9 +303,7 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
     const jobId = jobIdx >= 0 ? (parts[jobIdx + 1] || '').split('?')[0] : '';
     if (siteNumber && jobId && /^\d+$/.test(jobId)) {
       const finder = encodeURIComponent(`ById;Id="${jobId}",siteNumber=${siteNumber}`);
-      const apiHost =
-        (process.env.ORACLE_CAREERS_HCM_HOST || 'eeho.fa.us2.oraclecloud.com').trim() ||
-        'eeho.fa.us2.oraclecloud.com';
+      const apiHost = oracleCareersHcmHost();
       return {
         provider: 'oraclecloud',
         apiUrl:
@@ -1547,17 +1564,41 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
     };
   }
 
-  // Oracle Cloud HCM Candidate Experience board.
-  if (/\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(host)) {
-    const sitesIdx = parts.indexOf('sites');
-    const siteNumber = sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
-    const tenant = host.split('.')[0];
-    if (tenant && siteNumber && /\/CandidateExperience\/.*\/sites\/[^/]+\/jobs?\/?$/i.test(path)) {
-      return {
-        provider: 'oraclecloud',
-        companyHint: oracleTenantCompany(tenant),
-        listApiUrl: `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`,
-      };
+  // Oracle Cloud HCM Candidate Experience boards — direct FA hosts, branded
+  // vanity hosts (Dell / careers.oracle.com), hash-router shells (Hexaware),
+  // and other safe hosts that already expose /hcmUI/CandidateExperience/.../jobs.
+  {
+    const oracleRoute = parseOracleCandidateExperienceRoute(url);
+    if (oracleRoute?.isJobsList && oracleRoute.siteNumber) {
+      if (isOracleCloudFaHost(host)) {
+        return {
+          provider: 'oraclecloud',
+          companyHint: oracleTenantCompany(host.split('.')[0]),
+          listApiUrl: oracleRecruitingListApi(host),
+        };
+      }
+      if (host === 'careers.oracle.com') {
+        return {
+          provider: 'oraclecloud',
+          companyHint: 'Oracle',
+          listApiUrl: oracleRecruitingListApi(oracleCareersHcmHost()),
+        };
+      }
+      if (/\/hcmUI\/CandidateExperience\//i.test(path) && isSafeOracleHcmVanityHost(host)) {
+        return {
+          provider: 'oraclecloud',
+          companyHint:
+            ORACLE_HCM_VANITY_HOST_COMPANIES[host] || oracleVanityCompanyHint(host),
+          listApiUrl: oracleRecruitingListApi(host),
+        };
+      }
+      if (looksLikeOracleVanityHashBoard(url)) {
+        return {
+          provider: 'oraclecloud',
+          companyHint: oracleVanityCompanyHint(host),
+          listApiUrl: ORACLE_VANITY_RESOLVE_MARKER,
+        };
+      }
     }
   }
 
@@ -1687,6 +1728,22 @@ function mapSmartRecruitersBoardJobs(data: any, companyHint: string): AtsBoardJo
     .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
 }
 
+function buildOracleBoardJobUrl(
+  host: string,
+  locale: string,
+  siteNumber: string,
+  jobId: string
+): string {
+  const lang = String(locale || 'en').trim() || 'en';
+  const id = String(jobId || '').trim();
+  if (!id) return '';
+  // Oracle's public careers site does not use /hcmUI/CandidateExperience paths.
+  if (host.toLowerCase() === 'careers.oracle.com') {
+    return `https://careers.oracle.com/${encodeURIComponent(lang)}/sites/${encodeURIComponent(siteNumber)}/job/${encodeURIComponent(id)}`;
+  }
+  return `https://${host}/hcmUI/CandidateExperience/${encodeURIComponent(lang)}/sites/${encodeURIComponent(siteNumber)}/job/${encodeURIComponent(id)}`;
+}
+
 function mapOracleCloudBoardJobs(
   data: any,
   companyHint: string,
@@ -1700,9 +1757,7 @@ function mapOracleCloudBoardJobs(
   return jobs
     .map((job: any) =>
       rowFromParts({
-        jobUrl: job?.Id
-          ? `https://${host}/hcmUI/CandidateExperience/${encodeURIComponent(lang)}/sites/${encodeURIComponent(siteNumber)}/job/${encodeURIComponent(String(job.Id))}`
-          : '',
+        jobUrl: job?.Id ? buildOracleBoardJobUrl(host, lang, siteNumber, String(job.Id)) : '',
         title: String(job?.Title || '').trim(),
         company: companyHint,
         location: String(job?.PrimaryLocation || '').trim(),
@@ -1757,6 +1812,127 @@ function oracleFinderValue(raw: string): string | null {
   return value;
 }
 
+export type OracleCandidateExperienceRoute = {
+  locale: string;
+  siteNumber: string;
+  isJobsList: boolean;
+  searchParams: URLSearchParams;
+};
+
+/**
+ * Parse Oracle CE board/detail routing from either:
+ * - path: /hcmUI/CandidateExperience/{locale}/sites/{site}/jobs?...
+ * - vanity hash: #{locale}/sites/{site}/jobs?...
+ */
+export function parseOracleCandidateExperienceRoute(
+  url: string
+): OracleCandidateExperienceRoute | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const fromSegments = (
+    segments: string[],
+    searchParams: URLSearchParams
+  ): OracleCandidateExperienceRoute | null => {
+    const parts = segments.map((p) => decodeURIComponent(p)).filter(Boolean);
+    const sitesIdx = parts.findIndex((p) => p.toLowerCase() === 'sites');
+    if (sitesIdx < 0 || !parts[sitesIdx + 1]) return null;
+    const siteNumber = parts[sitesIdx + 1];
+    const afterSite = (parts[sitesIdx + 2] || '').toLowerCase();
+    const isJobsList = afterSite === 'jobs' || afterSite.startsWith('jobs?');
+    let locale = 'en';
+    const ceIdx = parts.findIndex((p) => p.toLowerCase() === 'candidateexperience');
+    if (ceIdx >= 0 && parts[ceIdx + 1] && parts[ceIdx + 1].toLowerCase() !== 'sites') {
+      locale = parts[ceIdx + 1];
+    } else if (sitesIdx > 0) {
+      locale = parts[sitesIdx - 1];
+    }
+    return { locale, siteNumber, isJobsList, searchParams };
+  };
+
+  const pathParts = parsed.pathname.split('/').filter(Boolean);
+  if (pathParts.some((p) => p.toLowerCase() === 'sites')) {
+    const route = fromSegments(pathParts, parsed.searchParams);
+    if (route) return route;
+  }
+
+  const hash = (parsed.hash || '').replace(/^#/, '').trim();
+  if (!hash) return null;
+  const qIdx = hash.indexOf('?');
+  const hashPath = qIdx >= 0 ? hash.slice(0, qIdx) : hash;
+  const hashQuery = qIdx >= 0 ? hash.slice(qIdx + 1) : '';
+  return fromSegments(hashPath.split('/'), new URLSearchParams(hashQuery));
+}
+
+/** Extract Fusion CE host from Oracle vanity landing HTML; SSRF-safe host allowlist. */
+export function parseOracleVanityFusionHost(html: string): string | null {
+  if (!html) return null;
+  const patterns = [
+    /const\s+host\s*=\s*['"]https?:\/\/([a-z0-9.-]+\.fa(?:\.ocs)?\.oraclecloud\.com)['"]/i,
+    /host\s*=\s*['"]https?:\/\/([a-z0-9.-]+\.fa(?:\.ocs)?\.oraclecloud\.com)['"]/i,
+    /['"]https?:\/\/([a-z0-9.-]+\.fa(?:\.ocs)?\.oraclecloud\.com)['"]\s*;?\s*(?:\/\/.*)?\n[\s\S]{0,120}CandidateExperience/i,
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    const host = (m?.[1] || '').toLowerCase();
+    if (host && /\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(host)) return host;
+  }
+  return null;
+}
+
+export function looksLikeOracleVanityHashBoard(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (isOracleCloudFaHost(host)) return false;
+  const route = parseOracleCandidateExperienceRoute(url);
+  return Boolean(route?.isJobsList && route.siteNumber && (parsed.hash || '').includes('/sites/'));
+}
+
+function oracleVanityCompanyHint(host: string): string {
+  return successFactorsCompanyHint(host);
+}
+
+async function resolveOracleVanityBoardUrl(
+  pageUrl: string,
+  companyHint: string
+): Promise<{ ceUrl: string; listApiUrl: string; companyHint: string } | null> {
+  const route = parseOracleCandidateExperienceRoute(pageUrl);
+  if (!route?.isJobsList || !route.siteNumber) return null;
+  let origin: string;
+  try {
+    origin = new URL(pageUrl).origin;
+  } catch {
+    return null;
+  }
+  const htmlRes = await httpClient.get(origin + '/', {
+    headers: { Accept: 'text/html,application/xhtml+xml' },
+    responseType: 'text',
+    transformResponse: [(d) => d],
+  });
+  if (htmlRes.status >= 400 || typeof htmlRes.data !== 'string') return null;
+  const fusionHost = parseOracleVanityFusionHost(htmlRes.data);
+  if (!fusionHost) return null;
+  const qs = route.searchParams.toString();
+  const ceUrl =
+    `https://${fusionHost}/hcmUI/CandidateExperience/` +
+    `${encodeURIComponent(route.locale)}/sites/${encodeURIComponent(route.siteNumber)}/jobs` +
+    (qs ? `?${qs}` : '');
+  return {
+    ceUrl,
+    listApiUrl: oracleRecruitingListApi(fusionHost),
+    companyHint: companyHint || oracleVanityCompanyHint(new URL(pageUrl).hostname),
+  };
+}
+
 function oracleCandidateLocale(pathname: string): string {
   const parts = pathname.split('/').filter(Boolean);
   const idx = parts.findIndex((p) => p.toLowerCase() === 'candidateexperience');
@@ -1770,12 +1946,18 @@ async function fetchOracleCloudBoardJobs(
   listApiUrl: string,
   options?: AtsBoardFetchOptions
 ): Promise<AtsBoardFetchResult | null> {
+  const route = parseOracleCandidateExperienceRoute(pageUrl);
   const source = new URL(pageUrl);
-  const parts = source.pathname.split('/').filter(Boolean);
-  const sitesIdx = parts.indexOf('sites');
-  const siteNumber = sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
+  const siteNumber =
+    route?.siteNumber ||
+    (() => {
+      const parts = source.pathname.split('/').filter(Boolean);
+      const sitesIdx = parts.indexOf('sites');
+      return sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
+    })();
   if (!siteNumber) return null;
-  const locale = oracleCandidateLocale(source.pathname);
+  const locale = route?.locale || oracleCandidateLocale(source.pathname);
+  const filterParams = route?.searchParams || source.searchParams;
 
   const copiedFinderParams = [
     'keyword',
@@ -1800,11 +1982,11 @@ async function fetchOracleCloudBoardJobs(
   while (offset < total && pages < maxPages && all.length < maxJobs) {
     const finderParts = [`siteNumber=${siteNumber}`];
     for (const key of copiedFinderParams) {
-      const value = oracleFinderValue(source.searchParams.get(key) || '');
+      const value = oracleFinderValue(filterParams.get(key) || '');
       if (value) finderParts.push(`${key}=${value}`);
     }
-    if (!source.searchParams.get('locationId')) {
-      const location = oracleFinderValue(source.searchParams.get('location') || '');
+    if (!filterParams.get('locationId')) {
+      const location = oracleFinderValue(filterParams.get('location') || '');
       if (location) finderParts.push(`location=${location}`);
     }
     finderParts.push(`limit=${pageSize}`, `offset=${offset}`);
@@ -1934,12 +2116,17 @@ export async function fetchAtsBoardJobs(
       return await fetchSuccessFactorsBoardJobs(pageUrl, detected.companyHint, options);
     }
     if (detected.provider === 'oraclecloud') {
-      return await fetchOracleCloudBoardJobs(
-        pageUrl,
-        detected.companyHint,
-        detected.listApiUrl,
-        options
-      );
+      let page = pageUrl;
+      let listApiUrl = detected.listApiUrl;
+      let companyHint = detected.companyHint;
+      if (listApiUrl === ORACLE_VANITY_RESOLVE_MARKER || looksLikeOracleVanityHashBoard(pageUrl)) {
+        const resolved = await resolveOracleVanityBoardUrl(pageUrl, companyHint);
+        if (!resolved) return null;
+        page = resolved.ceUrl;
+        listApiUrl = resolved.listApiUrl;
+        companyHint = resolved.companyHint;
+      }
+      return await fetchOracleCloudBoardJobs(page, companyHint, listApiUrl, options);
     }
     if (detected.provider === 'bankofamerica') {
       return await fetchBankOfAmericaBoardJobs(

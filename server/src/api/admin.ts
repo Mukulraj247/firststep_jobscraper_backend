@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { verify } from 'jsonwebtoken';
+import moment from 'moment-timezone';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
 import User from '../models/User';
@@ -15,7 +16,14 @@ import {
   signAdminToken,
   timingSafeEqualString,
 } from '../middlewares/auth';
-import { batchExtractedRowCounts, computeRunDurationMs, getAutomationConfig } from '../services/automation';
+import {
+  batchExtractedRowCounts,
+  buildDashboardStatus,
+  computeRunDurationMs,
+  getAutomationConfig,
+} from '../services/automation';
+import { syncAutomationSchedule, resolveEffectiveScheduleState } from '../services/automationScheduler';
+import { deleteAutomationCascade } from '../services/deleteAutomation';
 import { SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
 import {
   getDigitalOceanDashboard,
@@ -25,6 +33,11 @@ import {
   getOpsDigestConfigStatus,
   sendOpsDigest,
 } from '../services/opsDigest';
+import { ownerIdFilter, ownerIdVariants } from '../utils/ownerId';
+import { normalizeAutomationUrl } from '../utils/automationUrl';
+import { intervalMsFromCron, validateAutomationScheduleCron } from '../utils/schedule';
+import { sanitizeAutomationTags } from '../constants/tagCatalog';
+import { isValidScoutId, normalizeScoutIdInput } from '../utils/scoutId';
 
 const router = Router();
 
@@ -101,6 +114,103 @@ async function buildOwnerMaps(robotMetaIds: string[]) {
   }
 
   return { robotByMetaId, emailByUserId };
+}
+
+function getCompanyName(robot: any): string {
+  const meta = robot?.recording_meta || {};
+  const fromMeta = typeof meta.companyName === 'string' ? meta.companyName.trim() : '';
+  if (fromMeta) return fromMeta;
+  const fromSaas =
+    typeof meta.saasConfig?.companyName === 'string' ? meta.saasConfig.companyName.trim() : '';
+  return fromSaas || '';
+}
+
+function getAutomationTags(robot: any): string[] {
+  const meta = robot?.recording_meta || {};
+  const fromMeta = Array.isArray(meta.tags) ? meta.tags : null;
+  if (fromMeta) {
+    return fromMeta.map((t: any) => String(t || '').trim()).filter(Boolean);
+  }
+  const fromSaas = Array.isArray(meta.saasConfig?.tags) ? meta.saasConfig.tags : [];
+  return fromSaas.map((t: any) => String(t || '').trim()).filter(Boolean);
+}
+
+function getScoutId(robot: any): string | null {
+  const id = robot?.recording_meta?.scoutId;
+  return typeof id === 'string' && id.trim() ? id.trim().toUpperCase() : null;
+}
+
+/** Cross-account resolve by UUID or Scout-X ID (admin only). */
+async function findAdminRobotByIdOrScoutId(idOrScout: string) {
+  const raw = String(idOrScout || '').trim();
+  if (!raw) return null;
+
+  let robot = await Robot.findOne({ 'recording_meta.id': raw });
+  if (robot) return robot;
+
+  const scoutId = normalizeScoutIdInput(raw);
+  if (scoutId && isValidScoutId(scoutId)) {
+    robot = await Robot.findOne({ 'recording_meta.scoutId': scoutId });
+  }
+  return robot;
+}
+
+function mapAdminAutomation(robot: any, latestRun?: any, rowsExtracted: number = 0) {
+  const config = getAutomationConfig(robot);
+  const eff = resolveEffectiveScheduleState(robot);
+  const hasInterval = !!(eff.cron || eff.every);
+  const rootSch = robot.schedule || {};
+  const nextRunIso =
+    rootSch.nextRunAt != null ? new Date(rootSch.nextRunAt).toISOString() : null;
+  const lastRunIso =
+    rootSch.lastRunAt != null ? new Date(rootSch.lastRunAt).toISOString() : null;
+  const schedule =
+    eff.enabled || hasInterval
+      ? {
+          enabled: eff.enabled,
+          cron: eff.cron || '',
+          every: eff.every,
+          timezone: eff.timezone || 'UTC',
+          paused: hasInterval && !eff.enabled,
+          nextRunAt: nextRunIso,
+          lastRunAt: lastRunIso,
+        }
+      : null;
+
+  return {
+    id: robot.recording_meta?.id,
+    scoutId: getScoutId(robot),
+    name: robot.recording_meta?.name || '',
+    companyName: getCompanyName(robot),
+    tags: getAutomationTags(robot),
+    targetUrl: robot.recording_meta?.url || '',
+    createdAt: robot.recording_meta?.createdAt || null,
+    updatedAt: robot.recording_meta?.updatedAt || null,
+    status: buildDashboardStatus(latestRun),
+    lastRunTime: latestRun?.finishedAt || latestRun?.startedAt || null,
+    rowsExtracted,
+    latestRunId: latestRun?.runId || null,
+    webhookUrl: config.webhookUrl || '',
+    schedule,
+    ownerUserId: robot.userId != null ? String(robot.userId) : null,
+  };
+}
+
+async function loadLatestRunsByMetaIds(metaIds: string[]) {
+  const latestByMeta = new Map<string, any>();
+  if (!metaIds.length) return latestByMeta;
+
+  const runs = await Run.find({ robotMetaId: { $in: metaIds } })
+    .select('runId robotMetaId status startedAt finishedAt failureReason failureReasonSource')
+    .sort({ _id: -1 })
+    .lean();
+
+  for (const run of runs) {
+    const metaId = String(run.robotMetaId || '');
+    if (!metaId || latestByMeta.has(metaId)) continue;
+    latestByMeta.set(metaId, run);
+  }
+  return latestByMeta;
 }
 
 function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<string, string>, rowsExtracted: number) {
@@ -485,6 +595,381 @@ router.get('/admin/digitalocean', requireAdmin, async (req: Request, res: Respon
   } catch (error: any) {
     logger.log('error', `Admin DigitalOcean metrics failed: ${error.message}`);
     return res.status(500).json({ error: 'Failed to load DigitalOcean metrics' });
+  }
+});
+
+/**
+ * Paginated accounts with automation counts (includes orphan robot owners).
+ * Query: q (email / userId substring), page, limit
+ */
+router.get('/admin/users', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { page, limit, skip } = parseListPagination(req);
+    const q = req.query.q != null ? String(req.query.q).trim() : '';
+    const qLower = q.toLowerCase();
+
+    const countAgg = await Robot.aggregate([
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    const countByUserId = new Map<string, number>();
+    for (const row of countAgg) {
+      if (row._id == null) continue;
+      countByUserId.set(String(row._id), row.count || 0);
+    }
+
+    const users = await User.find({})
+      .select('email')
+      .lean();
+
+    type AdminUserRow = {
+      id: string;
+      email: string | null;
+      automationCount: number;
+      orphan?: boolean;
+    };
+    const rows: AdminUserRow[] = [];
+    const claimedCountKeys = new Set<string>();
+
+    const sumCountsForUser = (userId: string): number => {
+      let totalCount = 0;
+      const keys = new Set<string>();
+      for (const variant of ownerIdVariants(userId)) {
+        keys.add(String(variant));
+      }
+      keys.add(userId);
+      for (const key of keys) {
+        const n = countByUserId.get(key);
+        if (n) {
+          totalCount += n;
+          claimedCountKeys.add(key);
+        }
+      }
+      return totalCount;
+    };
+
+    for (const u of users) {
+      const id = String(u._id);
+      const email = u.email || null;
+      if (q) {
+        const emailMatch = email ? email.toLowerCase().includes(qLower) : false;
+        const idMatch = id.toLowerCase().includes(qLower);
+        if (!emailMatch && !idMatch) continue;
+      }
+      rows.push({
+        id,
+        email,
+        automationCount: sumCountsForUser(id),
+      });
+    }
+
+    // Orphan robot owners (userId on robots with no matching User doc)
+    for (const [ownerId, count] of countByUserId.entries()) {
+      if (claimedCountKeys.has(ownerId)) continue;
+      if (q) {
+        const idMatch = ownerId.toLowerCase().includes(qLower);
+        if (!idMatch) continue;
+      }
+      claimedCountKeys.add(ownerId);
+      rows.push({
+        id: ownerId,
+        email: null,
+        automationCount: count,
+        orphan: true,
+      });
+    }
+
+    rows.sort((a, b) => {
+      const ae = (a.email || '').toLowerCase();
+      const be = (b.email || '').toLowerCase();
+      if (ae && be) return ae.localeCompare(be);
+      if (ae) return -1;
+      if (be) return 1;
+      return a.id.localeCompare(b.id);
+    });
+
+    const total = rows.length;
+    const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+    const pageRows = rows.slice(skip, skip + limit);
+
+    return res.json({
+      users: pageRows,
+      pagination: { page, limit, total, totalPages },
+    });
+  } catch (error: any) {
+    logger.log('error', `Admin users list failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch admin users' });
+  }
+});
+
+/**
+ * Automations owned by a given account (cross-account admin).
+ */
+router.get('/admin/users/:userId/automations', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const { page, limit, skip } = parseListPagination(req);
+    const ownerFilter = ownerIdFilter(userId);
+
+    const [total, robots] = await Promise.all([
+      Robot.countDocuments(ownerFilter),
+      Robot.find(ownerFilter)
+        .select(
+          [
+            'userId',
+            'schedule',
+            'recording_meta.id',
+            'recording_meta.scoutId',
+            'recording_meta.name',
+            'recording_meta.companyName',
+            'recording_meta.tags',
+            'recording_meta.url',
+            'recording_meta.createdAt',
+            'recording_meta.updatedAt',
+            'recording_meta.saasConfig.webhookUrl',
+            'recording_meta.saasConfig.schedule',
+            'recording_meta.saasConfig.companyName',
+            'recording_meta.saasConfig.tags',
+          ].join(' ')
+        )
+        .sort({ _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    const metaIds = robots
+      .map((r: any) => String(r.recording_meta?.id || ''))
+      .filter(Boolean);
+    const latestByMeta = await loadLatestRunsByMetaIds(metaIds);
+    const latestRunIds = Array.from(latestByMeta.values())
+      .map((r: any) => String(r.runId || ''))
+      .filter(Boolean);
+    const rowCounts = await batchExtractedRowCounts(latestRunIds);
+
+    const automations = robots.map((robot: any) => {
+      const metaId = String(robot.recording_meta?.id || '');
+      const latestRun = latestByMeta.get(metaId);
+      const rowsExtracted = latestRun?.runId
+        ? rowCounts.get(String(latestRun.runId)) || 0
+        : 0;
+      return mapAdminAutomation(robot, latestRun, rowsExtracted);
+    });
+
+    const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+    return res.json({
+      automations,
+      pagination: { page, limit, total, totalPages },
+    });
+  } catch (error: any) {
+    logger.log('error', `Admin user automations list failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch user automations' });
+  }
+});
+
+/**
+ * Ops-friendly update of automation metadata + optional schedule (cross-account).
+ * Body: { name?, startUrl?, companyName?, tags?, webhookUrl?, schedule?: { enabled, cron, timezone } }
+ */
+router.put('/admin/automations/:id', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const robot = await findAdminRobotByIdOrScoutId(req.params.id);
+    if (!robot) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
+
+    const {
+      name,
+      startUrl,
+      companyName: bodyCompany,
+      tags: bodyTags,
+      webhookUrl,
+      schedule: bodySchedule,
+    } = req.body || {};
+
+    const prevSaas = getAutomationConfig(robot) || {};
+    const nextSaasConfig: Record<string, any> = { ...prevSaas };
+
+    if (typeof webhookUrl === 'string') {
+      nextSaasConfig.webhookUrl = webhookUrl.trim();
+    }
+
+    let tagsToSet: string[] | undefined;
+    if (bodyTags !== undefined) {
+      const tagsResult = sanitizeAutomationTags(bodyTags);
+      if (!tagsResult.ok) {
+        return res.status(400).json({ error: tagsResult.error });
+      }
+      tagsToSet = tagsResult.tags;
+      nextSaasConfig.tags = tagsToSet;
+    }
+
+    const companyName =
+      typeof bodyCompany === 'string' ? bodyCompany.trim() : undefined;
+    if (companyName !== undefined) {
+      nextSaasConfig.companyName = companyName;
+    }
+
+    let normalizedStartUrl: string | undefined;
+    if (typeof startUrl === 'string' && startUrl.trim()) {
+      try {
+        normalizedStartUrl = normalizeAutomationUrl(startUrl);
+      } catch (e: any) {
+        return res.status(400).json({ error: e?.message || 'Invalid start URL' });
+      }
+    }
+
+    const nextName =
+      typeof name === 'string' && name.trim() ? name.trim() : robot.recording_meta?.name;
+
+    let nextMeta: any = {
+      ...robot.recording_meta,
+      name: nextName,
+      updatedAt: new Date().toLocaleString(),
+      ...(normalizedStartUrl ? { url: normalizedStartUrl } : {}),
+      ...(companyName !== undefined ? { companyName } : {}),
+      ...(tagsToSet !== undefined ? { tags: tagsToSet } : {}),
+      saasConfig: nextSaasConfig,
+    };
+
+    let nextSchedule = robot.schedule;
+
+    if (bodySchedule && typeof bodySchedule === 'object') {
+      const { enabled, cron, timezone } = bodySchedule as {
+        enabled?: boolean;
+        cron?: string | null;
+        timezone?: string;
+      };
+
+      const existingSaasSchedule = nextSaasConfig.schedule || {};
+      const rootSchedule = robot.schedule || {};
+      const storedCron =
+        (typeof existingSaasSchedule.cron === 'string' && existingSaasSchedule.cron.trim()) ||
+        (typeof rootSchedule.cron === 'string' && rootSchedule.cron.trim()) ||
+        '';
+
+      if (timezone && !moment.tz.zone(timezone)) {
+        return res.status(400).json({ error: 'Invalid timezone' });
+      }
+
+      const tz =
+        (timezone && moment.tz.zone(timezone) ? timezone : '') ||
+        (typeof existingSaasSchedule.timezone === 'string' &&
+        moment.tz.zone(existingSaasSchedule.timezone)
+          ? existingSaasSchedule.timezone
+          : '') ||
+        (typeof (rootSchedule as any).timezone === 'string' &&
+        moment.tz.zone((rootSchedule as any).timezone)
+          ? (rootSchedule as any).timezone
+          : '') ||
+        'UTC';
+
+      const wantEnabled = !!enabled;
+      let nextCron = '';
+      if (typeof cron === 'string' && cron.trim()) {
+        nextCron = cron.trim();
+      } else if (cron === null || cron === undefined || (typeof cron === 'string' && !cron.trim())) {
+        if (wantEnabled) {
+          return res.status(400).json({ error: 'cron is required when enabling a schedule' });
+        }
+        nextCron = storedCron;
+      }
+
+      if (wantEnabled && !nextCron) {
+        return res.status(400).json({ error: 'cron is required when enabling a schedule' });
+      }
+
+      if (nextCron) {
+        const v = validateAutomationScheduleCron(nextCron, tz);
+        if (!v.ok) {
+          return res.status(400).json({ error: v.error });
+        }
+      }
+
+      const scheduleEnabled = wantEnabled && !!nextCron;
+      const everyMs = nextCron ? intervalMsFromCron(nextCron) : null;
+      nextSaasConfig.schedule = {
+        enabled: scheduleEnabled,
+        cron: nextCron,
+        timezone: tz,
+        ...(everyMs ? { every: everyMs } : { every: undefined }),
+      };
+      nextMeta = {
+        ...nextMeta,
+        saasConfig: nextSaasConfig,
+      };
+
+      nextSchedule = await syncAutomationSchedule(
+        {
+          ...robot.toJSON(),
+          recording_meta: nextMeta,
+          schedule: robot.schedule,
+        },
+        robot.userId,
+        tz,
+        { packSlots: true }
+      );
+    }
+
+    robot.recording_meta = nextMeta;
+    if (bodySchedule && typeof bodySchedule === 'object') {
+      robot.schedule = nextSchedule;
+    }
+    robot.markModified('recording_meta');
+    await robot.save();
+
+    const automationId = String(nextMeta.id || '');
+    const latestByMeta = await loadLatestRunsByMetaIds(automationId ? [automationId] : []);
+    const latestRun = latestByMeta.get(automationId);
+    const rowsExtracted = latestRun?.runId
+      ? (await batchExtractedRowCounts([String(latestRun.runId)])).get(String(latestRun.runId)) || 0
+      : 0;
+
+    logger.log(
+      'info',
+      `Admin updated automation ${automationId} (owner=${robot.userId})`
+    );
+
+    return res.json({
+      success: true,
+      automation: mapAdminAutomation(robot.toJSON(), latestRun, rowsExtracted),
+    });
+  } catch (error: any) {
+    logger.log('error', `Admin automation update failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to update automation' });
+  }
+});
+
+/**
+ * Cascade-delete an automation for any account.
+ */
+router.delete('/admin/automations/:id', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const robot = await findAdminRobotByIdOrScoutId(req.params.id);
+    if (!robot) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
+
+    const automationId = String(robot.recording_meta?.id || '');
+    if (!automationId) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
+
+    await deleteAutomationCascade(robot.userId, automationId);
+    logger.log(
+      'info',
+      `Admin deleted automation ${automationId} (owner=${robot.userId})`
+    );
+    return res.json({ success: true });
+  } catch (error: any) {
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ error: error.message || 'Automation not found' });
+    }
+    logger.log('error', `Admin automation delete failed: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to delete automation' });
   }
 });
 

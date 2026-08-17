@@ -1077,7 +1077,14 @@ async function gotoForListExtraction(page: Page, url: string): Promise<void> {
   } catch { /* ignore — SPA heartbeats keep network open */ }
 
   logger.log('info', `List extractor navigation to ${url} completed`);
-  await waitForCloudflareIfPresent(page);
+  const cloudflareCleared = await waitForCloudflareIfPresent(page);
+  if (!cloudflareCleared) {
+    // Fail fast — continuing pagination on a challenge page burns the job
+    // hard-timeout (SCRAPER_JOB_TIMEOUT_MS) with 0 rows every page.
+    throw new Error(
+      `Cloudflare challenge did not clear after navigating to ${url}`
+    );
+  }
 }
 
 const advancePagination = async (

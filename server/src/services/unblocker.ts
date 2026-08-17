@@ -83,10 +83,30 @@ export const detectCaptcha = async (page: Page): Promise<boolean> => {
   }
 };
 
-const CLOUDFLARE_MARKERS = [
+// Do NOT include the bare word "cloudflare" — many healthy pages mention it in
+// cookie/CDN footers (e.g. careers.epam.com), which caused permanent false
+// positives and burned the full scraper job timeout waiting for nothing.
+const CLOUDFLARE_TEXT_MARKERS = [
   'checking your browser',
   'performing security verification',
-  'cloudflare',
+  'just a moment',
+  'attention required',
+  'enable javascript and cookies',
+  'checking if the site connection is secure',
+  'needs to review the security of your connection',
+  'verify you are human',
+  'cf-browser-verification',
+];
+
+const CLOUDFLARE_DOM_SELECTORS = [
+  '#challenge-form',
+  '#challenge-running',
+  '#cf-challenge-running',
+  '.cf-browser-verification',
+  '#cf-please-wait',
+  '.cf-turnstile',
+  'iframe[src*="challenges.cloudflare.com"]',
+  'iframe[src*="cdn-cgi/challenge-platform"]',
 ];
 
 const AMAZON_CHALLENGE_MARKERS = [
@@ -206,8 +226,37 @@ const readBodyText = async (page: Page): Promise<string> => {
 };
 
 export const detectCloudflareChallenge = async (page: Page): Promise<boolean> => {
+  try {
+    const domMarker = await page.evaluate((selectors) => {
+      for (const sel of selectors) {
+        try {
+          if (document.querySelector(sel)) return sel;
+        } catch {
+          /* ignore invalid selectors */
+        }
+      }
+      return null;
+    }, CLOUDFLARE_DOM_SELECTORS);
+    if (domMarker) {
+      logger.log('info', `detectCloudflareChallenge: Found DOM marker "${domMarker}"`);
+      return true;
+    }
+  } catch {
+    /* page may be navigating */
+  }
+
+  try {
+    const title = ((await page.title()) || '').toLowerCase();
+    if (title.includes('just a moment') || title.includes('attention required')) {
+      logger.log('info', `detectCloudflareChallenge: Found matching title "${title}"`);
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+
   const lower = await readBodyText(page);
-  const matched = CLOUDFLARE_MARKERS.find((marker) => lower.includes(marker));
+  const matched = CLOUDFLARE_TEXT_MARKERS.find((marker) => lower.includes(marker));
   if (matched) {
     logger.log('info', `detectCloudflareChallenge: Found matching marker "${matched}" in visible page text`);
   }
@@ -242,13 +291,16 @@ export function getUnblockOptionsFromRuntimeConfig(config: Record<string, unknow
   };
 }
 
-/** Wait for Cloudflare interstitial to disappear when present (no mouse / delay). */
+/**
+ * Wait for Cloudflare interstitial to disappear when present (no mouse / delay).
+ * @returns true if no challenge or it cleared; false if still active after timeout.
+ */
 export async function waitForCloudflareIfPresent(
   page: Page,
   options: { timeoutMs?: number; pollMs?: number } = {}
-): Promise<void> {
+): Promise<boolean> {
   if (!(await detectCloudflareChallenge(page))) {
-    return;
+    return true;
   }
   logger.log('info', 'Cloudflare challenge detected; waiting for it to clear...');
   const cleared = await waitForCloudflareToClear(page, {
@@ -258,6 +310,7 @@ export async function waitForCloudflareIfPresent(
   if (!cleared) {
     logger.log('warn', 'Cloudflare challenge may still be active after wait timeout');
   }
+  return cleared;
 }
 
 /**
