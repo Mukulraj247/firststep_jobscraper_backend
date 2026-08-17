@@ -1,5 +1,11 @@
 import https from 'https';
 
+/**
+ * Hosts where Chromium consistently fails with net::ERR_HTTP2_PROTOCOL_ERROR
+ * while plain HTTP/1.1 (Node https) succeeds. Keep this list tiny and evidence-backed.
+ */
+const HTTP2_UNRELIABLE_HOSTS = new Set(['careers.persistent.com']);
+
 export function isHttp2ProtocolNavigationError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '');
   return /\bERR_HTTP2_PROTOCOL_ERROR\b/i.test(message);
@@ -10,6 +16,35 @@ function hostnameForLog(rawUrl: string): string {
     return new URL(rawUrl).hostname || 'invalid-url';
   } catch {
     return 'invalid-url';
+  }
+}
+
+function parseEnvTriState(raw: unknown): boolean | null {
+  if (raw == null) return null;
+  const value = String(raw).trim().toLowerCase();
+  if (!value) return null;
+  if (value === '1' || value === 'true' || value === 'yes' || value === 'on') return true;
+  if (value === '0' || value === 'false' || value === 'no' || value === 'off') return false;
+  return null;
+}
+
+/**
+ * Decide whether Chromium should launch with `--disable-http2`.
+ * Env override wins: CHROMIUM_DISABLE_HTTP2=true|false.
+ * Otherwise only known-broken hosts are opted in.
+ */
+export function shouldDisableChromiumHttp2(
+  rawUrl: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  const forced = parseEnvTriState(env.CHROMIUM_DISABLE_HTTP2);
+  if (forced != null) return forced;
+  if (!rawUrl) return false;
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '');
+    return HTTP2_UNRELIABLE_HOSTS.has(host);
+  } catch {
+    return false;
   }
 }
 

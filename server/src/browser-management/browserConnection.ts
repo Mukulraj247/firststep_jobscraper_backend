@@ -14,6 +14,11 @@ export interface BrowserLaunchProfile {
     } | null;
     useStealth?: boolean;
     browserType?: BrowserType;
+    /**
+     * Force Chromium onto HTTP/1.1 (`--disable-http2`).
+     * Used for hosts where Chromium HTTP/2 consistently fails (e.g. Persistent).
+     */
+    disableHttp2?: boolean;
 }
 
 /**
@@ -50,7 +55,13 @@ const requiresCustomLocalLaunch = (profile?: BrowserLaunchProfile): boolean => {
         return profile?.headless === false;
     }
 
-    return !!profile?.proxy || profile?.useStealth === true || profile?.headless === false;
+    // `--disable-http2` only applies to local Chromium launches; force local when set.
+    return (
+        !!profile?.proxy ||
+        profile?.useStealth === true ||
+        profile?.headless === false ||
+        !!profile?.disableHttp2
+    );
 };
 
 /**
@@ -113,7 +124,7 @@ async function getBrowserServiceEndpoint(): Promise<string> {
 /**
  * Launch a local browser as fallback when browser service is unavailable
  */
-function buildChromiumLaunchArgs(): string[] {
+function buildChromiumLaunchArgs(profile?: BrowserLaunchProfile): string[] {
     const lowMemory = isLowMemoryMode();
     // Scale factor 2 doubles compositor/raster memory — never do that on 512MB hosts.
     const scaleFactor = lowMemory ? '1' : (process.env.CHROMIUM_DEVICE_SCALE_FACTOR || '1');
@@ -148,6 +159,11 @@ function buildChromiumLaunchArgs(): string[] {
         '--font-render-hinting=none',
     ];
 
+    // Host-scoped / env-gated only — do not disable HTTP/2 globally by default.
+    if (profile?.disableHttp2) {
+        args.push('--disable-http2');
+    }
+
     if (lowMemory) {
         // Keep Chromium to one renderer on tiny instances. Avoid --single-process
         // (unstable with Playwright); renderer limit + no-zygote is the safer cut.
@@ -173,7 +189,7 @@ async function launchLocalBrowser(profile?: BrowserLaunchProfile): Promise<Brows
         const launchOptions = {
             headless: profile?.headless ?? true,
             proxy: profile?.proxy || undefined,
-            args: buildChromiumLaunchArgs(),
+            args: buildChromiumLaunchArgs(profile),
         };
 
         // playwright-extra + stealth plugin adds noticeable RSS; on low-memory hosts

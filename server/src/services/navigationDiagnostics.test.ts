@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isHttp2ProtocolNavigationError,
   probeHttp11,
+  shouldDisableChromiumHttp2,
   summarizeHttp11Probe,
 } from './navigationDiagnostics';
 
@@ -50,5 +51,33 @@ describe('probeHttp11', () => {
     await expect(probeHttp11('http://example.com/jobs?candidate=private')).resolves.toBe(
       'host=example.com result=unsupported-protocol'
     );
+  });
+});
+
+describe('shouldDisableChromiumHttp2', () => {
+  it('disables HTTP/2 for Persistent careers (known Chromium HTTP/2 breakage)', () => {
+    expect(
+      shouldDisableChromiumHttp2('https://careers.persistent.com/explore-opportunities', {})
+    ).toBe(true);
+  });
+
+  it('does not disable HTTP/2 for unrelated hosts by default', () => {
+    expect(shouldDisableChromiumHttp2('https://careers.ey.com/search-3', {})).toBe(false);
+  });
+
+  it('honors an explicit env force-on for any host', () => {
+    expect(
+      shouldDisableChromiumHttp2('https://example.com/jobs', {
+        CHROMIUM_DISABLE_HTTP2: 'true',
+      })
+    ).toBe(true);
+  });
+
+  it('honors an explicit env force-off even for known hosts', () => {
+    expect(
+      shouldDisableChromiumHttp2('https://careers.persistent.com/explore-opportunities', {
+        CHROMIUM_DISABLE_HTTP2: 'false',
+      })
+    ).toBe(false);
   });
 });

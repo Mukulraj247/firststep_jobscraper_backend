@@ -50,6 +50,15 @@ const ORACLE_HCM_VANITY_HOST_COMPANIES: Record<string, string> = {
   'enterpriseplatform.dell.com': 'Dell',
 };
 
+/**
+ * Hash-router vanity career hosts → Oracle Fusion CE API host.
+ * Prefer this over scraping the vanity landing HTML (fragile behind WAF/CDN).
+ * Extend when we discover more `#…/sites/…/jobs` Oracle shells.
+ */
+const ORACLE_HASH_VANITY_FUSION_HOSTS: Record<string, string> = {
+  'jobs.hexaware.com': 'fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com',
+};
+
 const ORACLE_HCM_VANITY_HOSTS = new Set(
   (process.env.ORACLE_HCM_VANITY_HOSTS || '')
     .split(',')
@@ -73,6 +82,30 @@ function oracleCareersHcmHost(): string {
 
 function oracleRecruitingListApi(apiHost: string): string {
   return `https://${apiHost}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`;
+}
+
+/** Resolve known hash-vanity host → Fusion CE host (SSRF-safe allowlist only). */
+export function resolveOracleHashVanityFusionHost(hostname: string): string | null {
+  const host = String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, '');
+  if (!host) return null;
+  const mapped = ORACLE_HASH_VANITY_FUSION_HOSTS[host];
+  if (mapped && isOracleCloudFaHost(mapped)) return mapped;
+  // Optional env: jobs.acme.com=fa-xxxx.fa.ocs.oraclecloud.com,other=...
+  const fromEnv = (process.env.ORACLE_HASH_VANITY_FUSION_HOSTS || '')
+    .split(',')
+    .map((pair) => pair.trim())
+    .filter(Boolean);
+  for (const pair of fromEnv) {
+    const eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    const key = pair.slice(0, eq).trim().toLowerCase().replace(/^www\./, '');
+    const value = pair.slice(eq + 1).trim().toLowerCase().replace(/^https?:\/\//, '');
+    if (key === host && isOracleCloudFaHost(value)) return value;
+  }
+  return null;
 }
 
 function isSafeOracleHcmVanityHost(host: string): boolean {
@@ -1906,21 +1939,42 @@ async function resolveOracleVanityBoardUrl(
   companyHint: string
 ): Promise<{ ceUrl: string; listApiUrl: string; companyHint: string } | null> {
   const route = parseOracleCandidateExperienceRoute(pageUrl);
-  if (!route?.isJobsList || !route.siteNumber) return null;
-  let origin: string;
-  try {
-    origin = new URL(pageUrl).origin;
-  } catch {
-    return null;
+  if (!route?.isJobsList || !route.siteNumber) {
+    throw new Error(`Oracle vanity URL missing site/jobs route: ${pageUrl}`);
   }
-  const htmlRes = await httpClient.get(origin + '/', {
-    headers: { Accept: 'text/html,application/xhtml+xml' },
-    responseType: 'text',
-    transformResponse: [(d) => d],
-  });
-  if (htmlRes.status >= 400 || typeof htmlRes.data !== 'string') return null;
-  const fusionHost = parseOracleVanityFusionHost(htmlRes.data);
-  if (!fusionHost) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    throw new Error(`Oracle vanity URL is invalid: ${pageUrl}`);
+  }
+  const vanityHost = parsed.hostname.toLowerCase().replace(/^www\./, '');
+
+  let fusionHost = resolveOracleHashVanityFusionHost(vanityHost);
+  if (!fusionHost) {
+    const htmlRes = await httpClient.get(parsed.origin + '/', {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'User-Agent':
+          'Mozilla/5.0 (compatible; ScoutXBot/1.0; +https://scoutx.ai; ATS board resolve)',
+      },
+      responseType: 'text',
+      transformResponse: [(d) => d],
+    });
+    if (htmlRes.status >= 400) {
+      throw new Error(
+        `Oracle vanity landing fetch failed for ${parsed.origin}/ (HTTP ${htmlRes.status})`
+      );
+    }
+    const html = typeof htmlRes.data === 'string' ? htmlRes.data : String(htmlRes.data ?? '');
+    fusionHost = parseOracleVanityFusionHost(html);
+    if (!fusionHost) {
+      throw new Error(
+        `Oracle vanity Fusion host not found in landing HTML for ${vanityHost}`
+      );
+    }
+  }
+
   const qs = route.searchParams.toString();
   const ceUrl =
     `https://${fusionHost}/hcmUI/CandidateExperience/` +
@@ -1929,7 +1983,7 @@ async function resolveOracleVanityBoardUrl(
   return {
     ceUrl,
     listApiUrl: oracleRecruitingListApi(fusionHost),
-    companyHint: companyHint || oracleVanityCompanyHint(new URL(pageUrl).hostname),
+    companyHint: companyHint || oracleVanityCompanyHint(vanityHost),
   };
 }
 
@@ -2172,7 +2226,11 @@ export async function fetchAtsBoardJobs(
       companyHint: detected.companyHint,
       rows,
     };
-  } catch {
+  } catch (err) {
+    // Oracle vanity resolve used to return null on any failure, which made
+    // production look like "0 rows" with no usable diagnostic. Re-throw so the
+    // scraper worker logs the real cause before browser fallback.
+    if (detected.provider === 'oraclecloud') throw err;
     return null;
   }
 }

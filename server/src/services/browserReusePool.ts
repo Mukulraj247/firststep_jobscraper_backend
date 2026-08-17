@@ -104,6 +104,7 @@ const buildPoolKey = (profile?: AcquirePooledPageOptions['profile']) =>
     proxyServer: profile?.proxy?.server || '',
     proxyUsername: profile?.proxy?.username || '',
     isolationKey: profile?.poolIsolationKey || '',
+    disableHttp2: !!profile?.disableHttp2,
   });
 
 setOrphanReaperPoolEmptyCheck(() => pooledBrowsers.size === 0);

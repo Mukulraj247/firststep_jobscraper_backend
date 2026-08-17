@@ -44,6 +44,7 @@ import {
 import {
   isHttp2ProtocolNavigationError,
   probeHttp11,
+  shouldDisableChromiumHttp2,
 } from '../services/navigationDiagnostics';
 import { emitQueuedRunEvent } from './scrapeSocket';
 import { applyLayoutChangeSuggestion, resolveFailureReason } from '../utils/failureReason';
@@ -617,6 +618,7 @@ async function buildIdentityProfile(userId: string, automationId: string, config
   let useStealth = config?.useStealth !== false;
   let identityStrategy = antiBotTarget ? 'baseline-antibot' : 'baseline';
   let poolIsolationKey: string | undefined;
+  const disableHttp2 = shouldDisableChromiumHttp2(targetUrl);
 
   // Attempt 0: keep DEFAULT_BROWSER_TYPE / config (usually Playwright).
   // Attempt 1+: always escalate to Camoufox so CAPTCHA / soft-blocks don't
@@ -642,6 +644,17 @@ async function buildIdentityProfile(userId: string, automationId: string, config
     }
   }
 
+  // Known Chromium HTTP/2 breakage (e.g. Persistent): force HTTP/1.1 from attempt 0
+  // and isolate the pool entry so other robots keep default HTTP/2.
+  if (disableHttp2) {
+    poolIsolationKey = poolIsolationKey
+      ? `${poolIsolationKey}|no-http2`
+      : 'chromium-no-http2';
+    if (identityStrategy === 'baseline' || identityStrategy === 'baseline-antibot') {
+      identityStrategy = `${identityStrategy}-no-http2`;
+    }
+  }
+
   return {
     userAgent,
     headless,
@@ -653,6 +666,7 @@ async function buildIdentityProfile(userId: string, automationId: string, config
     browserType,
     identityStrategy,
     poolIsolationKey,
+    disableHttp2,
   };
 }
 
@@ -850,7 +864,7 @@ export async function runScraperJobPayload(
     );
     await appendRunLog(
       run,
-      `Identity selected: strategy=${identityProfile.identityStrategy || 'baseline'}, browser=${identityProfile.browserType || 'playwright-default'}, proxy ${identityProfile.contextProxy?.server || 'none'}, headless=${identityProfile.headless}`
+      `Identity selected: strategy=${identityProfile.identityStrategy || 'baseline'}, browser=${identityProfile.browserType || 'playwright-default'}, proxy ${identityProfile.contextProxy?.server || 'none'}, headless=${identityProfile.headless}${identityProfile.disableHttp2 ? ', http2=disabled' : ''}`
     );
 
     if (!useListExtraction) {

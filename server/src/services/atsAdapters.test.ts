@@ -16,6 +16,7 @@ import {
   parseOracleCandidateExperienceRoute,
   parseOracleVanityFusionHost,
   looksLikeOracleVanityHashBoard,
+  resolveOracleHashVanityFusionHost,
 } from './atsAdapters';
 import fs from 'fs';
 import path from 'path';
@@ -344,6 +345,13 @@ describe('Oracle vanity helpers', () => {
     ).toBe(false);
     expect(looksLikeOracleVanityHashBoard('https://jobs.example.com/#/careers')).toBe(false);
   });
+
+  it('resolveOracleHashVanityFusionHost prefers known map over HTML', () => {
+    expect(resolveOracleHashVanityFusionHost('jobs.hexaware.com')).toBe(
+      'fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com'
+    );
+    expect(resolveOracleHashVanityFusionHost('unknown.example.com')).toBeNull();
+  });
 });
 
 describe('Findly helpers', () => {
@@ -567,14 +575,7 @@ describe('fetchAtsBoardJobs', () => {
     getSpy.mockImplementation(async (url: string) => {
       const href = String(url);
       if (href === 'https://jobs.hexaware.com/' || href === 'https://jobs.hexaware.com') {
-        return {
-          status: 200,
-          data: `
-            const host = 'https://fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com';
-            const ceBaseURL = host + '/hcmUI/CandidateExperience/';
-            xhr.setRequestHeader('ora-irc-vanity-domain', 'Y');
-          `,
-        } as any;
+        throw new Error('HTML should not be fetched for known Hexaware fusion host');
       }
       if (href.includes('recruitingCEJobRequisitions')) {
         const finder = decodeURIComponent(new URL(href).searchParams.get('finder') || '');
@@ -613,6 +614,22 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.rows[0].jobUrl).toContain(
       'fa-etqo-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/672523'
     );
+  });
+
+  it('surfaces Oracle vanity resolve failures instead of silent empty rows', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const href = String(url);
+      if (href.startsWith('https://jobs.unknown-oracle-vanity.test')) {
+        return { status: 200, data: '<html>no fusion host here</html>' } as any;
+      }
+      throw new Error(`unexpected url ${href}`);
+    });
+
+    await expect(
+      fetchAtsBoardJobs(
+        'https://jobs.unknown-oracle-vanity.test/#en/sites/CX_9/jobs?locationId=1'
+      )
+    ).rejects.toThrow(/Fusion host not found|vanity/i);
   });
 
   it('fetches Dell path-vanity Oracle CE boards from the vanity host API', async () => {
