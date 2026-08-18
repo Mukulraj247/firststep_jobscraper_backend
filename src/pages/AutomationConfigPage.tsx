@@ -121,6 +121,12 @@ export const AutomationConfigPage = () => {
   const [tags, setTags] = useState<string[]>([]);
   const [startUrl, setStartUrl] = useState('https://');
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookConfigured, setWebhookConfigured] = useState(false);
+  const [proxyConfigured, setProxyConfigured] = useState(false);
+  const [airtableConfigured, setAirtableConfigured] = useState(false);
+  const [databaseConfigured, setDatabaseConfigured] = useState(false);
+  const [cookiesConfigured, setCookiesConfigured] = useState(false);
+  const [localStorageConfigured, setLocalStorageConfigured] = useState(false);
   const [databaseTargetColumnsDraft, setDatabaseTargetColumnsDraft] = useState('');
   const [cookiesDraft, setCookiesDraft] = useState('[]');
   const [localStorageDraft, setLocalStorageDraft] = useState('{}');
@@ -214,6 +220,12 @@ export const AutomationConfigPage = () => {
         const response = await getAutomation(id);
         const automation = response.automation;
         const saas = automation.config || {};
+        setWebhookConfigured(!!(automation.webhookConfigured || saas.webhookConfigured));
+        setProxyConfigured(!!(automation.proxyConfigured || saas.proxyConfigured));
+        setAirtableConfigured(!!saas.destinations?.airtable?.enabled);
+        setDatabaseConfigured(!!saas.destinations?.database?.enabled);
+        setCookiesConfigured(false);
+        setLocalStorageConfigured(false);
         setName(automation.name || '');
         setCompanyName(automation.companyName || '');
         setTags(Array.isArray(automation.tags) ? automation.tags : []);
@@ -376,6 +388,26 @@ export const AutomationConfigPage = () => {
       };
     }
 
+    const omitBlank = (value: unknown) => (typeof value === 'string' && !value.trim() ? undefined : value);
+    const cookiesPayload =
+      Array.isArray(cookiesValue) && cookiesValue.length === 0 ? undefined : cookiesValue;
+    const localStoragePayload =
+      localStorageValue && typeof localStorageValue === 'object' && !Array.isArray(localStorageValue)
+        && Object.keys(localStorageValue as Record<string, unknown>).length === 0
+        ? undefined
+        : localStorageValue;
+    const browserLocationPayload = {
+      ...(omitBlank(config.browserLocation?.proxyServer)
+        ? { proxyServer: config.browserLocation.proxyServer }
+        : {}),
+      ...(omitBlank(config.browserLocation?.proxyUsername)
+        ? { proxyUsername: config.browserLocation.proxyUsername }
+        : {}),
+      ...(omitBlank(config.browserLocation?.proxyPassword)
+        ? { proxyPassword: config.browserLocation.proxyPassword }
+        : {}),
+    };
+
     const webhook =
       config.destinations?.webhook?.url || webhookUrl || '';
 
@@ -391,16 +423,31 @@ export const AutomationConfigPage = () => {
         ...config.destinations,
         webhook: {
           ...(config.destinations?.webhook || {}),
-          url: webhook,
-          enabled: !!(config.destinations?.webhook?.enabled && webhook),
+          ...(omitBlank(webhook) ? { url: webhook } : { url: undefined }),
+          enabled: !!(
+            config.destinations?.webhook?.enabled &&
+            (webhook || webhookConfigured)
+          ),
+        },
+        airtable: {
+          ...(config.destinations?.airtable || {}),
+          ...(omitBlank(config.destinations?.airtable?.apiKey)
+            ? { apiKey: config.destinations.airtable.apiKey }
+            : { apiKey: undefined }),
+        },
+        database: {
+          ...(config.destinations?.database || {}),
+          ...(omitBlank(config.destinations?.database?.connectionString)
+            ? { connectionString: config.destinations.database.connectionString }
+            : { connectionString: undefined }),
         },
       },
       databaseTargetColumns: parsedTargets.list,
-      browserLocation: config.browserLocation || {},
+      ...(Object.keys(browserLocationPayload).length ? { browserLocation: browserLocationPayload } : {}),
       dataCleanup: config.dataCleanup || {},
       userAgent: config.userAgent || '',
-      cookies: cookiesValue,
-      localStorage: localStorageValue,
+      ...(cookiesPayload !== undefined ? { cookies: cookiesPayload } : {}),
+      ...(localStoragePayload !== undefined ? { localStorage: localStoragePayload } : {}),
       rowContext: {
         sectorIndustry: config.rowContext?.sectorIndustry || '',
         f500: config.rowContext?.f500 || '',
@@ -412,7 +459,7 @@ export const AutomationConfigPage = () => {
       captcha: {
         pauseOnDetect: !!config.captcha?.pauseOnDetect,
       },
-      webhookUrl: webhook,
+      ...(omitBlank(webhook) ? { webhookUrl: webhook } : {}),
     };
 
     if (listExtractionPayload) {
@@ -426,7 +473,7 @@ export const AutomationConfigPage = () => {
         companyName: companyName.trim(),
         tags,
         startUrl: normalizeStartUrl(startUrl),
-        webhookUrl: webhook,
+        ...(webhook.trim() ? { webhookUrl: webhook } : {}),
         config: configPayload,
       });
       notify('success', 'Automation configuration saved');
@@ -795,6 +842,8 @@ export const AutomationConfigPage = () => {
                   label="Webhook URL"
                   fullWidth
                   value={config.destinations?.webhook?.url || webhookUrl || ''}
+                  placeholder={webhookConfigured ? 'Leave blank to keep existing webhook' : ''}
+                  helperText={webhookConfigured ? 'A webhook is already configured. Leave blank to keep it.' : undefined}
                   onChange={(event) => {
                     updateNested(['destinations', 'webhook', 'url'], event.target.value);
                     setWebhookUrl(event.target.value);
@@ -889,6 +938,8 @@ export const AutomationConfigPage = () => {
                   fullWidth
                   autoComplete="off"
                   value={config.destinations?.airtable?.apiKey || ''}
+                  placeholder={airtableConfigured ? 'Leave blank to keep existing key' : ''}
+                  helperText={airtableConfigured ? 'An API key is already stored. Leave blank to keep it.' : undefined}
                   onChange={(event) => updateNested(['destinations', 'airtable', 'apiKey'], event.target.value)}
                 />
                 <TextField
@@ -933,6 +984,8 @@ export const AutomationConfigPage = () => {
                   fullWidth
                   autoComplete="off"
                   value={config.destinations?.database?.connectionString || ''}
+                  placeholder={databaseConfigured ? 'Leave blank to keep existing connection string' : ''}
+                  helperText={databaseConfigured ? 'A connection string is already stored. Leave blank to keep it.' : undefined}
                   onChange={(event) =>
                     updateNested(['destinations', 'database', 'connectionString'], event.target.value)
                   }
@@ -974,7 +1027,7 @@ export const AutomationConfigPage = () => {
               <Link component={RouterLink} to="/proxy" underline="hover">
                 account proxy settings
               </Link>
-              .
+              {proxyConfigured ? '. Stored credentials are kept unless you enter replacements.' : '.'}
             </Typography>
             <TextField
               label="Proxy server"
@@ -994,6 +1047,7 @@ export const AutomationConfigPage = () => {
               fullWidth
               autoComplete="new-password"
               value={config.browserLocation?.proxyPassword || ''}
+              placeholder={proxyConfigured ? 'Leave blank to keep existing password' : ''}
               onChange={(event) => updateNested(['browserLocation', 'proxyPassword'], event.target.value)}
             />
           </SectionPaper>
@@ -1019,6 +1073,7 @@ export const AutomationConfigPage = () => {
                   multiline
                   minRows={3}
                   value={cookiesDraft}
+                  helperText="Leave as [] to keep stored cookies."
                   onChange={(event) => setCookiesDraft(event.target.value)}
                 />
                 <TextField
@@ -1027,6 +1082,7 @@ export const AutomationConfigPage = () => {
                   multiline
                   minRows={3}
                   value={localStorageDraft}
+                  helperText="Leave as {} to keep stored localStorage."
                   onChange={(event) => setLocalStorageDraft(event.target.value)}
                 />
 

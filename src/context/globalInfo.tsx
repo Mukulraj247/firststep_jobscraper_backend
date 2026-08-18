@@ -2,8 +2,9 @@ import { createContext, useCallback, useContext, useState } from "react";
 import { AlertSnackbarProps } from "../components/ui/AlertSnackbar";
 import { WhereWhatPair } from "maxun-core";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getStoredRecordings } from "../api/storage";
-import { listSaasRuns } from "../api/automation";
+import { getRecordingsSummary, getStoredRecordings } from "../api/storage";
+import type { RecordingsSummary } from "../types/robotList";
+import { listSaasRunGroups, listSaasRuns, type SaasRunsListParams } from "../api/automation";
 
 const createDataCacheClient = () => new QueryClient({
   defaultOptions: {
@@ -18,6 +19,7 @@ const createDataCacheClient = () => new QueryClient({
 
 const dataCacheKeys = {
   runs: ['cached-runs'] as const,
+  runGroups: ['cached-run-groups'] as const,
   recordings: ['cached-recordings'] as const,
 } as const;
 
@@ -155,20 +157,65 @@ export const useCachedRuns = (params?: {
   page?: number;
   limit?: number;
   robotMetaId?: string | null;
+  q?: string;
+  date?: string;
+  status?: string;
+  minJobsAdded?: number;
+  maxJobsAdded?: number;
+  jobsAddedExact?: number;
+  minDurationMs?: number;
+  maxDurationMs?: number;
+  enabled?: boolean;
 }) => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 25;
   const robotMetaId = params?.robotMetaId?.trim() || undefined;
+  const q = params?.q?.trim() || undefined;
+  const date = params?.date?.trim() || undefined;
+  const status = params?.status?.trim() || undefined;
+  const minJobsAdded = params?.minJobsAdded;
+  const maxJobsAdded = params?.maxJobsAdded;
+  const jobsAddedExact = params?.jobsAddedExact;
+  const minDurationMs = params?.minDurationMs;
+  const maxDurationMs = params?.maxDurationMs;
+  const enabled = params?.enabled !== false;
 
   return useQuery({
-    queryKey: [...dataCacheKeys.runs, page, limit, robotMetaId || 'all'] as const,
+    queryKey: [
+      ...dataCacheKeys.runs,
+      page,
+      limit,
+      robotMetaId || 'all',
+      q || '',
+      date || '',
+      status || '',
+      minJobsAdded ?? '',
+      maxJobsAdded ?? '',
+      jobsAddedExact ?? '',
+      minDurationMs ?? '',
+      maxDurationMs ?? '',
+    ] as const,
     queryFn: async () => {
-      const result = await listSaasRuns({ page, limit, robotMetaId });
+      const result = await listSaasRuns({
+        page,
+        limit,
+        robotMetaId,
+        q,
+        date,
+        status,
+        minJobsAdded,
+        maxJobsAdded,
+        jobsAddedExact,
+        minDurationMs,
+        maxDurationMs,
+      });
       const runs = (result.runs || []).map((run: any, index: number) => ({
         id: index,
         ...run,
         name: run.name || 'Run',
-        duration: run.duration ?? run.durationMs ?? null,
+        duration: run.durationMs ?? run.duration ?? null,
+        jobsAddedToBoard:
+          typeof run.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
         log: typeof run.log === 'string' ? run.log : '',
         serializableOutput: run.serializableOutput || {},
         binaryOutput: run.binaryOutput || {},
@@ -179,6 +226,7 @@ export const useCachedRuns = (params?: {
         pagination: result.pagination || { page, limit, total: runs.length, totalPages: 1 },
       };
     },
+    enabled,
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 2,
@@ -187,11 +235,87 @@ export const useCachedRuns = (params?: {
   });
 };
 
+export type CachedRunGroupFilters = Omit<SaasRunsListParams, 'page' | 'limit' | 'robotMetaId'> & {
+  page?: number;
+  limit?: number;
+  robotMetaId?: string | null;
+  enabled?: boolean;
+};
+
+export const useCachedRunGroups = (params?: CachedRunGroupFilters) => {
+  const page = params?.page ?? 1;
+  const limit = params?.limit ?? 20;
+  const robotMetaId = params?.robotMetaId?.trim() || undefined;
+  const q = params?.q?.trim() || undefined;
+  const date = params?.date?.trim() || undefined;
+  const status = params?.status?.trim() || undefined;
+  const minJobsAdded = params?.minJobsAdded;
+  const maxJobsAdded = params?.maxJobsAdded;
+  const jobsAddedExact = params?.jobsAddedExact;
+  const minDurationMs = params?.minDurationMs;
+  const maxDurationMs = params?.maxDurationMs;
+  const enabled = params?.enabled !== false;
+
+  return useQuery({
+    queryKey: [
+      ...dataCacheKeys.runGroups,
+      page,
+      limit,
+      robotMetaId || 'all',
+      q || '',
+      date || '',
+      status || '',
+      minJobsAdded ?? '',
+      maxJobsAdded ?? '',
+      jobsAddedExact ?? '',
+      minDurationMs ?? '',
+      maxDurationMs ?? '',
+    ] as const,
+    queryFn: async () => {
+      const result = await listSaasRunGroups({
+        page,
+        limit,
+        robotMetaId,
+        q,
+        date,
+        status,
+        minJobsAdded,
+        maxJobsAdded,
+        jobsAddedExact,
+        minDurationMs,
+        maxDurationMs,
+      });
+      return {
+        groups: result.groups || [],
+        pagination: result.pagination || { page, limit, total: 0, totalPages: 1 },
+      };
+    },
+    enabled,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    retry: 2,
+    refetchOnMount: 'always',
+    placeholderData: (previousData) => previousData,
+  });
+};
+
+export const useCachedRunsForAutomation = (
+  robotMetaId: string | null | undefined,
+  params?: CachedRunGroupFilters & { enabled?: boolean }
+) => {
+  return useCachedRuns({
+    ...params,
+    robotMetaId,
+    enabled: Boolean(robotMetaId) && params?.enabled !== false,
+  });
+};
+
 export const useCacheInvalidation = () => {
   const queryClient = useQueryClient();
 
   const invalidateRuns = () => {
     queryClient.invalidateQueries({ queryKey: dataCacheKeys.runs });
+    queryClient.invalidateQueries({ queryKey: dataCacheKeys.runGroups });
   };
 
   const invalidateRecordings = () => {
@@ -271,15 +395,21 @@ export const useCacheInvalidation = () => {
 export const useCachedRecordings = (params: { page: number; limit: number; q?: string }) => {
   return useQuery({
     queryKey: [...dataCacheKeys.recordings, params.page, params.limit, params.q || ''],
-    queryFn: async () => {
-      const recordings = await getStoredRecordings(params);
-      if (!recordings) throw new Error('Failed to fetch recordings data');
-      return recordings;
-    },
+    queryFn: () => getStoredRecordings(params),
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     retry: 2,
     placeholderData: (prev) => prev,
+  });
+};
+
+export const useCachedRecordingsSummary = () => {
+  return useQuery<RecordingsSummary>({
+    queryKey: [...dataCacheKeys.recordings, 'summary'] as const,
+    queryFn: () => getRecordingsSummary(),
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    retry: 2,
   });
 };
 

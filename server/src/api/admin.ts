@@ -20,8 +20,10 @@ import {
   batchExtractedRowCounts,
   buildDashboardStatus,
   computeRunDurationMs,
+  resolveRunDurationMs,
   getAutomationConfig,
 } from '../services/automation';
+import { toPublicAutomationConfig, toPublicRunDto } from '../services/automationConfigView';
 import { syncAutomationSchedule, resolveEffectiveScheduleState } from '../services/automationScheduler';
 import { deleteAutomationCascade } from '../services/deleteAutomation';
 import { SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
@@ -190,7 +192,7 @@ function mapAdminAutomation(robot: any, latestRun?: any, rowsExtracted: number =
     lastRunTime: latestRun?.finishedAt || latestRun?.startedAt || null,
     rowsExtracted,
     latestRunId: latestRun?.runId || null,
-    webhookUrl: config.webhookUrl || '',
+    webhookConfigured: !!(config.webhookUrl || config.destinations?.webhook?.url),
     schedule,
     ownerUserId: robot.userId != null ? String(robot.userId) : null,
   };
@@ -214,10 +216,7 @@ async function loadLatestRunsByMetaIds(metaIds: string[]) {
 }
 
 function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<string, string>, rowsExtracted: number) {
-  const durationMs =
-    typeof run.duration === 'number' && run.duration > 0
-      ? run.duration
-      : computeRunDurationMs(run.startedAt, run.finishedAt);
+  const durationMs = resolveRunDurationMs(run);
   const ownerUserId = robot?.userId != null ? String(robot.userId) : null;
   const ownerEmail = ownerUserId ? emailByUserId.get(ownerUserId) || null : null;
   const config = robot ? getAutomationConfig(robot) : {};
@@ -239,7 +238,7 @@ function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<str
     durationSeconds: durationMs != null ? Math.round(durationMs / 1000) : null,
     browserId: run.browserId || null,
     retryCount: run.retryCount ?? 0,
-    errorMessage: run.errorMessage || null,
+    errorMessage: toPublicRunDto(run, robot, { detail: false }).errorMessage || null,
     queueJobId: run.queueJobId || null,
     trigger: triggerLabel(run),
     runByUserId: run.runByUserId ?? null,
@@ -247,6 +246,9 @@ function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<str
     runByAPI: !!run.runByAPI,
     runBySDK: !!run.runBySDK,
     rowsExtracted: denormalizedRows,
+    jobsAddedToBoard: typeof run.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+    jobsBoardConsidered: typeof run.jobsBoardConsidered === 'number' ? run.jobsBoardConsidered : 0,
+    jobsBoardDeduped: typeof run.jobsBoardDeduped === 'number' ? run.jobsBoardDeduped : 0,
     anomaly: run.anomaly || null,
     anomalyMeta: run.anomalyMeta || null,
     hasSerializableOutput: !!(run.serializableOutput && Object.keys(run.serializableOutput).length),
@@ -256,7 +258,6 @@ function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<str
         ? Object.keys(run.binaryOutput).length
         : 0,
     logBytes: typeof run.log === 'string' ? Buffer.byteLength(run.log, 'utf8') : 0,
-    interpreterSettings: run.interpreterSettings || null,
     automationConfigSummary: {
       maxPages: config?.listExtraction?.pagination?.maxPages ?? null,
       paginationMode: config?.listExtraction?.pagination?.mode ?? null,
@@ -485,7 +486,7 @@ router.get('/admin/runs', requireAdmin, async (req: Request, res: Response) => {
       Run.countDocuments(match),
       Run.find(match)
         .select(
-          'runId name status robotMetaId robotId startedAt finishedAt browserId retryCount duration errorMessage queueJobId runByUserId runByScheduleId runByAPI runBySDK interpreterSettings rowsExtracted anomaly anomalyMeta'
+          'runId name status robotMetaId robotId startedAt finishedAt browserId retryCount duration errorMessage queueJobId runByUserId runByScheduleId runByAPI runBySDK interpreterSettings rowsExtracted jobsAddedToBoard jobsBoardConsidered jobsBoardDeduped anomaly anomalyMeta'
         )
         .sort({ _id: -1 })
         .skip(skip)
@@ -536,7 +537,8 @@ router.get('/admin/runs/:runId', requireAdmin, async (req: Request, res: Respons
       .limit(20)
       .lean();
 
-    const logText = typeof run.log === 'string' ? run.log : '';
+    const publicRun = toPublicRunDto(run, robot, { detail: true });
+    const logText = typeof publicRun.log === 'string' ? publicRun.log : '';
     const logLines = logText ? logText.split('\n').filter(Boolean) : [];
     const binaryEntries =
       run.binaryOutput && typeof run.binaryOutput === 'object'
@@ -553,7 +555,6 @@ router.get('/admin/runs/:runId', requireAdmin, async (req: Request, res: Respons
         binaryOutputKeys: binaryEntries.map(([key]) => key),
         screenshots: binaryEntries.slice(0, 3).map(([key, value]) => ({ key, value })),
         screenshotsTruncated: binaryEntries.length > 3,
-        rawInterpreterSettings: run.interpreterSettings || null,
       },
       automation: robot
         ? {
@@ -562,7 +563,7 @@ router.get('/admin/runs/:runId', requireAdmin, async (req: Request, res: Respons
             targetUrl: robot.recording_meta?.url || '',
             ownerUserId: robot.userId != null ? String(robot.userId) : null,
             ownerEmail: robot.userId != null ? emailByUserId.get(String(robot.userId)) || null : null,
-            config: getAutomationConfig(robot),
+            config: toPublicAutomationConfig(getAutomationConfig(robot)),
           }
         : null,
       extractedRowsSample: extractedSample.map((row: any) => ({
@@ -793,7 +794,7 @@ router.put('/admin/automations/:id', requireAdmin, async (req: Request, res: Res
     const prevSaas = getAutomationConfig(robot) || {};
     const nextSaasConfig: Record<string, any> = { ...prevSaas };
 
-    if (typeof webhookUrl === 'string') {
+    if (typeof webhookUrl === 'string' && webhookUrl.trim()) {
       nextSaasConfig.webhookUrl = webhookUrl.trim();
     }
 

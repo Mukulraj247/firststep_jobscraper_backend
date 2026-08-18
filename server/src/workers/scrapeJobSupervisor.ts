@@ -10,6 +10,7 @@ import Run from '../models/Run';
 import { killUntrackedPlaywrightChromium, setOrphanReaperScrapeChildrenCheck } from '../services/browserProcess';
 import type { ScraperJobData } from '../queue/scraperQueue';
 import type { QueuedRunSocketIpcMessage } from './scrapeSocket';
+import { computeElapsedRunDurationMs } from '../services/automation';
 
 const execFileAsync = promisify(execFile);
 
@@ -152,9 +153,8 @@ async function markRunTimedOut(runId: string, timeoutMs: number): Promise<void> 
     const message = `Scraper job timed out after ${timeoutMs}ms (child process killed)`;
     run.status = 'failed';
     run.errorMessage = message;
-    run.finishedAt = new Date().toLocaleString();
-    const started = new Date(run.startedAt).getTime();
-    run.duration = Number.isNaN(started) ? null : Math.max(0, Date.now() - started);
+    run.finishedAt = new Date().toISOString();
+    run.duration = computeElapsedRunDurationMs(run.startedAt);
     await run.save();
 
     const userId = run.runByUserId != null ? String(run.runByUserId) : null;

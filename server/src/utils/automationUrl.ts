@@ -29,6 +29,9 @@ export function normalizeAutomationUrl(value: string): string {
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
     throw new Error('startUrl must use http or https');
   }
+  if (parsedUrl.username || parsedUrl.password) {
+    throw new Error('startUrl must not contain embedded credentials');
+  }
 
   return parsedUrl.toString();
 }

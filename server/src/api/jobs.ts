@@ -100,7 +100,7 @@ function boardMatch(ownerId: string): Record<string, any> {
   };
 }
 
-function mapListingToJob(row: any, opts?: { fullDescription?: boolean }) {
+function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowIncomplete?: boolean }) {
   const list = row.listSnapshot || {};
   let title = decodeHtmlEntities(row.jobTitle || list.jobTitle || '');
   const jobUrl = row.jobUrl || '';
@@ -113,6 +113,7 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean }) {
     pickBestDescription(row.jobDescription || '', list.jobDescription || '')
   );
   if (
+    !opts?.allowIncomplete &&
     !isBoardQualityPass({
       title,
       description,
@@ -277,9 +278,13 @@ router.get('/jobs', async (req: any, res: any) => {
     const q = String(req.query.q || '').trim();
     const company = String(req.query.company || '').trim();
     const category = String(req.query.category || '').trim();
+    const runId = String(req.query.runId || '').trim();
     const ownerId = normalizeOwnerIdForWrite(req.user.id);
 
-    const match: Record<string, any> = boardMatch(ownerId);
+    // When filtering by run, include listings this run touched (may still be queued/enriching).
+    const match: Record<string, any> = runId
+      ? { ownerId, runIds: runId }
+      : boardMatch(ownerId);
 
     if (company) {
       const clause = companyFilterClause(company);
@@ -318,8 +323,8 @@ router.get('/jobs', async (req: any, res: any) => {
       }
     }
 
-    const countKey = JSON.stringify({ ownerId, company, category, q, v: 8 });
-    const useText = q.length >= 3;
+    const countKey = JSON.stringify({ ownerId, company, category, q, runId, v: 9 });
+    const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {
       jobUrl: 1,
       applyUrl: 1,
@@ -343,6 +348,7 @@ router.get('/jobs', async (req: any, res: any) => {
       listSnapshot: 1,
       createdAt: 1,
       lastSeenAt: 1,
+      runIds: 1,
     };
     if (useText) projection.score = { $meta: 'textScore' };
 
@@ -367,7 +373,9 @@ router.get('/jobs', async (req: any, res: any) => {
         totalPages: total === 0 ? 1 : Math.ceil(total / limit),
       },
       jobs: rows
-        .map((row) => mapListingToJob(row, { fullDescription: false }))
+        .map((row) =>
+          mapListingToJob(row, { fullDescription: false, allowIncomplete: !!runId })
+        )
         .filter(Boolean),
       filters: {
         companies: facets.companies,

@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NavBar } from "../components/dashboard/NavBar";
+import {
+  AppShellNavProvider,
+  PageMain,
+  SKIP_LINK_CLASS,
+  SKIP_LINK_HREF,
+  SKIP_LINK_LABEL,
+  shouldShowSkipLink,
+  useAppShellNav,
+} from "../components/dashboard/AppShell";
 import { SocketProvider } from "../context/socket";
 import { BrowserDimensionsProvider } from "../context/browserDimensions";
 import { AuthProvider } from '../context/auth';
@@ -15,10 +24,22 @@ import { Routes, Route, useNavigate, Navigate, useLocation } from 'react-router-
 import { NotFoundPage } from '../components/dashboard/NotFound';
 import RobotCreate from '../components/robot/pages/RobotCreate';
 import { Box } from '@mui/material';
+import { hiddenScrollbarSx } from '../components/dashboard/ops/dashboardTokens';
 import { AutomationDataPage } from './AutomationDataPage';
 import { AutomationConfigPage } from './AutomationConfigPage';
 import { RunDetailsPage } from './RunDetailsPage';
 import { AdminPage } from './AdminPage';
+
+function SkipToMain() {
+  const location = useLocation();
+  const { landmarkMounted } = useAppShellNav();
+  if (!shouldShowSkipLink(location.pathname, landmarkMounted)) return null;
+  return (
+    <a className={SKIP_LINK_CLASS} href={SKIP_LINK_HREF}>
+      {SKIP_LINK_LABEL}
+    </a>
+  );
+}
 
 export const PageWrapper = () => {
   const [open, setOpen] = useState(false);
@@ -111,40 +132,79 @@ export const PageWrapper = () => {
   const isAuthPage = location.pathname === '/login' || location.pathname === '/register';
   const isRecordingPage = location.pathname === '/recording';
   const isAdminPage = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
+  const usesAppShellViewport =
+    !isAuthPage && !isAdminPage && !isRecordingPage && location.pathname !== '/recording-setup';
+
+  useEffect(() => {
+    if (!usesAppShellViewport) return undefined;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+    };
+  }, [usesAppShellViewport]);
+
+  const viewportLocked = usesAppShellViewport;
 
   return (
-    <div>
+    <div
+      style={{
+        height: viewportLocked ? '100dvh' : undefined,
+        maxHeight: viewportLocked ? '100dvh' : undefined,
+        minHeight: viewportLocked ? '100dvh' : '100vh',
+        overflow: viewportLocked ? 'hidden' : undefined,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
       <AuthProvider>
         <SocketProvider>
+          <AppShellNavProvider>
           <React.Fragment>
+            {/* Skip link is first in the DOM, before NavBar, so it is the first tab stop. */}
+            <SkipToMain />
             {/* Show NavBar only for main app pages, not for recording or admin pages */}
             {!isRecordingPage && !isAdminPage && (
               <Box sx={{
-                position: 'sticky',
-                top: 0,
+                flexShrink: 0,
                 zIndex: 1100,
-                backgroundColor: 'background.paper'
+                backgroundColor: 'background.paper',
               }}>
                 <NavBar recordingName={recordingName} isRecording={false} />
               </Box>
             )}
             <Box sx={{
-              display: 'block',
-              minHeight: isAuthPage || isAdminPage ? '100vh' : 'calc(100vh - 64px)'
+              flex: viewportLocked ? 1 : undefined,
+              display: 'flex',
+              flexDirection: 'column',
+              height: viewportLocked ? undefined : (isAuthPage || isAdminPage || isRecordingPage ? '100vh' : 'calc(100vh - 64px)'),
+              maxHeight: viewportLocked ? undefined : (isAuthPage || isAdminPage || isRecordingPage ? '100vh' : 'calc(100vh - 64px)'),
+              minHeight: viewportLocked ? 0 : undefined,
+              minWidth: 0,
+              width: '100%',
+              maxWidth: '100%',
+              overflow: 'auto',
+              ...hiddenScrollbarSx,
             }}>
               <Routes>
                 <Route element={<UserRoute />}>
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/dashboard" element={<MainPage handleEditRecording={handleEditRecording} initialContent="dashboard" />} />
+                  <Route path="/automations" element={<MainPage handleEditRecording={handleEditRecording} initialContent="automations" />} />
                   <Route path="/jobs" element={<MainPage handleEditRecording={handleEditRecording} initialContent="jobs" />} />
-                  <Route path="/robots/create" element={<RobotCreate />} />
+                  <Route path="/robots/create" element={<PageMain><RobotCreate /></PageMain>} />
                   <Route path="/robots/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="robots" />} />
                   <Route path="/runs/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="runs" />} />
                   <Route path="/failures" element={<MainPage handleEditRecording={handleEditRecording} initialContent="failures" />} />
                   <Route path="/proxy" element={<MainPage handleEditRecording={handleEditRecording} initialContent="proxy" />} />
-                  <Route path="/automation/:id/data" element={<AutomationDataPage />} />
-                  <Route path="/automation/:id/config" element={<AutomationConfigPage />} />
-                  <Route path="/run/:id" element={<RunDetailsPage />} />
+                  <Route path="/automation/:id/data" element={<PageMain><AutomationDataPage /></PageMain>} />
+                  <Route path="/automation/:id/config" element={<PageMain><AutomationConfigPage /></PageMain>} />
+                  <Route path="/run/:id" element={<PageMain><RunDetailsPage /></PageMain>} />
                 </Route>
                 <Route element={<UserRoute />}>
                   <Route path="/recording" element={
@@ -166,10 +226,11 @@ export const PageWrapper = () => {
                   element={null}
                 />
                 <Route path="/admin" element={<AdminPage />} />
-                <Route path="*" element={<NotFoundPage />} />
+                <Route path="*" element={<PageMain><NotFoundPage /></PageMain>} />
               </Routes>
             </Box>
           </React.Fragment>
+          </AppShellNavProvider>
         </SocketProvider>
       </AuthProvider>
       {isNotification() ?

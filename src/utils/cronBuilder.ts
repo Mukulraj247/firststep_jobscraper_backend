@@ -107,7 +107,14 @@ export function formatRelativeToNow(
   if (days > 0) {
     relative = days === 1 ? 'in 1 day' : `in ${days} days`;
   } else if (hours > 0) {
-    relative = hours === 1 ? 'in 1 hr' : `in ${hours} hrs`;
+    relative =
+      minutes > 0
+        ? hours === 1
+          ? `in 1 hr ${minutes} min${minutes === 1 ? '' : 's'}`
+          : `in ${hours} hrs ${minutes} min${minutes === 1 ? '' : 's'}`
+        : hours === 1
+          ? 'in 1 hr'
+          : `in ${hours} hrs`;
   } else if (minutes > 0) {
     relative = minutes === 1 ? 'in 1 min' : `in ${minutes} mins`;
   } else {

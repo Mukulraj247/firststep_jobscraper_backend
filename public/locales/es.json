@@ -110,7 +110,8 @@
     "proxy": "Proxy",
     "apikey": "Clave API",
     "feedback": "Unirse a Maxun Cloud",
-    "apidocs": "Sitio Web a API"
+    "apidocs": "Sitio Web a API",
+    "collapse": "Contraer"
   },
   "jobboard": {
     "heading": "Job board",
@@ -157,10 +158,60 @@
     "settings": "Ajustes",
     "search": "Buscar ejecuciones...",
     "sort_tooltip": "Haga clic para ordenar",
+    "retry": "Reintentar",
+    "rows_per_page": "Ejecuciones por página",
+    "automations_per_page": "Automatizaciones por página",
+    "automation_count": "{{count}} automatizaciones",
+    "load_error": "No se pudieron cargar las ejecuciones. Inténtelo de nuevo.",
     "placeholder": {
       "title": "No se encontraron ejecuciones",
       "body": "Aquí aparecerán todas las ejecuciones de sus robots. Una vez que un robot esté activo, sus ejecuciones se registrarán aquí.",
-      "search": "Ninguna ejecución coincide con su búsqueda"
+      "search": "Ninguna ejecución coincide con su búsqueda",
+      "filtered": "Ninguna ejecución coincide con los filtros. Borre los filtros para ver todas las automatizaciones."
+    },
+    "filters": {
+      "search_label": "Buscar",
+      "date": "Fecha",
+      "status_label": "Estado",
+      "jobs_label": "Empleos añadidos",
+      "duration_label": "Duración",
+      "clear_all": "Borrar todo",
+      "showing_range": "Mostrando {{from}}–{{to}} de {{total}}",
+      "pill_search": "Búsqueda: {{q}}",
+      "pill_date": "Fecha: {{date}}",
+      "pill_status": "Estado: {{status}}",
+      "pill_jobs": "Empleos: {{jobs}}",
+      "pill_duration": "Duración: {{duration}}",
+      "status": {
+        "any": "Cualquiera",
+        "running": "En curso",
+        "queued": "En cola / pendiente",
+        "completed": "Completado",
+        "failed": "Fallido",
+        "aborted": "Abortado",
+        "scheduled": "Programado",
+        "dead": "Inactivo"
+      },
+      "jobs": {
+        "any": "Cualquiera",
+        "exactly0": "Exactamente 0",
+        "moreThan2": "Más de 2",
+        "moreThan3": "Más de 3",
+        "moreThan4": "Más de 4"
+      },
+      "duration": {
+        "any": "Cualquiera",
+        "lt5": "< 5 min",
+        "lt30": "< 30 min",
+        "gt30": "> 30 min",
+        "gt60": "> 1 hora"
+      }
+    },
+    "group": {
+      "untitled": "Automatización",
+      "last_run": "Última: {{time}}",
+      "jobs": "{{count}} empleos",
+      "run_count": "{{count}} ejecuciones"
     },
     "notifications": {
       "no_runs": "No se encontraron ejecuciones. Por favor, inténtelo de nuevo.",
@@ -647,6 +698,7 @@
     },
     "loading": "Cargando datos...",
     "empty_output": "No hay datos de salida disponibles",
+    "empty_log": "Aún no hay registros para esta ejecución.",
     "captured_data": {
       "title": "Datos capturados",
       "download_csv": "Descargar CSV",

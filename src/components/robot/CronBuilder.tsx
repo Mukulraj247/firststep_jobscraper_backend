@@ -29,8 +29,86 @@ export interface CronBuilderValue {
 }
 
 interface CronBuilderProps {
+  cron?: string;
+  timezone?: string;
+  /** @deprecated Pass cron and timezone as primitive props instead. */
   value?: Partial<CronBuilderValue>;
   onChange: (value: CronBuilderValue) => void;
+}
+
+export function shouldNotifyCronBuilderChange(
+  nextCron: string,
+  nextTimezone: string,
+  currentCron?: string,
+  currentTimezone?: string,
+): boolean {
+  return nextCron !== currentCron || nextTimezone !== currentTimezone;
+}
+
+export interface CronBuilderExternalPropsInput {
+  generatedCron: string;
+  internalTimezone: string;
+  propCron?: string;
+  propTimezone?: string;
+  lastSyncedCron?: string;
+  lastSyncedTimezone?: string;
+}
+
+export interface CronBuilderExternalPropsResult {
+  generatedCron: string;
+  internalTimezone: string;
+  lastSyncedCron?: string;
+  lastSyncedTimezone?: string;
+  notify: CronBuilderValue | null;
+}
+
+export function applyCronBuilderExternalProps(
+  input: CronBuilderExternalPropsInput,
+): CronBuilderExternalPropsResult {
+  const propsChanged = shouldNotifyCronBuilderChange(
+    input.propCron ?? '',
+    input.propTimezone ?? '',
+    input.lastSyncedCron ?? '',
+    input.lastSyncedTimezone ?? '',
+  );
+
+  if (propsChanged) {
+    return {
+      generatedCron: input.propCron ?? input.generatedCron,
+      internalTimezone: input.propTimezone ?? input.internalTimezone,
+      lastSyncedCron: input.propCron,
+      lastSyncedTimezone: input.propTimezone,
+      notify: null,
+    };
+  }
+
+  if (
+    shouldNotifyCronBuilderChange(
+      input.generatedCron,
+      input.internalTimezone,
+      input.propCron,
+      input.propTimezone,
+    )
+  ) {
+    return {
+      generatedCron: input.generatedCron,
+      internalTimezone: input.internalTimezone,
+      lastSyncedCron: input.lastSyncedCron,
+      lastSyncedTimezone: input.lastSyncedTimezone,
+      notify: {
+        cron: input.generatedCron,
+        timezone: input.internalTimezone,
+      },
+    };
+  }
+
+  return {
+    generatedCron: input.generatedCron,
+    internalTimezone: input.internalTimezone,
+    lastSyncedCron: input.lastSyncedCron,
+    lastSyncedTimezone: input.lastSyncedTimezone,
+    notify: null,
+  };
 }
 
 const MINUTE_OPTIONS = [
@@ -132,25 +210,26 @@ function buildSelectField(
   );
 }
 
-export const CronBuilder: React.FC<CronBuilderProps> = ({ value, onChange }) => {
+export const CronBuilder: React.FC<CronBuilderProps> = ({
+  cron,
+  timezone: timezoneProp,
+  value,
+  onChange,
+}) => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  const [timezone, setTimezone] = useState(() => value?.timezone || 'UTC');
+  const inputCron = cron ?? value?.cron;
+  const inputTimezone = timezoneProp ?? value?.timezone;
+  const [timezone, setTimezone] = useState(() => inputTimezone || 'UTC');
   const [customMode, setCustomMode] = useState(false);
   const [customCron, setCustomCron] = useState('');
   const [customError, setCustomError] = useState<string | null>(null);
-  // Track whether we've received the final prop value to avoid firing onChange with stale defaults
-  const hasInitialized = React.useRef(!!value?.timezone);
+  const lastSyncedRef = React.useRef<{ cron?: string; timezone?: string }>({
+    cron: inputCron,
+    timezone: inputTimezone,
+  });
 
-  // Sync timezone from prop when it changes (e.g., modal opens with saved timezone)
-  useEffect(() => {
-    if (value?.timezone) {
-      setTimezone(value.timezone);
-      hasInitialized.current = true;
-    }
-  }, [value?.timezone]);
-
-  const initial = value?.cron ? parseCronToFields(value.cron) : null;
+  const initial = inputCron ? parseCronToFields(inputCron) : null;
 
   const [minute, setMinute] = useState<string>(initial?.minute || '*');
   const [minuteSpecific, setMinuteSpecific] = useState<string>('0');
@@ -185,18 +264,62 @@ export const CronBuilder: React.FC<CronBuilderProps> = ({ value, onChange }) => 
   }, [generatedCron, customCron, customMode, timezone]);
 
   useEffect(() => {
-    // Don't fire onChange on mount if we haven't synced from props yet
-    if (!hasInitialized.current && !value?.cron) return;
+    const currentGenerated = customMode ? customCron.trim() : generatedCron;
     if (customMode) {
-      const result = validateCron(customCron.trim());
+      const result = validateCron(currentGenerated);
       setCustomError(result.valid ? null : result.error || 'Invalid cron');
-      if (result.valid) {
-        onChange({ cron: customCron.trim(), timezone });
-      }
-    } else {
-      onChange({ cron: generatedCron, timezone });
     }
-  }, [generatedCron, customCron, customMode, timezone, value]);
+
+    const next = applyCronBuilderExternalProps({
+      generatedCron: currentGenerated,
+      internalTimezone: timezone,
+      propCron: inputCron,
+      propTimezone: inputTimezone,
+      lastSyncedCron: lastSyncedRef.current.cron,
+      lastSyncedTimezone: lastSyncedRef.current.timezone,
+    });
+
+    lastSyncedRef.current = {
+      cron: next.lastSyncedCron,
+      timezone: next.lastSyncedTimezone,
+    };
+
+    if (next.notify) {
+      if (customMode) {
+        const result = validateCron(next.notify.cron);
+        if (!result.valid) return;
+      }
+      onChange(next.notify);
+      return;
+    }
+
+    const cronNeedsSync = next.generatedCron !== currentGenerated;
+    const timezoneNeedsSync = next.internalTimezone !== timezone;
+    if (!cronNeedsSync && !timezoneNeedsSync) return;
+
+    if (timezoneNeedsSync) {
+      setTimezone(next.internalTimezone);
+    }
+    if (cronNeedsSync) {
+      setCustomMode(false);
+      setCustomCron('');
+      setCustomError(null);
+      const parsed = parseCronToFields(next.generatedCron);
+      setMinute(parsed?.minute || '*');
+      setHour(parsed?.hour || '*');
+      setDayOfMonth(parsed?.dayOfMonth || '*');
+      setMonth(parsed?.month || '*');
+      setDayOfWeek(parsed?.dayOfWeek || '*');
+    }
+  }, [
+    generatedCron,
+    customCron,
+    customMode,
+    timezone,
+    inputCron,
+    inputTimezone,
+    onChange,
+  ]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>

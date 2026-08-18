@@ -1,9 +1,5 @@
 # Scout-X Job Pipeline — How Everything Works
 
-**Who this is for:** anyone who needs to explain (or understand) what we built for scraping jobs, filling in full job details, and showing them on the Job board.
-
-**Tone:** plain English first, then a short “tech notes” box for each part.
-
 ---
 
 ## 1. What we built (in one sentence)
@@ -17,6 +13,8 @@ We built a system that:
 It works for many companies without writing a custom scraper for each one — and when a company needs a smarter path (like Apple or Oracle), the system **detects** that and upgrades automatically.
 
 ---
+
+
 
 ## 2. The big picture
 
@@ -56,7 +54,11 @@ List scrape is cheap and browser-based; enrichment is a separate worker that pre
 
 ---
 
+
+
 ## 3. Piece-by-piece
+
+
 
 ### 3.1 Scrapers / Robots (list extraction)
 
@@ -85,6 +87,8 @@ That is not a broken extractor — it is a **cap**. Raise Max pages to get more.
 
 ---
 
+
+
 ### 3.2 Job board listings (the database row)
 
 **What it does (functional)**  
@@ -92,14 +96,16 @@ Every job URL becomes one row on the Job board pipeline. That row starts “inco
 
 **Statuses you may see**
 
+
 | Status      | Meaning                                      |
-|------------|-----------------------------------------------|
-| `queued`   | Waiting for enrichment                        |
-| `enriching`| Worker is processing it now                   |
-| `ready`    | Good enough to show on the Job board          |
-| `partial`  | Some fields, but weak/incomplete description  |
-| `failed`   | Could not enrich                              |
-| `expired`  | ATS says the posting is gone                  |
+| ----------- | -------------------------------------------- |
+| `queued`    | Waiting for enrichment                       |
+| `enriching` | Worker is processing it now                  |
+| `ready`     | Good enough to show on the Job board         |
+| `partial`   | Some fields, but weak/incomplete description |
+| `failed`    | Could not enrich                             |
+| `expired`   | ATS says the posting is gone                 |
+
 
 **Tech notes**
 
@@ -109,6 +115,8 @@ Every job URL becomes one row on the Job board pipeline. That row starts “inco
 - Dedupes by normalized `jobUrlKey`
 
 ---
+
+
 
 ### 3.3 Enrichment worker (the “fill in details” engine)
 
@@ -132,6 +140,8 @@ For each queued job URL, the enrichment worker tries to load the **full job post
 
 ---
 
+
+
 ### 3.4 ATS adapters (direct company APIs)
 
 **What it does (functional)**  
@@ -139,18 +149,20 @@ Many big companies don’t need scrape.do at all. Their career sites talk to a p
 
 **Supported examples**
 
-| Provider        | Example hosts                          |
-|----------------|----------------------------------------|
-| Greenhouse     | `boards.greenhouse.io`                 |
-| Lever          | `jobs.lever.co`                        |
-| Ashby          | `jobs.ashbyhq.com`                     |
-| Workable       | `apply.workable.com`                   |
-| SmartRecruiters| `jobs.smartrecruiters.com`             |
-| Recruitee      | `*.recruitee.com`                      |
-| Oracle HCM     | `*.fa.oraclecloud.com`, `*.fa.ocs.oraclecloud.com`, `careers.oracle.com`, allowlisted path vanities (e.g. Dell), hash-router vanities (e.g. Hexaware) |
-| Google Careers | Google careers job result URLs         |
-| IBM Careers    | IBM JobDetail pages                    |
-| Findly / SF    | Various board list APIs                |
+
+| Provider        | Example hosts                                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Greenhouse      | `boards.greenhouse.io`                                                                                                                                |
+| Lever           | `jobs.lever.co`                                                                                                                                       |
+| Ashby           | `jobs.ashbyhq.com`                                                                                                                                    |
+| Workable        | `apply.workable.com`                                                                                                                                  |
+| SmartRecruiters | `jobs.smartrecruiters.com`                                                                                                                            |
+| Recruitee       | `*.recruitee.com`                                                                                                                                     |
+| Oracle HCM      | `*.fa.oraclecloud.com`, `*.fa.ocs.oraclecloud.com`, `careers.oracle.com`, allowlisted path vanities (e.g. Dell), hash-router vanities (e.g. Hexaware) |
+| Google Careers  | Google careers job result URLs                                                                                                                        |
+| IBM Careers     | IBM JobDetail pages                                                                                                                                   |
+| Findly / SF     | Various board list APIs                                                                                                                               |
+
 
 **Oracle special case (what we fixed)**  
 
@@ -172,6 +184,8 @@ Many big companies don’t need scrape.do at all. Their career sites talk to a p
 
 ---
 
+
+
 ### 3.5 scrape.do (paid page fetch) + smart tier escalation
 
 **What it does (functional)**  
@@ -179,11 +193,13 @@ When there is no ATS API, we ask **scrape.do** to download the job detail page H
 
 **Tiers (cost vs power)**
 
-| Tier | What it does              | Rough cost | When used                         |
-|------|---------------------------|------------|-----------------------------------|
-| 1    | Plain HTML (no JS)        | ~1 credit  | Simple static pages               |
-| 2    | Render JavaScript         | ~5 credits | SPAs that need the browser engine |
-| 3    | Harder anti-bot + render  | ~25 credits| Sites that block cheaper tiers    |
+
+| Tier | What it does             | Rough cost  | When used                         |
+| ---- | ------------------------ | ----------- | --------------------------------- |
+| 1    | Plain HTML (no JS)       | ~1 credit   | Simple static pages               |
+| 2    | Render JavaScript        | ~5 credits  | SPAs that need the browser engine |
+| 3    | Harder anti-bot + render | ~25 credits | Sites that block cheaper tiers    |
+
 
 **The problem we fixed (Apple-style meta teasers)**  
 
@@ -196,9 +212,9 @@ Gemini then “AI-parsed” that thin text → Job board looked empty.
 
 **New behavior (any company, not just Apple)**  
 
-1. Detect short SPA / og:description **teasers** as junk.  
-2. Mark the parse as **thin**.  
-3. Automatically escalate to **tier 2+ (JS render)**.  
+1. Detect short SPA / og:description **teasers** as junk.
+2. Mark the parse as **thin**.
+3. Automatically escalate to **tier 2+ (JS render)**.
 4. Remember the host’s successful tier in `maxun_scrape_profiles` so the next company with the same pattern upgrades itself.
 
 **Tech notes**
@@ -210,6 +226,8 @@ Gemini then “AI-parsed” that thin text → Job board looked empty.
 
 ---
 
+
+
 ### 3.6 Job page parser
 
 **What it does (functional)**  
@@ -217,8 +235,8 @@ Turns raw HTML (or JSON-LD / meta tags) into clean fields: title, company, descr
 
 **How it prefers sources**
 
-1. JSON-LD `JobPosting` (best when present)  
-2. Open Graph / meta tags  
+1. JSON-LD `JobPosting` (best when present)
+2. Open Graph / meta tags
 3. HTML heuristics (main/article selectors)
 
 It also:
@@ -234,6 +252,8 @@ It also:
 
 ---
 
+
+
 ### 3.7 Gemini structuring (optional “AI-parsed”)
 
 **What it does (functional)**  
@@ -243,7 +263,7 @@ After we have enough page text, Gemini can split it into:
 - Minimum / preferred qualifications  
 - Responsibilities  
 - Benefits  
-- Skills  
+- Skills
 
 That’s what makes the Job board cards show labeled sections instead of one blob of text.
 
@@ -254,6 +274,8 @@ That’s what makes the Job board cards show labeled sections instead of one blo
 - Usage tracked in `maxun_llm_usage_budget`
 
 ---
+
+
 
 ### 3.8 Job board UI
 
@@ -266,7 +288,7 @@ Users browse structured roles, filter by company/category, open a detail modal, 
 - Location, salary, category (when enriched)  
 - Description sections  
 - Company logo (or initials fallback like **OR** if the logo URL is broken)  
-- Pink **AI-parsed** chip when Gemini structured the row  
+- Pink **AI-parsed** chip when Gemini structured the row
 
 **Tech notes**
 
@@ -276,37 +298,51 @@ Users browse structured roles, filter by company/category, open a detail modal, 
 
 ---
 
+
+
 ## 4. Two real case studies (what broke, how we fixed it)
+
+
 
 ### 4.1 Apple — “too few jobs” + thin descriptions
 
-| Symptom | Cause | Fix |
-|--------|--------|-----|
-| Only ~60–68 Apple roles | Robot `maxPages: 3` × 20 jobs/page | Raise Max pages on the robot |
-| Descriptions were one marketing sentence | scrape.do tier 1 + og:description accepted as success | Teaser detection → escalate to render (any host) |
-| Host stuck on tier 1 | `maxun_scrape_profiles` learned wrong success | Reset profile; new logic won’t fake-succeed on teasers |
+
+| Symptom                                  | Cause                                                 | Fix                                                    |
+| ---------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
+| Only ~60–68 Apple roles                  | Robot `maxPages: 3` × 20 jobs/page                    | Raise Max pages on the robot                           |
+| Descriptions were one marketing sentence | scrape.do tier 1 + og:description accepted as success | Teaser detection → escalate to render (any host)       |
+| Host stuck on tier 1                     | `maxun_scrape_profiles` learned wrong success         | Reset profile; new logic won’t fake-succeed on teasers |
+
+
+
 
 ### 4.2 Oracle — “Apply page has everything, our modal doesn’t”
 
-| Symptom | Cause | Fix |
-|--------|--------|-----|
-| ~650-char summary only | `careers.oracle.com` SPA; scrape.do never got full DOM | Detect vanity URL → call Oracle HCM detail API |
-| No location / salary / quals | Same — only short summary stored | `mapOracleCloud` maps full API fields |
-| Purple **OR** initials | Stored logo was a broken 16×16 HCM favicon | Prefer Oracle brand favicon URL |
-| Risk of marking live jobs “expired” | ATS miss expired *all* Oracle detections | Expire only direct `*.fa.oraclecloud.com`; vanity falls back to scrape.do |
+
+| Symptom                             | Cause                                                  | Fix                                                                       |
+| ----------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| ~650-char summary only              | `careers.oracle.com` SPA; scrape.do never got full DOM | Detect vanity URL → call Oracle HCM detail API                            |
+| No location / salary / quals        | Same — only short summary stored                       | `mapOracleCloud` maps full API fields                                     |
+| Purple **OR** initials              | Stored logo was a broken 16×16 HCM favicon             | Prefer Oracle brand favicon URL                                           |
+| Risk of marking live jobs “expired” | ATS miss expired *all* Oracle detections               | Expire only direct `*.fa.oraclecloud.com`; vanity falls back to scrape.do |
+
 
 ---
+
+
 
 ## 5. How to run the system locally
 
 Typical processes:
 
-| Command | Role |
-|---------|------|
-| `npm run start:dev` | API + frontend stack |
-| `npm run worker:dev` | Scraper worker (list runs) |
-| `npm run worker:enrichment:dev` | Detail enrichment worker |
-| `npm run worker:scheduler:dev` | Schedules recurring robots |
+
+| Command                         | Role                       |
+| ------------------------------- | -------------------------- |
+| `npm run start:dev`             | API + frontend stack       |
+| `npm run worker:dev`            | Scraper worker (list runs) |
+| `npm run worker:enrichment:dev` | Detail enrichment worker   |
+| `npm run worker:scheduler:dev`  | Schedules recurring robots |
+
 
 Useful env vars (see `.env`):
 
@@ -317,14 +353,18 @@ Useful env vars (see `.env`):
 
 ---
 
+
+
 ## 5.1 Scraper worker & Scheduler (how they work together)
 
 Think of two different jobs:
 
-| Role | Plain English | Process |
-|------|----------------|---------|
-| **Scheduler** | Alarm clock — “it’s time to run Apple again” | `npm run worker:scheduler:dev` |
-| **Scraper** | Worker that actually opens the site and collects jobs | `npm run worker:dev` |
+
+| Role          | Plain English                                         | Process                        |
+| ------------- | ----------------------------------------------------- | ------------------------------ |
+| **Scheduler** | Alarm clock — “it’s time to run Apple again”          | `npm run worker:scheduler:dev` |
+| **Scraper**   | Worker that actually opens the site and collects jobs | `npm run worker:dev`           |
+
 
 Both talk through a shared queue in MongoDB called **Agenda** (collections like `agendaJobs_local`).
 
@@ -333,23 +373,23 @@ Both talk through a shared queue in MongoDB called **Agenda** (collections like 
 1. Each robot can have a schedule: cron (`0 0 * * *` = daily) or interval (`every: 86400000` = every 24 hours).
 2. On boot, the scheduler **rehydrates** all enabled robots into Agenda jobs named `schedule-triggers`.
 3. When the alarm fires, it does **not** scrape. It only:
-   - checks the robot still exists and schedule is still on,
-   - skips if a run is already pending/running (single-flight),
-   - creates a **Run** document (`source: scheduled`),
-   - enqueues a **`scraper-jobs`** item for that `runId`,
-   - updates `lastRunAt` / `nextRunAt` on the robot.
+  - checks the robot still exists and schedule is still on,
+  - skips if a run is already pending/running (single-flight),
+  - creates a **Run** document (`source: scheduled`),
+  - enqueues a `scraper-jobs` item for that `runId`,
+  - updates `lastRunAt` / `nextRunAt` on the robot.
 4. A **missed catch-up loop** periodically finds overdue robots and queues one catch-up run so a downtime gap doesn’t lose forever.
 
 **Tech:** `server/src/schedule-worker.ts` → `server/src/services/automationScheduler.ts` → Agenda job `schedule-triggers`.
 
 ### Scraper — the actual collector
 
-1. The scraper process registers for Agenda jobs named **`scraper-jobs`**.
+1. The scraper process registers for Agenda jobs named `scraper-jobs`.
 2. When a job is claimed (manual run or scheduled), it typically:
-   - forks a **child process** (so a hung browser can be killed),
-   - tries **ATS board API** first when the start URL matches (Greenhouse, Oracle CE, etc.),
-   - otherwise launches **Chromium/Playwright**, runs **list extraction** (pagination / Next button),
-   - saves extracted rows and enqueues them for **job-board enrichment**.
+  - forks a **child process** (so a hung browser can be killed),
+  - tries **ATS board API** first when the start URL matches (Greenhouse, Oracle CE, etc.),
+  - otherwise launches **Chromium/Playwright**, runs **list extraction** (pagination / Next button),
+  - saves extracted rows and enqueues them for **job-board enrichment**.
 3. On recoverable failures (CAPTCHA, nav errors), it can **requeue** the same `runId` with backoff.
 
 **Tech:** `server/src/worker.ts` → `server/src/workers/scraperWorker.ts` → `listExtractor` / `fetchAtsBoardJobs`.
@@ -377,6 +417,8 @@ Robot schedule (cron / every)
                                    Enrichment worker (details)
 ```
 
+
+
 ### Why they are often split into two processes
 
 - Scheduler is light (no Chromium).
@@ -397,30 +439,23 @@ If 4,000 scrapers started together, Chromium / Agenda / Mongo / enrichment would
 
 **What we do instead**
 
-1. **Daily presets are treated as intervals, not a shared clock**  
-   Cron like `0 0 * * *` (“every day at 00:00”) is converted to **every 24 hours** from each robot’s own schedule time — not “everyone at midnight.”
-
-2. **First start time is randomized inside the day**  
-   On save/enable, each robot picks a random first fire somewhere in the next ~24h (at least ~1 minute from now).
-
-3. **Then times are packed with a minimum gap**  
-   The scheduler looks at other robots’ `nextRunAt` values and slides this robot’s start until it is at least **90 seconds** away from every other scheduled start (`MIN_AUTOMATION_GAP_MS = 90_000`).
-
+1. **Daily presets are treated as intervals, not a shared clock**
+  Cron like `0 0 * * *` (“every day at 00:00”) is converted to **every 24 hours** from each robot’s own schedule time — not “everyone at midnight.”
+2. **First start time is randomized inside the day**
+  On save/enable, each robot picks a random first fire somewhere in the next ~24h (at least ~1 minute from now).
+3. **Then times are packed with a minimum gap**
+  The scheduler looks at other robots’ `nextRunAt` values and slides this robot’s start until it is at least **90 seconds** away from every other scheduled start (`MIN_AUTOMATION_GAP_MS = 90_000`).
    Rough capacity math for daily:
-
-   - 24 hours = 86,400 seconds  
-   - Gap = 90 seconds  
-   - Theoretical slots ≈ 86,400 / 90 ≈ **960 starts per day** if only one fire at a time  
-   - With scraper **concurrency > 1**, more can overlap in parallel, but starts are still staggered.
-
-4. **After each run, the next run is “now + 24h” for that robot**  
-   So Apple might always run around 03:12, Google around 11:40, etc. — spread across the day, repeating every day from their own anchors.
-
-5. **Single-flight**  
-   If a robot still has a pending/running run, the next schedule fire is skipped (no stacking duplicates).
-
-6. **Catch-up after downtime**  
-   If the scheduler was off, a sweep can enqueue overdue robots gradually (capped per sweep), not all at once.
+  - 24 hours = 86,400 seconds  
+  - Gap = 90 seconds  
+  - Theoretical slots ≈ 86,400 / 90 ≈ **960 starts per day** if only one fire at a time  
+  - With scraper **concurrency > 1**, more can overlap in parallel, but starts are still staggered.
+4. **After each run, the next run is “now + 24h” for that robot**
+  So Apple might always run around 03:12, Google around 11:40, etc. — spread across the day, repeating every day from their own anchors.
+5. **Single-flight**
+  If a robot still has a pending/running run, the next schedule fire is skipped (no stacking duplicates).
+6. **Catch-up after downtime**
+  If the scheduler was off, a sweep can enqueue overdue robots gradually (capped per sweep), not all at once.
 
 **Practical note for ~4,000 robots**  
 At a strict 90s gap, pure serial starts need more than one day of wall-clock to give every robot a unique slot. In practice:
@@ -441,41 +476,45 @@ Scout-X is not a tiny API-only app. On a DigitalOcean Droplet we typically run *
 
 From `ecosystem.config.cjs`:
 
-| Process | Role | Approx Node heap / restart limit |
-|---------|------|----------------------------------|
-| `scout-x` | API + dashboard (no browser) | restart around **500 MB** |
-| `scoutx-scheduler` | Alarms / Agenda schedules only | heap ~**256 MB**, restart ~**300 MB** |
-| `scoutx-scraper` | Scrapes + **Chromium** | Node heap ~**512 MB**, restart ~**700 MB** — **plus browser RAM outside Node** |
-| `scoutx-enrichment` | ATS / scrape.do / Gemini details | heap ~**512 MB**, restart ~**450 MB** |
+
+| Process             | Role                             | Approx Node heap / restart limit                                               |
+| ------------------- | -------------------------------- | ------------------------------------------------------------------------------ |
+| `scout-x`           | API + dashboard (no browser)     | restart around **500 MB**                                                      |
+| `scoutx-scheduler`  | Alarms / Agenda schedules only   | heap ~**256 MB**, restart ~**300 MB**                                          |
+| `scoutx-scraper`    | Scrapes + **Chromium**           | Node heap ~**512 MB**, restart ~**700 MB** — **plus browser RAM outside Node** |
+| `scoutx-enrichment` | ATS / scrape.do / Gemini details | heap ~**512 MB**, restart ~**450 MB**                                          |
+
 
 Important: Chromium memory is **outside** Node’s `--max-old-space-size`. So even if Node is capped at 512 MB, one Chrome session can add **~300 MB–1 GB+** on its own.
 
 #### Rough RAM budget (why 2 GB is tight and 4 GB is comfortable)
 
-| Consumer | Typical use |
-|----------|-------------|
-| Ubuntu / system / SSH / logs | ~300–500 MB |
-| API (`scout-x`) | ~150–400 MB |
-| Scheduler | ~50–150 MB |
-| Enrichment | ~100–400 MB |
-| Scraper Node process | ~100–400 MB |
-| **One Playwright Chromium** (concurrency 1) | **~400 MB–1 GB** (peaks higher on heavy SPAs: Apple, Oracle, Meta) |
-| Headroom for spikes / GC / child-process fork | **~500 MB–1 GB** |
+
+| Consumer                                      | Typical use                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------ |
+| Ubuntu / system / SSH / logs                  | ~300–500 MB                                                        |
+| API (`scout-x`)                               | ~150–400 MB                                                        |
+| Scheduler                                     | ~50–150 MB                                                         |
+| Enrichment                                    | ~100–400 MB                                                        |
+| Scraper Node process                          | ~100–400 MB                                                        |
+| **One Playwright Chromium** (concurrency 1)   | **~400 MB–1 GB** (peaks higher on heavy SPAs: Apple, Oracle, Meta) |
+| Headroom for spikes / GC / child-process fork | **~500 MB–1 GB**                                                   |
+
 
 Add that up during an active scrape and you often sit around **2.5–3.5 GB used**. That is why:
 
 - **512 MB / 1 GB droplets** → out-of-memory kills, Chromium crashes, PM2 restart loops  
 - **2 GB** → workable only with `SCRAPER_WORKER_CONCURRENCY=1` and careful settings; little headroom  
-- **4 GB (recommended)** → room for API + scheduler + enrichment + **one** Chromium scrape without constantly swapping or OOMing  
+- **4 GB (recommended)** → room for API + scheduler + enrichment + **one** Chromium scrape without constantly swapping or OOMing
 
 Official beginner guidance in-repo: prefer **Basic 4 GiB / 2 vCPU / ~80 GiB SSD** (~$24/mo); minimum **2 GiB** only if concurrency stays at 1.
 
 #### Why we need ~4 GB (plain English)
 
-1. **Chrome is heavy** — scraping is not “download HTML”; it runs a real browser.  
-2. **We run 3–4 Node apps** on one machine (API, schedule, scrape, enrich).  
-3. **Scrape child processes** can briefly double memory while forking.  
-4. **Heavy career SPAs** (Apple, Oracle, etc.) hold more tabs/JS than a simple static page.  
+1. **Chrome is heavy** — scraping is not “download HTML”; it runs a real browser.
+2. **We run 3–4 Node apps** on one machine (API, schedule, scrape, enrich).
+3. **Scrape child processes** can briefly double memory while forking.
+4. **Heavy career SPAs** (Apple, Oracle, etc.) hold more tabs/JS than a simple static page.
 5. **Headroom** — without it, Linux starts killing processes (`OOM killer`) and runs flip to failed / restart.
 
 You do **not** buy 4 GB because of “4,000 companies” as a number. Companies are **scheduled over the day**. You buy 4 GB so that **whatever is running right now** (especially Chromium) does not crash the droplet.
@@ -486,6 +525,8 @@ You do **not** buy 4 GB because of “4,000 companies” as a number. Companies 
 - Default ecosystem uses `SCRAPER_WORKER_CONCURRENCY=1` and `LOW_MEMORY_MODE=true` on the scraper (close browsers sooner, fewer pooled pages).  
 - Enrichment uses scrape.do / ATS APIs — **no Chromium** there.  
 - Scheduler has no browser at all.
+
+
 
 #### When you might need more than 4 GB
 
@@ -501,27 +542,31 @@ Storage is the Droplet’s **SSD disk** (not Mongo job data). Job listings live 
 
 #### Recommended size
 
-| Plan SSD | When |
-|----------|------|
-| **~50 GB** | Minimum (often bundled with 2 GB RAM Basic) — OK early on |
-| **~80 GB** | **Recommended** with the 4 GB Basic plan — comfortable headroom |
-| Extra Block Storage / huge disks | **Not needed** day one |
+
+| Plan SSD                         | When                                                            |
+| -------------------------------- | --------------------------------------------------------------- |
+| **~50 GB**                       | Minimum (often bundled with 2 GB RAM Basic) — OK early on       |
+| **~80 GB**                       | **Recommended** with the 4 GB Basic plan — comfortable headroom |
+| Extra Block Storage / huge disks | **Not needed** day one                                          |
+
 
 You do **not** need a Storage-Optimized Droplet. Scout-X is RAM-bound (Chromium), not disk-bound.
 
 #### What uses disk on the Droplet
 
-| Item | Rough size | Notes |
-|------|------------|--------|
-| Ubuntu OS + updates | ~3–6 GB | Base system |
-| Node.js + system packages | ~0.5–1 GB | Runtime |
-| Playwright **Chromium** browser binaries | ~0.4–1 GB | Installed via `npm run playwright:install` |
-| Chromium OS libraries (`install-deps`) | ~0.2–0.5 GB | Shared libs for headless Chrome |
-| App code + `node_modules` + build (`dist`) | ~1–3 GB | Repo under `/opt/scout-x` (typical) |
-| PM2 / app **logs** (`LOGS_PATH`, e.g. `server/logs`) | grows over time | Biggest risk if never rotated |
-| Browser **session state** files | small–medium | Cookies/login reuse per robot |
-| Optional screenshots / crawl artifacts | can grow fast | Prefer offloading (see below) |
-| Temp scrape files / OS cache | variable | Cleared over time |
+
+| Item                                                 | Rough size      | Notes                                      |
+| ---------------------------------------------------- | --------------- | ------------------------------------------ |
+| Ubuntu OS + updates                                  | ~3–6 GB         | Base system                                |
+| Node.js + system packages                            | ~0.5–1 GB       | Runtime                                    |
+| Playwright **Chromium** browser binaries             | ~0.4–1 GB       | Installed via `npm run playwright:install` |
+| Chromium OS libraries (`install-deps`)               | ~0.2–0.5 GB     | Shared libs for headless Chrome            |
+| App code + `node_modules` + build (`dist`)           | ~1–3 GB         | Repo under `/opt/scout-x` (typical)        |
+| PM2 / app **logs** (`LOGS_PATH`, e.g. `server/logs`) | grows over time | Biggest risk if never rotated              |
+| Browser **session state** files                      | small–medium    | Cookies/login reuse per robot              |
+| Optional screenshots / crawl artifacts               | can grow fast   | Prefer offloading (see below)              |
+| Temp scrape files / OS cache                         | variable        | Cleared over time                          |
+
 
 **Typical steady use after install:** about **10–15 GB** used out of 50–80 GB. Plenty of free space remains.
 
@@ -529,7 +574,7 @@ You do **not** need a Storage-Optimized Droplet. Scout-X is RAM-bound (Chromium)
 
 - **Job board rows / company data** → MongoDB **Atlas** (separate product)  
 - **Agenda queue jobs** → usually same Mongo  
-- **Enrichment HTML** → fetched via scrape.do / ATS; not stored as full page dumps by default  
+- **Enrichment HTML** → fetched via scrape.do / ATS; not stored as full page dumps by default
 
 So adding 4,000 companies does **not** mean you need 4,000× more SSD on DigitalOcean. It means more Mongo usage in Atlas and more **RAM/CPU time** when scrapes run.
 
@@ -539,10 +584,12 @@ Use **Spaces** (S3-style object storage) later if you store many screenshots or 
 
 #### Why ~80 GB is enough (plain English)
 
-1. The heavy thing is **Chrome in RAM**, not gigabytes of files.  
-2. Scraped job text is saved in **Atlas**, not as huge files on the Droplet.  
-3. 50–80 GB covers OS + Node + Chromium + app + months of normal logs.  
+1. The heavy thing is **Chrome in RAM**, not gigabytes of files.
+2. Scraped job text is saved in **Atlas**, not as huge files on the Droplet.
+3. 50–80 GB covers OS + Node + Chromium + app + months of normal logs.
 4. You pay DigitalOcean mainly for **RAM**, not for a giant disk.
+
+
 
 #### Keep disk healthy
 
@@ -550,48 +597,56 @@ Use **Spaces** (S3-style object storage) later if you store many screenshots or 
 - Watch log growth: PM2 logs + `LOGS_PATH`  
 - Rotate / truncate old logs if disk climbs past ~70–80%  
 - Don’t store unlimited full-page screenshots on the Droplet  
-- Rebuild occasionally; remove unused Playwright browser versions if you upgrade often  
+- Rebuild occasionally; remove unused Playwright browser versions if you upgrade often
 
 **Rule of thumb:** buy the **Basic 4 GB / ~80 GB SSD** plan for Scout-X. Increase disk only if logs/artifacts fill it — not because you added more company robots.
 
 ---
 
+
+
 ## 6. Key files (cheat sheet)
 
-| Area | Path |
-|------|------|
-| List scrape | `server/src/services/listExtractor.ts` |
-| Scraper worker | `server/src/workers/scraperWorker.ts` |
-| Enqueue board rows | `server/src/services/jobBoardEnrichment.ts` |
-| Enrichment worker | `server/src/workers/jobEnrichmentWorker.ts` |
-| ATS / Oracle / boards | `server/src/services/atsAdapters.ts` |
-| HTML quality / thin parse | `server/src/services/jobPageParser.ts` |
-| scrape.do client | `server/src/services/scrapeDoClient.ts` |
-| Gemini structuring | `server/src/services/geminiJobExtractor.ts` |
-| Job board API | `server/src/api/jobs.ts` |
-| Job board UI | `src/components/jobs/JobBoardPage.tsx` |
-| Robot config UI | `src/pages/AutomationConfigPage.tsx` |
+
+| Area                      | Path                                        |
+| ------------------------- | ------------------------------------------- |
+| List scrape               | `server/src/services/listExtractor.ts`      |
+| Scraper worker            | `server/src/workers/scraperWorker.ts`       |
+| Enqueue board rows        | `server/src/services/jobBoardEnrichment.ts` |
+| Enrichment worker         | `server/src/workers/jobEnrichmentWorker.ts` |
+| ATS / Oracle / boards     | `server/src/services/atsAdapters.ts`        |
+| HTML quality / thin parse | `server/src/services/jobPageParser.ts`      |
+| scrape.do client          | `server/src/services/scrapeDoClient.ts`     |
+| Gemini structuring        | `server/src/services/geminiJobExtractor.ts` |
+| Job board API             | `server/src/api/jobs.ts`                    |
+| Job board UI              | `src/components/jobs/JobBoardPage.tsx`      |
+| Robot config UI           | `src/pages/AutomationConfigPage.tsx`        |
+
 
 ---
 
+
+
 ## 7. Mental model to explain to someone else
 
-1. **List scrape** = “collect links from the search results.”  
-2. **Enrichment** = “open each link properly and extract the real posting.”  
-3. **Prefer APIs over scraping** when we know the ATS (cheaper, more complete).  
-4. **scrape.do** = paid browser-as-a-service when there is no API.  
-5. **Thin / teaser detection** = don’t trust fake “success” HTML; escalate automatically.  
+1. **List scrape** = “collect links from the search results.”
+2. **Enrichment** = “open each link properly and extract the real posting.”
+3. **Prefer APIs over scraping** when we know the ATS (cheaper, more complete).
+4. **scrape.do** = paid browser-as-a-service when there is no API.
+5. **Thin / teaser detection** = don’t trust fake “success” HTML; escalate automatically.
 6. **Job board** = the product surface where users browse the cleaned results.
 
 If a new company looks “incomplete,” check in this order:
 
-1. Did list scrape hit a **Max pages** cap?  
-2. Is the detail URL a known **ATS** we should map?  
-3. Did enrichment stop on a **meta teaser** (needs render)?  
-4. Is the host profile stuck on a **wrong scrape.do tier**?  
+1. Did list scrape hit a **Max pages** cap?
+2. Is the detail URL a known **ATS** we should map?
+3. Did enrichment stop on a **meta teaser** (needs render)?
+4. Is the host profile stuck on a **wrong scrape.do tier**?
 5. Did Gemini budget pause structuring (description exists but sections empty)?
 
 ---
+
+
 
 ## 8. What “done” looks like for a good job row
 
@@ -601,7 +656,7 @@ A healthy enriched job usually has:
 - `location`, and often `salaryRange` / `jobCategory`  
 - Usable `companyLogoUrl`  
 - `enrichment.method` of `ats`, `scrape.do`, or `llm`  
-- Optionally structured arrays: responsibilities, qualifications, benefits  
+- Optionally structured arrays: responsibilities, qualifications, benefits
 
 Example (Oracle after the fix):
 
@@ -609,8 +664,63 @@ Example (Oracle after the fix):
 - Location: Nashville, TN  
 - Salary: `$92,500 – $209,500`  
 - Method: `ats`  
-- Real Oracle logo instead of initials  
+- Real Oracle logo instead of initials
 
 ---
 
-*Document generated from the Scout-X / Maxun job pipeline work (list scrape, enrichment, thin-parse escalation, Oracle HCM vanity support). Update this file when we add new ATS providers or change enrichment rules.*
+## 9. Security verification checklist (Automations / Failures hardening)
+
+Use this checklist before enabling the redesigned `/automations` and `/failures` pages in production. Each item maps to work from Tasks 1–6 of the automations/failures hardening plan.
+
+| Control | What to verify | Where it lives |
+| -------- | --------------- | -------------- |
+| **Socket auth** | Socket.IO rejects connections without a verified session or API key; `handshake.query.userId` is ignored; each socket joins only `user-{verifiedUserId}`; cross-account rooms fail | `server/src/middlewares/socketAuth.ts`, `server/src/middlewares/socketAuth.test.ts`, `server/src/server.ts`, `src/context/socket.tsx` |
+| **SSRF** | Automation target URLs, webhooks, and outbound fetches block loopback, RFC1918, link-local, metadata, and credential-embedded URLs; DNS is re-checked before execution and on redirect hops | `server/src/utils/outboundUrlPolicy.ts`, `server/src/utils/outboundUrlPolicy.test.ts`, `server/src/api/automations.ts`, `server/src/services/destinations.ts` |
+| **Retry idempotency** | Parallel manual runs and failure retries require `Idempotency-Key`; duplicate keys return the same run instead of creating a second queue job; active-run admission enforces per-automation and per-account limits | `server/src/services/runAdmission.ts`, `server/src/api/automations.ts`, `server/src/constants/config.ts` |
+| **CSRF** | Cookie-authenticated POST/PUT/PATCH/DELETE requests from disallowed origins are rejected; verified `x-api-key` requests bypass origin checks; CORS allows PATCH for failure-reason updates | `server/src/middlewares/csrfOriginGuard.ts`, `server/src/middlewares/csrfOriginGuard.test.ts`, `server/src/server.ts` |
+| **Secrets redaction** | Public automation/run DTOs and paginated log pages redact credentials, webhook secrets, and long sensitive substrings; config snapshots never echo raw secrets | `server/src/services/automationConfigView.ts`, `server/src/services/runDetailPagination.ts`, `server/src/api/automations.ts` |
+| **Formula neutralization** | CSV/Sheets exports prefix formula-leading cells (`=`, `+`, `-`, `@`, tab, CR) so spreadsheet apps treat values as literals | `server/src/utils/spreadsheet.ts`, `src/utils/spreadsheet.ts`, `server/src/services/destinations.ts`, `server/src/workflow-management/integrations/gsheet.ts` |
+
+**Manual smoke commands**
+
+```powershell
+npm test -- socketAuth outboundUrlPolicy csrfOriginGuard runAdmission spreadsheet
+npm run test:e2e
+```
+
+**Expected outcomes**
+
+- Cross-account socket joins fail with `unauthorized`.
+- Internal/metadata URL probes return `UNSAFE_OUTBOUND_URL` (HTTP 400).
+- Two parallel retries with the same idempotency key create one run.
+- Cross-site cookie mutations from unknown origins return 403.
+- Response snapshots contain `[REDACTED]` instead of live secrets.
+- Exported cells like `=1+1` are stored/displayed as `'=1+1`.
+
+---
+
+## 10. Staged rollout and rollback
+
+### Staged rollout (recommended order)
+
+1. **Deploy compatible schema additions and dual-read APIs** — add normalized run fields, retry lineage, and failure-reason columns while existing readers keep working.
+2. **Dry-run backfill** — run `npm run backfill:run-list-fields` in report-only mode and reconcile counts against live data.
+3. **Live backfill in batches** — resume-safe batches; monitor Mongo CPU and write volume.
+4. **Build indexes** — create compound indexes for owner + date + status queries before flipping normalized list endpoints to depend on them.
+5. **Enable normalized queries and retry endpoint** — turn on idempotent retry admission and normalized failure-reason filters once backfill coverage meets the agreed threshold.
+6. **Deploy frontend redesign** — ship `/automations` and `/failures` component decomposition behind the existing routes.
+7. **Observe** — watch queue depth, API p95, error rate, retry conflicts, and socket reconnect volume for 24–48 hours.
+
+### Rollback rules
+
+| Layer | Safe rollback | Must preserve |
+| ----- | ------------- | ------------- |
+| **Frontend** | Revert to the previous SPA bundle; dual-read APIs continue serving both legacy and normalized fields | No dependency on fields removed during rollback |
+| **Backend APIs** | Disable new query paths and retry endpoint flags; keep dual-read responses | Added Mongo fields, retry lineage, normalized failure reasons, and indexes — do **not** delete backfilled data |
+| **Workers / sockets** | Roll back server build; socket auth and SSRF guards should remain enabled even during UI rollback | Security middleware from Tasks 1–3 |
+
+**Frontend rollback compatibility:** older UI bundles may ignore new summary blocks but must still parse existing automation/run payloads. **Backend rollback compatibility:** new fields remain in Mongo for a forward-only migration; disabling a feature flag should not drop indexes or lineage needed for a later re-enable.
+
+---
+
+*Document generated from the Scout-X / Maxun job pipeline work (list scrape, enrichment, thin-parse escalation, Oracle HCM vanity support). Update this file when we add new ATS providers, change enrichment rules, or extend automations/failures security controls.*

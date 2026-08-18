@@ -1,4 +1,4 @@
-import https from 'https';
+import { requestSafeOutboundUrl } from './safeOutboundHttp';
 
 /**
  * Hosts where Chromium consistently fails with net::ERR_HTTP2_PROTOCOL_ERROR
@@ -70,27 +70,18 @@ export async function probeHttp11(rawUrl: string, timeoutMs = 10_000): Promise<s
     return `host=${hostnameForLog(rawUrl)} result=unsupported-protocol`;
   }
 
-  return new Promise((resolve) => {
-    const request = https.get(
-      url,
-      {
-        headers: {
-          Accept: 'text/html,application/xhtml+xml',
-          'User-Agent': 'Mozilla/5.0 (compatible; ScoutX navigation diagnostic)',
-        },
+  try {
+    const response = await requestSafeOutboundUrl(rawUrl, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (compatible; ScoutX navigation diagnostic)',
       },
-      (response) => {
-        response.resume();
-        resolve(summarizeHttp11Probe(rawUrl, response.statusCode || 0));
-      }
-    );
-
-    request.setTimeout(timeoutMs, () => {
-      request.destroy();
-      resolve(`host=${hostnameForLog(rawUrl)} result=timeout`);
+      timeoutMs,
+      maxRedirects: 0,
     });
-    request.once('error', (error: NodeJS.ErrnoException) => {
-      resolve(`host=${hostnameForLog(rawUrl)} result=error:${error.code || 'unknown'}`);
-    });
-  });
+    await response.body.cancel();
+    return summarizeHttp11Probe(rawUrl, response.status);
+  } catch (error: any) {
+    return `host=${hostnameForLog(rawUrl)} result=error:${error?.code || 'unknown'}`;
+  }
 }

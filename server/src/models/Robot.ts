@@ -89,6 +89,9 @@ RobotSchema.index(
   { name: 'robot_user_url_idx' }
 );
 
+/** Dashboard automations list pagination (newest robots first). */
+RobotSchema.index({ userId: 1, _id: -1 }, { name: 'robot_user_id_desc_idx' });
+
 const Robot = mongoose.models.Robot || mongoose.model<IRobot>('Robot', RobotSchema);
 
 export default Robot;

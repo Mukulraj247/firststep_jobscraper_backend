@@ -130,6 +130,12 @@ export function resolveFailureReason(opts: {
   const existingReason = opts.failureReason || null;
   const existingSource = (opts.failureReasonSource as FailureReasonSource | null) || null;
 
+  // A null reason with override source is an explicit operator clear. Keep the
+  // diagnostic error text, but do not immediately auto-classify it again.
+  if (!existingReason && existingSource === 'override') {
+    return { failureReason: null, failureReasonSource: existingSource };
+  }
+
   if (existingReason && existingSource && existingSource !== 'suggested') {
     return { failureReason: existingReason, failureReasonSource: existingSource };
   }
@@ -145,4 +151,168 @@ export function resolveFailureReason(opts: {
   }
 
   return { failureReason: existingReason, failureReasonSource: existingSource };
+}
+
+/**
+ * Canonical list/filter value. This is deliberately independent from the
+ * display/source pair so the same persisted code is used by rows, filters,
+ * and reason counts.
+ */
+export function normalizeFailureReason(opts: {
+  normalizedFailureReason?: string | null;
+  failureReason?: string | null;
+  failureReasonSource?: string | null;
+  errorMessage?: string | null;
+}): FailureReasonCode | null {
+  if (!opts.failureReason && opts.failureReasonSource === 'override') {
+    return null;
+  }
+  if (opts.normalizedFailureReason && isAllowedFailureReason(opts.normalizedFailureReason)) {
+    return opts.normalizedFailureReason;
+  }
+  const resolved = resolveFailureReason(opts);
+  return resolved.failureReason && isAllowedFailureReason(resolved.failureReason)
+    ? resolved.failureReason
+    : null;
+}
+
+/**
+ * MongoDB equivalent of normalizeFailureReason. List rows, reason filters,
+ * and reason counts must all add this field before using it so legacy rows
+ * cannot be classified differently depending on how they are read.
+ */
+export function buildNormalizedFailureReasonExpression(): Record<string, any> {
+  const allowedCodes = [...FAILURE_REASON_CODES];
+  const messageMatches = (regex: string) => ({
+    $regexMatch: { input: '$$message', regex },
+  });
+
+  return {
+    $let: {
+      vars: {
+        normalized: '$normalizedFailureReason',
+        failure: '$failureReason',
+        source: '$failureReasonSource',
+        message: {
+          $toLower: {
+            $convert: {
+              input: { $ifNull: ['$errorMessage', ''] },
+              to: 'string',
+              onError: '',
+              onNull: '',
+            },
+          },
+        },
+      },
+      in: {
+        $cond: [
+          {
+            $and: [
+              { $eq: ['$$failure', null] },
+              { $eq: ['$$source', 'override'] },
+            ],
+          },
+          null,
+          {
+            $cond: [
+              { $in: ['$$normalized', allowedCodes] },
+              '$$normalized',
+              {
+                $cond: [
+                  {
+                    $and: [
+                      { $in: ['$$failure', allowedCodes] },
+                      { $ne: ['$$source', null] },
+                      { $ne: ['$$source', 'suggested'] },
+                    ],
+                  },
+                  '$$failure',
+                  {
+                    $switch: {
+                      branches: [
+                        {
+                          case: messageMatches('(captcha|re-captcha|recaptcha|hcaptcha)'),
+                          then: 'captcha',
+                        },
+                        {
+                          case: messageMatches(
+                            '(target page, context or browser has been closed|browser has been closed|browsercontext.*closed|target closed|session closed)'
+                          ),
+                          then: 'browser_closed',
+                        },
+                        {
+                          case: messageMatches('(circuit open|host circuit)'),
+                          then: 'circuit_open',
+                        },
+                        {
+                          case: messageMatches('(timeout|timed out|navigation timeout|exceeded)'),
+                          then: 'timeout',
+                        },
+                        {
+                          case: messageMatches(
+                            '(page\\.goto|net::err|navigation|err_name_not_resolved|err_connection)'
+                          ),
+                          then: 'navigation_error',
+                        },
+                        {
+                          case: messageMatches('(zero rows|layout|selector)'),
+                          then: 'layout_change',
+                        },
+                      ],
+                      default: {
+                        $cond: [
+                          { $ne: ['$$message', ''] },
+                          'unknown',
+                          {
+                            $cond: [
+                              { $in: ['$$failure', allowedCodes] },
+                              '$$failure',
+                              null,
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildFailureReasonAggregationStages(
+  reasons: readonly string[] = []
+): { page: Record<string, any>[]; counts: Record<string, any>[] } {
+  const classificationStage = {
+    $addFields: {
+      normalizedFailureReason: buildNormalizedFailureReasonExpression(),
+    },
+  };
+  const page: Record<string, any>[] = [classificationStage];
+  if (reasons.length === 1 && reasons[0] !== 'unknown') {
+    page.push({ $match: { normalizedFailureReason: reasons[0] } });
+  } else if (reasons.length > 0) {
+    const filterValues: Array<string | null> = [...reasons];
+    if (reasons.includes('unknown')) {
+      filterValues.push(null);
+    }
+    page.push({ $match: { normalizedFailureReason: { $in: filterValues } } });
+  }
+
+  return {
+    page,
+    counts: [
+      classificationStage,
+      {
+        $group: {
+          _id: { $ifNull: ['$normalizedFailureReason', 'unknown'] },
+          count: { $sum: 1 },
+        },
+      },
+    ],
+  };
 }

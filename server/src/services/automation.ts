@@ -2,7 +2,11 @@ import { Page } from 'playwright-core';
 import fetch from 'cross-fetch';
 import logger from '../logger';
 import ExtractedData from '../models/ExtractedData';
-import { resolveFailureReason, FAILURE_REASON_LABELS } from '../utils/failureReason';
+import {
+  normalizeFailureReason,
+  resolveFailureReason,
+  FAILURE_REASON_LABELS,
+} from '../utils/failureReason';
 import Robot, { IRobot } from '../models/Robot';
 import Run, { IRun } from '../models/Run';
 import { ListExtractionConfig } from './listExtractor';
@@ -19,6 +23,7 @@ import {
   isGenericJobTitle,
   isKnownPhenomCareersHost,
 } from './jobPageParser';
+import { toPublicRunDto } from './automationConfigView';
 
 export interface AutomationRuntimeConfig {
   schedule?: {
@@ -698,17 +703,54 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
     try {
       const { enqueueJobBoardEnrichments } = await import('./jobBoardEnrichment');
       const ownerId = run.runByUserId ?? robot.userId;
-      await enqueueJobBoardEnrichments({
+      const boardStats = await enqueueJobBoardEnrichments({
         ownerId,
         robotMetaId: run.robotMetaId,
         runId: run.runId,
         rows: canonicalRows,
       });
+      const jobsAddedToBoard =
+        (Number(boardStats.queued) || 0) + (Number(boardStats.readyFromList) || 0);
+      const jobsBoardConsidered = Number(boardStats.considered) || 0;
+      const jobsBoardDeduped = Number(boardStats.skippedDedup) || 0;
+      run.jobsAddedToBoard = jobsAddedToBoard;
+      run.jobsBoardConsidered = jobsBoardConsidered;
+      run.jobsBoardDeduped = jobsBoardDeduped;
+      const RunModel = (await import('../models/Run')).default;
+      await RunModel.updateOne(
+        { runId: run.runId },
+        {
+          $set: {
+            jobsAddedToBoard,
+            jobsBoardConsidered,
+            jobsBoardDeduped,
+          },
+        }
+      );
     } catch (enrichErr: any) {
       logger.log(
         'warn',
         `Failed to enqueue job-board enrichments for run ${run.runId}: ${enrichErr?.message || enrichErr}`
       );
+    }
+  } else {
+    run.jobsAddedToBoard = 0;
+    run.jobsBoardConsidered = 0;
+    run.jobsBoardDeduped = 0;
+    try {
+      const RunModel = (await import('../models/Run')).default;
+      await RunModel.updateOne(
+        { runId: run.runId },
+        {
+          $set: {
+            jobsAddedToBoard: 0,
+            jobsBoardConsidered: 0,
+            jobsBoardDeduped: 0,
+          },
+        }
+      );
+    } catch {
+      /* ignore */
     }
   }
 
@@ -723,12 +765,89 @@ export const dispatchAutomationWebhook = async (
   await dispatchAutomationDestinations(run, robot, rows);
 };
 
+/** Hard ceiling for displayed run duration (48h). Longer values are almost always bad timestamps. */
+export const MAX_SANE_RUN_DURATION_MS = 48 * 60 * 60 * 1000;
+
+/** Canonical timestamp for run startedAt / finishedAt (never toLocaleString). */
+export const runTimestampNow = (): string => new Date().toISOString();
+
+/** Only ISO 8601 timestamps are safe to compare in Mongo date aggregations. */
+export const isCanonicalRunTimestamp = (value?: string | null): boolean =>
+  typeof value === 'string' &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value.trim());
+
+/**
+ * Legacy writers used toLocaleString() which is ambiguous (11/8 = 11 Aug in en-IN, 8 Nov in en-US).
+ * Return all plausible epoch-ms readings so duration can pick the sane one.
+ */
+export const parseRunTimestampCandidates = (value?: string | null): number[] => {
+  if (value == null) return [];
+  const raw = String(value).trim();
+  if (!raw) return [];
+
+  const candidates = new Set<number>();
+  const add = (ms: number) => {
+    if (!Number.isNaN(ms)) candidates.add(ms);
+  };
+
+  add(Date.parse(raw));
+  add(new Date(raw).getTime());
+
+  // Slash dates: also try day/month swapped (DMY ↔ MDY).
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})([\s,].*)?$/i);
+  if (slash && slash[1] !== slash[2]) {
+    const swapped = `${slash[2]}/${slash[1]}/${slash[3]}${slash[4] || ''}`;
+    add(Date.parse(swapped));
+    add(new Date(swapped).getTime());
+  }
+
+  return [...candidates];
+};
+
 export const computeRunDurationMs = (startedAt?: string, finishedAt?: string): number | null => {
   if (!startedAt || !finishedAt) return null;
-  const start = new Date(startedAt).getTime();
-  const end = new Date(finishedAt).getTime();
-  if (Number.isNaN(start) || Number.isNaN(end)) return null;
-  return Math.max(0, end - start);
+  const starts = parseRunTimestampCandidates(startedAt);
+  const ends = parseRunTimestampCandidates(finishedAt);
+  if (!starts.length || !ends.length) return null;
+
+  // Prefer the shortest non-negative duration under the sanity ceiling.
+  // That rejects MDY "Nov 8" misreads of DMY "11 Aug" finishedAt (~2000h).
+  let best: number | null = null;
+  for (const start of starts) {
+    for (const end of ends) {
+      if (end < start) continue;
+      const ms = end - start;
+      if (ms > MAX_SANE_RUN_DURATION_MS) continue;
+      if (best == null || ms < best) best = ms;
+    }
+  }
+  return best;
+};
+
+/** Elapsed ms from startedAt to now, with the same locale-ambiguity + 48h guards. */
+export const computeElapsedRunDurationMs = (startedAt?: string | null): number | null => {
+  if (!startedAt) return null;
+  return computeRunDurationMs(startedAt, runTimestampNow());
+};
+
+/**
+ * Prefer finishedAt-startedAt; fall back to stored duration only when sane.
+ * Never returns absurd multi-day values that show as "2000 hours" in the UI.
+ */
+export const resolveRunDurationMs = (
+  run: { duration?: number | null; startedAt?: string | null; finishedAt?: string | null; status?: string } | null | undefined
+): number | null => {
+  if (!run) return null;
+  const status = String(run.status || '').toLowerCase();
+  if (status === 'running' || status === 'pending' || status === 'queued') {
+    return null;
+  }
+  const fromTimestamps = computeRunDurationMs(run.startedAt || undefined, run.finishedAt || undefined);
+  if (fromTimestamps != null) return fromTimestamps;
+  const stored = typeof run.duration === 'number' ? run.duration : null;
+  if (stored == null || !Number.isFinite(stored) || stored <= 0) return null;
+  if (stored > MAX_SANE_RUN_DURATION_MS) return null;
+  return Math.round(stored);
 };
 
 export const applyAutomationRuntimeConfig = async (page: Page, robot: any): Promise<void> => {
@@ -795,23 +914,32 @@ export const enrichRunForSaas = async (run: any, robot?: any) => {
     failureReasonSource: run.failureReasonSource,
     errorMessage: run.errorMessage,
   });
-  return {
+  const normalizedFailureReason = normalizeFailureReason({
+    normalizedFailureReason: run.normalizedFailureReason,
+    failureReason: run.failureReason,
+    failureReasonSource: run.failureReasonSource,
+    errorMessage: run.errorMessage,
+  });
+  return toPublicRunDto({
     ...run,
     status: buildDashboardStatus(run),
-    durationMs: computeRunDurationMs(run.startedAt, run.finishedAt),
+    durationMs: resolveRunDurationMs(run),
     rowsExtracted,
+    jobsAddedToBoard: typeof run.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+    jobsBoardConsidered: typeof run.jobsBoardConsidered === 'number' ? run.jobsBoardConsidered : 0,
+    jobsBoardDeduped: typeof run.jobsBoardDeduped === 'number' ? run.jobsBoardDeduped : 0,
     anomaly: run.anomaly || null,
     anomalyMeta: run.anomalyMeta || null,
     scoutId: run.scoutId || null,
-    failureReason: resolved.failureReason,
+    normalizedFailureReason,
+    failureReason: normalizedFailureReason,
     failureReasonSource: resolved.failureReasonSource,
     failureReasonLabel:
-      resolved.failureReason &&
-      FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
-        ? FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
-        : resolved.failureReason,
-    screenshots: run.binaryOutput ? Object.entries(run.binaryOutput).map(([key, value]) => ({ key, value })) : [],
-  };
+      normalizedFailureReason &&
+      FAILURE_REASON_LABELS[normalizedFailureReason as keyof typeof FAILURE_REASON_LABELS]
+        ? FAILURE_REASON_LABELS[normalizedFailureReason as keyof typeof FAILURE_REASON_LABELS]
+        : normalizedFailureReason,
+  }, robot, { detail: true });
 };
 
 /**
@@ -829,27 +957,37 @@ export const enrichRunForList = (
     log: _log,
     ...rest
   } = run || {};
-  const durationMs = computeRunDurationMs(run?.startedAt, run?.finishedAt);
+  const durationMs = resolveRunDurationMs(run);
   const resolved = resolveFailureReason({
     failureReason: run?.failureReason,
     failureReasonSource: run?.failureReasonSource,
     errorMessage: run?.errorMessage,
   });
-  return {
+  const normalizedFailureReason = normalizeFailureReason({
+    normalizedFailureReason: run?.normalizedFailureReason,
+    failureReason: run?.failureReason,
+    failureReasonSource: run?.failureReasonSource,
+    errorMessage: run?.errorMessage,
+  });
+  return toPublicRunDto({
     ...rest,
     status: buildDashboardStatus(run),
     durationMs,
     duration: durationMs,
     rowsExtracted: typeof run?.rowsExtracted === 'number' ? run.rowsExtracted : extractedCount,
+    jobsAddedToBoard: typeof run?.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+    jobsBoardConsidered: typeof run?.jobsBoardConsidered === 'number' ? run.jobsBoardConsidered : 0,
+    jobsBoardDeduped: typeof run?.jobsBoardDeduped === 'number' ? run.jobsBoardDeduped : 0,
     anomaly: run?.anomaly || null,
     anomalyMeta: run?.anomalyMeta || null,
-    failureReason: resolved.failureReason,
+    normalizedFailureReason,
+    failureReason: normalizedFailureReason,
     failureReasonSource: resolved.failureReasonSource,
     failureReasonLabel:
-      resolved.failureReason &&
-      FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
-        ? FAILURE_REASON_LABELS[resolved.failureReason as keyof typeof FAILURE_REASON_LABELS]
-        : resolved.failureReason,
+      normalizedFailureReason &&
+      FAILURE_REASON_LABELS[normalizedFailureReason as keyof typeof FAILURE_REASON_LABELS]
+        ? FAILURE_REASON_LABELS[normalizedFailureReason as keyof typeof FAILURE_REASON_LABELS]
+        : normalizedFailureReason,
     errorMessage: run?.errorMessage || '',
     retryCount: typeof run?.retryCount === 'number' ? run.retryCount : 0,
     // Keep empty shells so older UI code that reads these keys does not crash.
@@ -860,7 +998,7 @@ export const enrichRunForList = (
     companyName: getRobotCompanyName(robot),
     scoutId: getRobotScoutId(robot),
     automationId: run?.robotMetaId || robot?.recording_meta?.id || null,
-  };
+  }, robot, { detail: false });
 };
 
 /** Batch ExtractedData counts for a page of runs (one aggregation). */

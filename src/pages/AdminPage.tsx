@@ -74,7 +74,8 @@ const formatBytes = (n?: number | null) => {
 };
 
 const formatDuration = (ms?: number | null) => {
-  if (ms == null || !Number.isFinite(ms)) return '—';
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
+  if (ms > 48 * 60 * 60 * 1000) return '—';
   if (ms < 1000) return `${ms} ms`;
   const sec = Math.round(ms / 1000);
   if (sec < 60) return `${sec}s`;
@@ -103,14 +104,6 @@ const formatMbps = (n?: number | null) => {
   if (n < 0.001) return `${(n * 1_000_000).toFixed(0)} bps`;
   if (n < 1) return `${(n * 1000).toFixed(1)} Kbps`;
   return `${n.toFixed(3)} Mbps`;
-};
-
-/** DigitalOcean disk I/O Insights units are megabytes/sec (MBps), not megabits. */
-const formatMBps = (n?: number | null) => {
-  if (n == null || !Number.isFinite(n)) return '—';
-  if (n <= 0) return '0 MB/s';
-  if (n < 0.01) return `${(n * 1000).toFixed(1)} KB/s`;
-  return `${n.toFixed(3)} MB/s`;
 };
 
 const formatGiB = (bytes?: number | null) => {
@@ -478,7 +471,7 @@ export const AdminPage = () => {
     setEditUrl(automation.targetUrl || '');
     setEditCompany(automation.companyName || '');
     setEditTags((automation.tags || []).join(', '));
-    setEditWebhook(automation.webhookUrl || '');
+    setEditWebhook('');
     setEditScheduleEnabled(!!automation.schedule?.enabled);
     setEditCron(automation.schedule?.cron || '');
     setEditTimezone(automation.schedule?.timezone || 'UTC');
@@ -499,7 +492,7 @@ export const AdminPage = () => {
         startUrl: editUrl.trim() || undefined,
         companyName: editCompany.trim(),
         tags,
-        webhookUrl: editWebhook.trim(),
+        webhookUrl: editWebhook.trim() || undefined,
         schedule: {
           enabled: editScheduleEnabled,
           cron: editCron.trim() || null,
@@ -927,8 +920,6 @@ export const AdminPage = () => {
           const m = droplet.metrics;
           const blank = { latest: null, avg: null, max: null, points: [] as Array<{ t: number; v: number }> };
           const diskPct = m.diskUsedPercent || blank;
-          const diskRead = m.diskReadMbps || blank;
-          const diskWrite = m.diskWriteMbps || blank;
           const load1 = m.load1 || blank;
           return (
             <Box
@@ -1035,22 +1026,10 @@ export const AdminPage = () => {
                   points={m.bandwidthInboundMbps.points}
                   color="#00838f"
                 />
-                <MetricChart
-                  title="Disk write"
-                  valueLabel={formatMBps(diskWrite.latest)}
-                  points={diskWrite.points}
-                  color="#ef6c00"
-                />
-                <MetricChart
-                  title="Disk read"
-                  valueLabel={formatMBps(diskRead.latest)}
-                  points={diskRead.points}
-                  color="#5d4037"
-                />
               </Stack>
 
               {m.note ? (
-                <Alert severity="warning" sx={{ mt: 1.5 }}>
+                <Alert severity={m.empty ? 'warning' : 'info'} sx={{ mt: 1.5 }}>
                   {m.note}
                 </Alert>
               ) : null}
@@ -1699,6 +1678,12 @@ export const AdminPage = () => {
               label="Webhook URL"
               value={editWebhook}
               onChange={(e) => setEditWebhook(e.target.value)}
+              placeholder={editAutomation.webhookConfigured ? 'Leave blank to keep existing webhook' : 'https://'}
+              helperText={
+                editAutomation.webhookConfigured
+                  ? 'A webhook is already configured. Leave blank to keep it, or enter a new URL.'
+                  : 'Optional. Enter a URL to enable a webhook.'
+              }
               fullWidth
             />
             <Divider />

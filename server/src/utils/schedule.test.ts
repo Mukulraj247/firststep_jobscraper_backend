@@ -4,6 +4,7 @@ import {
   validateAutomationScheduleCron,
   computeNextRun,
   intervalMsFromCron,
+  computeNextRunAfterPrevious,
   computeNextRunFromInterval,
   isScheduleOverdue,
   randomPreferredStartMs,
@@ -94,6 +95,14 @@ describe('computeNextRunFromInterval', () => {
     const from = new Date('2026-07-31T10:00:00.000Z');
     const next = computeNextRunFromInterval(15 * 60 * 1000, from);
     expect(next.toISOString()).toBe('2026-07-31T10:15:00.000Z');
+  });
+
+  it('schedules the next daily run exactly 24h after the previous run', () => {
+    const previousRun = new Date('2026-08-17T10:52:00.000Z');
+    const everyMs = 24 * 60 * 60 * 1000;
+    const next = computeNextRunFromInterval(everyMs, previousRun);
+    expect(next.toISOString()).toBe('2026-08-18T10:52:00.000Z');
+    expect(next.getTime() - previousRun.getTime()).toBe(everyMs);
   });
 });
 

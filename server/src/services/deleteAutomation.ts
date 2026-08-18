@@ -8,9 +8,7 @@ import { removeFirebaseObjectsForRunIds } from '../storage/firebaseStorage';
 import { abortRun } from '../workers/execution';
 import { killScrapeChildForRun } from '../workers/scrapeJobSupervisor';
 import logger from '../logger';
-
-/** Runs that may still hold a scraper concurrency slot or Chromium process. */
-const ACTIVE_RUN_STATUSES = ['pending', 'queued', 'scheduled', 'running', 'aborting'] as const;
+import { ACTIVE_RUN_STATUSES } from './runLifecycle';
 
 /** How long to wait for scraper-worker abort jobs to kill children before deleting run docs. */
 function getAbortWaitMs(): number {
@@ -40,7 +38,7 @@ async function abortInFlightRunsForAutomation(
   if (active.length === 0) return [];
 
   const activeRunIds = active.map((r) => String(r.runId));
-  const finishedAt = new Date().toLocaleString();
+  const finishedAt = new Date().toISOString();
   const abortMessage = 'Automation deleted — in-flight scrape aborted';
 
   await Run.updateMany(

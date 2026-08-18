@@ -110,7 +110,8 @@
     "proxy": "代理",
     "apikey": "API密钥",
     "feedback": "加入 Maxun Cloud",
-    "apidocs": "网站转API"
+    "apidocs": "网站转API",
+    "collapse": "收起"
   },
   "jobboard": {
     "heading": "Job board",
@@ -157,10 +158,60 @@
     "settings": "设置",
     "search": "搜索运行记录...",
     "sort_tooltip": "点击排序",
+    "retry": "重试",
+    "rows_per_page": "每页运行数",
+    "automations_per_page": "每页自动化数",
+    "automation_count": "{{count}} 个自动化",
+    "load_error": "加载运行记录失败，请重试。",
     "placeholder": {
       "title": "未找到运行记录",
       "body": "您所有的机器人运行记录都将显示在此处。一旦机器人被激活，其运行记录将在这里记下。",
-      "search": "没有与您搜索匹配的运行记录"
+      "search": "没有与您搜索匹配的运行记录",
+      "filtered": "没有符合筛选条件的运行记录。清除筛选以查看全部自动化。"
+    },
+    "filters": {
+      "search_label": "搜索",
+      "date": "日期",
+      "status_label": "状态",
+      "jobs_label": "新增职位",
+      "duration_label": "持续时间",
+      "clear_all": "清除全部",
+      "showing_range": "显示 {{from}}–{{to}} / {{total}}",
+      "pill_search": "搜索：{{q}}",
+      "pill_date": "日期：{{date}}",
+      "pill_status": "状态：{{status}}",
+      "pill_jobs": "职位：{{jobs}}",
+      "pill_duration": "时长：{{duration}}",
+      "status": {
+        "any": "全部",
+        "running": "运行中",
+        "queued": "排队 / 等待",
+        "completed": "已完成",
+        "failed": "失败",
+        "aborted": "已中止",
+        "scheduled": "已计划",
+        "dead": "已中断"
+      },
+      "jobs": {
+        "any": "全部",
+        "exactly0": "恰好 0",
+        "moreThan2": "多于 2",
+        "moreThan3": "多于 3",
+        "moreThan4": "多于 4"
+      },
+      "duration": {
+        "any": "全部",
+        "lt5": "< 5 分钟",
+        "lt30": "< 30 分钟",
+        "gt30": "> 30 分钟",
+        "gt60": "> 1 小时"
+      }
+    },
+    "group": {
+      "untitled": "自动化",
+      "last_run": "最近：{{time}}",
+      "jobs": "{{count}} 个职位",
+      "run_count": "{{count}} 次运行"
     },
     "notifications": {
       "no_runs": "未找到运行记录。请重试。",
@@ -648,6 +699,7 @@
     },
     "loading": "加载数据中...",
     "empty_output": "没有可用的输出数据",
+    "empty_log": "此运行尚无日志。",
     "captured_data": {
       "title": "已捕获的数据",
       "download_csv": "下载CSV",

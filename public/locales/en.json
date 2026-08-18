@@ -109,9 +109,18 @@
       "notifications": {
         "delete_warning": "This scraper has associated runs. Delete those runs before deleting the scraper.",
         "delete_success": "Scraper deleted successfully",
+        "delete_failed": "Failed to delete scraper. Please try again.",
         "auth_success": "Scraper authenticated successfully",
         "browser_limit_warning": "Remote browsers are currently busy. Please wait for a few minutes and try again"
-      }
+      },
+      "delete_confirm": {
+        "title": "Delete {{name}}?",
+        "message": "Are you sure you want to delete the scraper \"{{name}}\"?"
+      },
+      "load_error": "Failed to load scrapers. Check your connection and try again.",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing…",
+      "hero_overline": "Scraper operations"
     },
     "mainmenu":{
       "recordings": "Scrapers",
@@ -120,7 +129,8 @@
       "proxy": "Proxy",
       "apikey": "API Key",
       "feedback":"Join Scout-X Cloud",
-      "apidocs":"Website To API"
+      "apidocs":"Website To API",
+      "collapse": "Collapse"
     },
     "jobboard": {
       "heading": "Job board",
@@ -161,14 +171,65 @@
       "startedAt":"Started At",
       "finishedAt":"Finished At",
       "duration":"Duration",
+      "jobsAdded":"Jobs added",
       "delete":"Delete",
       "settings":"Settings",
       "search":"Search Runs...",
       "sort_tooltip": "Click to sort",
+      "retry": "Retry",
+      "rows_per_page": "Runs per page",
+      "automations_per_page": "Automations per page",
+      "automation_count": "{{count}} automations",
+      "load_error": "Failed to load runs. Please try again.",
       "placeholder": {
         "title": "No Runs Found",
         "body": "This is where all your robot runs will appear. Once a robot is active, its runs will be logged here.",
-        "search":"No runs match your search"
+        "search":"No runs match your search",
+        "filtered": "No runs match the selected filters. Clear filters to see all automations."
+      },
+      "filters": {
+        "search_label": "Search",
+        "date": "Date",
+        "status_label": "Status",
+        "jobs_label": "Jobs added",
+        "duration_label": "Duration",
+        "clear_all": "Clear all",
+        "showing_range": "Showing {{from}}–{{to}} of {{total}}",
+        "pill_search": "Search: {{q}}",
+        "pill_date": "Date: {{date}}",
+        "pill_status": "Status: {{status}}",
+        "pill_jobs": "Jobs: {{jobs}}",
+        "pill_duration": "Duration: {{duration}}",
+        "status": {
+          "any": "Any",
+          "running": "Running",
+          "queued": "Queued / pending",
+          "completed": "Completed",
+          "failed": "Failed",
+          "aborted": "Aborted",
+          "scheduled": "Scheduled",
+          "dead": "Dead"
+        },
+        "jobs": {
+          "any": "Any",
+          "exactly0": "Exactly 0",
+          "moreThan2": "More than 2",
+          "moreThan3": "More than 3",
+          "moreThan4": "More than 4"
+        },
+        "duration": {
+          "any": "Any",
+          "lt5": "< 5 min",
+          "lt30": "< 30 min",
+          "gt30": "> 30 min",
+          "gt60": "> 1 hour"
+        }
+      },
+      "group": {
+        "untitled": "Automation",
+        "last_run": "Last: {{time}}",
+        "jobs": "{{count}} jobs",
+        "run_count": "{{count}} runs"
       },
       "notifications": {
         "no_runs": "No runs found. Please try again.",
@@ -645,6 +706,13 @@
           "run_by_api": "Run by API",
           "run_type": "Run Type"
         }
+      },
+      "view_jobs": "View jobs",
+      "jobs_dialog": {
+        "title": "Jobs from this run ({{count}} added)",
+        "empty": "No job-board listings linked to this run.",
+        "untitled": "Untitled role",
+        "open": "Open"
       }
     },
     "run_content": {
@@ -657,6 +725,7 @@
       },
       "loading": "Extracting data...",
       "empty_output": "No output data available",
+      "empty_log": "No logs available for this run yet.",
       "captured_data": {
         "title": "Captured Data",
         "download_csv": "Download CSV",

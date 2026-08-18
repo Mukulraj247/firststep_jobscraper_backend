@@ -12,8 +12,8 @@ import {
   Tab
 } from "@mui/material";
 import * as React from "react";
-import { Data } from "./RunsTable";
-import { TabPanel, TabContext } from "@mui/lab";
+import { Data } from "./runTypes";
+import { TabPanel, TabContext, TabList } from "@mui/lab";
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useEffect, useState } from "react";
 import JSZip from "jszip";
@@ -25,6 +25,7 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../context/theme-provider";
+import { escapeCsvSpreadsheetCell } from "../../utils/spreadsheet";
 
 interface RunContentProps {
   row: Data,
@@ -103,8 +104,10 @@ export const RunContent = ({ row, currentLog, interpretationInProgress, logEndRe
   const [isLegacyData, setIsLegacyData] = useState<boolean>(false);
 
   useEffect(() => {
-    setTab(tab);
-  }, [interpretationInProgress]);
+    if (currentLog && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [currentLog, logEndRef]);
 
   const getProgressMessage = (percentage: number): string => {
     if (percentage === 0) return 'Initializing workflow...';
@@ -487,17 +490,13 @@ export const RunContent = ({ row, currentLog, interpretationInProgress, logEndRe
     if (isSchemaData && !isTabular && data.length === 1) {
       const header = 'Label,Value';
       const rows = columns.map(column => 
-        `"${column}","${data[0][column] || ""}"`
+        `${escapeCsvSpreadsheetCell(column)},${escapeCsvSpreadsheetCell(data[0][column] ?? "")}`
       );
       return [header, ...rows].join('\n');
     } else {
-      const header = columns.map(col => `"${col}"`).join(',');
+      const header = columns.map(escapeCsvSpreadsheetCell).join(',');
       const rows = data.map(row =>
-        columns.map(col => {
-          const value = row[col] || "";
-          const escapedValue = String(value).replace(/"/g, '""');
-          return `"${escapedValue}"`;
-        }).join(',')
+        columns.map(col => escapeCsvSpreadsheetCell(row[col] ?? "")).join(',')
       );
       return [header, ...rows].join('\n');
     }
@@ -1101,6 +1100,15 @@ export const RunContent = ({ row, currentLog, interpretationInProgress, logEndRe
   return (
     <Box sx={{ width: '100%' }}>
       <TabContext value={tab}>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', maxWidth: '900px' }}>
+          <TabList
+            onChange={(_event, value) => setTab(String(value))}
+            aria-label="run-detail-tabs"
+          >
+            <Tab label={t('run_content.tabs.output_data')} value="output" />
+            <Tab label={t('run_content.tabs.log')} value="log" />
+          </TabList>
+        </Box>
         <TabPanel value='output' sx={{ width: '100%', maxWidth: '900px' }}>
           {hasMarkdown || hasHTML ? (
             <>
@@ -2227,6 +2235,40 @@ export const RunContent = ({ row, currentLog, interpretationInProgress, logEndRe
           )}
           </>
           )}
+        </TabPanel>
+        <TabPanel value="log" sx={{ width: '100%', maxWidth: '900px' }}>
+          {workflowProgress ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <CircularProgress size={18} sx={{ mr: 1 }} />
+              <Typography variant="body2">
+                {getProgressMessage(workflowProgress.percentage)} ({workflowProgress.percentage}%)
+              </Typography>
+            </Box>
+          ) : null}
+          <Paper
+            variant="outlined"
+            sx={{
+              p: 2,
+              maxHeight: 420,
+              overflow: 'auto',
+              backgroundColor: (theme) => theme.palette.mode === 'dark' ? '#0f1720' : '#f8fafc',
+            }}
+          >
+            <Typography
+              component="pre"
+              sx={{ whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, m: 0 }}
+            >
+              {currentLog?.trim()
+                ? currentLog
+                : t('run_content.empty_log', 'No logs available for this run yet.')}
+            </Typography>
+            <div ref={logEndRef} />
+          </Paper>
+          {interpretationInProgress ? (
+            <Button color="error" onClick={abortRunHandler} sx={{ mt: 1.5 }}>
+              {t('run_content.buttons.stop')}
+            </Button>
+          ) : null}
         </TabPanel>
       </TabContext>
     </Box>

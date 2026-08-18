@@ -24,6 +24,8 @@ interface ScheduleModalProps {
   automationName: string;
   currentCron: string | null | undefined;
   currentTimezone?: string;
+  currentEnabled?: boolean;
+  currentPaused?: boolean;
   onClose: () => void;
   onSave: (
     automationId: string,
@@ -35,44 +37,109 @@ interface ScheduleModalProps {
   ) => Promise<void>;
 }
 
+export type ScheduleMode = 'active' | 'paused' | 'disabled';
+
+export interface ScheduleModalState {
+  mode: ScheduleMode;
+  cronValue: CronBuilderValue | null;
+}
+
+interface CurrentSchedule {
+  currentCron: string | null | undefined;
+  currentTimezone?: string;
+  currentEnabled?: boolean;
+  currentPaused?: boolean;
+}
+
+export function closedScheduleModalState(): ScheduleModalState {
+  return { mode: 'disabled', cronValue: null };
+}
+
+export function deriveScheduleModalState({
+  currentCron,
+  currentTimezone,
+  currentEnabled,
+  currentPaused,
+}: CurrentSchedule): ScheduleModalState {
+  if (!currentCron) {
+    return closedScheduleModalState();
+  }
+
+  const isPaused = currentPaused === true || currentEnabled === false;
+  return {
+    mode: isPaused ? 'paused' : 'active',
+    cronValue: {
+      cron: currentCron,
+      timezone: currentTimezone || 'UTC',
+    },
+  };
+}
+
+export function buildScheduleSavePayload(
+  state: ScheduleModalState,
+  fallbackTimezone: string = 'UTC',
+) {
+  return {
+    enabled: state.mode === 'active',
+    cron: state.cronValue?.cron || null,
+    timezone: state.cronValue?.timezone || fallbackTimezone,
+  };
+}
+
 export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   open,
   automationId,
   automationName,
   currentCron,
   currentTimezone,
+  currentEnabled,
+  currentPaused,
   onClose,
   onSave,
 }) => {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
 
-  const [enabled, setEnabled] = useState(false);
+  const [mode, setMode] = useState<ScheduleMode>('disabled');
   const [cronValue, setCronValue] = useState<CronBuilderValue | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   // Track the original saved cron so toggling on preserves it
   const savedCronRef = React.useRef<CronBuilderValue | null>(null);
 
-  // Sync state from props whenever the modal opens
+  // Sync state from props whenever the modal opens; clear leftovers on close
   useEffect(() => {
     if (open) {
-      const hasCron = !!(currentCron);
-      setEnabled(hasCron);
-      const cronObj = hasCron && currentCron
-        ? { cron: currentCron, timezone: currentTimezone || 'UTC' }
-        : null;
-      setCronValue(cronObj);
-      savedCronRef.current = cronObj;
+      const initialState = deriveScheduleModalState({
+        currentCron,
+        currentTimezone,
+        currentEnabled,
+        currentPaused,
+      });
+      setMode(initialState.mode);
+      setCronValue(initialState.cronValue);
+      savedCronRef.current = initialState.cronValue;
+      setSaved(false);
+    } else {
+      const closed = closedScheduleModalState();
+      setMode(closed.mode);
+      setCronValue(closed.cronValue);
+      savedCronRef.current = null;
       setSaved(false);
     }
-  }, [open, currentCron, currentTimezone]);
+  }, [
+    open,
+    currentCron,
+    currentTimezone,
+    currentEnabled,
+    currentPaused,
+  ]);
 
   const handleEnabledToggle = (checked: boolean) => {
-    setEnabled(checked);
     if (!checked) {
-      setCronValue(null);
+      setMode(cronValue?.cron ? 'paused' : 'disabled');
     } else {
+      setMode('active');
       // Re-enable: use saved cron if available, otherwise the current cronValue, else default to 15 min
       if (savedCronRef.current) {
         setCronValue(savedCronRef.current);
@@ -91,11 +158,13 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave(automationId, {
-        enabled,
-        cron: enabled && cronValue ? cronValue.cron : null,
-        timezone: cronValue?.timezone || currentTimezone || 'UTC',
-      });
+      await onSave(
+        automationId,
+        buildScheduleSavePayload(
+          { mode, cronValue },
+          currentTimezone || 'UTC',
+        ),
+      );
       setSaved(true);
       setTimeout(() => {
         onClose();
@@ -169,14 +238,18 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <FlashOff sx={{ fontSize: 18, color: enabled ? 'text.disabled' : '#f59e0b' }} />
+            <FlashOff sx={{ fontSize: 18, color: mode === 'active' ? 'text.disabled' : '#f59e0b' }} />
             <Typography variant="body2" fontWeight={600}>
-              {enabled ? 'Scheduling enabled' : 'Scheduling disabled'}
+              {mode === 'active'
+                ? 'Scheduling enabled'
+                : mode === 'paused'
+                  ? 'Scheduling paused'
+                  : 'Scheduling disabled'}
             </Typography>
           </Box>
           <Switch
             size="small"
-            checked={enabled}
+            checked={mode === 'active'}
             onChange={(e) => handleEnabledToggle(e.target.checked)}
             sx={{
               '& .MuiSwitch-switchBase.Mui-checked': { color: '#6366f1' },
@@ -188,10 +261,12 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         </Box>
 
         {/* Cron builder */}
-        {enabled && (
+        {mode === 'active' && (
           <>
             <CronBuilder
-              value={cronValue || undefined}
+              key={automationId}
+              cron={cronValue?.cron}
+              timezone={cronValue?.timezone}
               onChange={handleCronChange}
             />
             <Box sx={{ mt: 2 }}>
@@ -206,7 +281,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           </>
         )}
 
-        {!enabled && (
+        {mode !== 'active' && (
           <Box
             sx={{
               display: 'flex',
@@ -220,7 +295,9 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           >
             <FlashOff sx={{ fontSize: 36, opacity: 0.4 }} />
             <Typography variant="body2" color="text.disabled">
-              No recurring schedule will run
+              {mode === 'paused'
+                ? 'Recurring runs are paused; the schedule is preserved'
+                : 'No recurring schedule will run'}
             </Typography>
           </Box>
         )}
@@ -240,7 +317,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         <Button
           variant="contained"
           onClick={handleSave}
-          disabled={saving || (enabled && !cronValue?.cron)}
+          disabled={saving || (mode === 'active' && !cronValue?.cron)}
           sx={{
             borderRadius: 2,
             minWidth: 140,

@@ -1,8 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const previewBaseURL = 'http://127.0.0.1:4173';
+const baseURL = process.env.PLAYWRIGHT_BASE_URL?.trim() || previewBaseURL;
+const useExternalServer = Boolean(process.env.PLAYWRIGHT_BASE_URL?.trim());
+
 /**
- * Smoke E2E against the production Vite bundle (`vite preview`).
- * Run `npm run build` first so `build/` exists.
+ * Smoke E2E against the production Vite bundle (`vite preview`) or PLAYWRIGHT_BASE_URL.
+ * Run `npm run build` first when using the built-in preview webServer.
  */
 export default defineConfig({
   testDir: 'e2e',
@@ -12,13 +16,17 @@ export default defineConfig({
   reporter: 'list',
   use: {
     ...devices['Desktop Chrome'],
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL,
     trace: 'on-first-retry',
   },
-  webServer: {
-    command: 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  ...(useExternalServer
+    ? {}
+    : {
+        webServer: {
+          command: 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',
+          url: previewBaseURL,
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+      }),
 });

@@ -10,7 +10,7 @@ import { BrowserPool } from "./browser-management/classes/BrowserPool";
 import logger from './logger';
 import mongoose, { connectDB, syncDB } from './storage/db';
 import cookieParser from 'cookie-parser';
-import { SERVER_PORT } from "./constants/config";
+import { CORS_ALLOWED_HEADERS, SERVER_PORT } from "./constants/config";
 import { existsSync, readdirSync } from "fs"
 import { fork } from 'child_process';
 import { capture } from "./utils/analytics";
@@ -33,6 +33,11 @@ import {
   killUntrackedPlaywrightChromium,
 } from './services/browserProcess';
 import rateLimit from 'express-rate-limit';
+import {
+  createSocketOriginPolicy,
+  registerQueuedRunNamespace,
+} from './middlewares/socketAuth';
+import { createCsrfOriginGuard } from './middlewares/csrfOriginGuard';
 
 if (process.env.NODE_ENV === 'production') {
   const sess = process.env.SESSION_SECRET;
@@ -71,8 +76,8 @@ const sessionCookieSameSite: 'none' | 'lax' =
 const CORS_CONFIG = {
   origin: normalizeOrigin(process.env.PUBLIC_URL),
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [...CORS_ALLOWED_HEADERS],
 };
 
 const app = express();
@@ -111,7 +116,12 @@ export let io = new Server(server, {
   // Run-status events are tiny; keep a modest default, overridable for self-hosted heavy payloads.
   maxHttpBufferSize: parseInt(process.env.SOCKET_MAX_HTTP_BUFFER_BYTES || String(10 * 1024 * 1024), 10),
   transports: ['websocket', 'polling'],
-  cors: CORS_CONFIG
+  cors: CORS_CONFIG,
+  allowRequest: createSocketOriginPolicy({
+    allowedOrigin: CORS_CONFIG.origin,
+    isProduction: process.env.NODE_ENV === 'production',
+    allowedExtensionOrigins: process.env.ALLOWED_EXTENSION_ORIGINS,
+  }),
 });
 
 /**
@@ -122,6 +132,7 @@ export const browserPool = new BrowserPool();
 export const recentRecoveries = new Map<string, any[]>();
 
 app.use(cookieParser())
+app.use(createCsrfOriginGuard({ publicUrl: process.env.PUBLIC_URL }));
 
 app.use('/webhook', webhook);
 app.use('/record', record);
@@ -200,37 +211,50 @@ if (serveFrontend) {
 
 if (require.main === module) {
   const serverIntervals: NodeJS.Timeout[] = [];
+  registerQueuedRunNamespace(io, recentRecoveries, logger);
 
   // Legacy `queued`-status poller. The Agenda scraper path uses `pending`, so this rarely
   // has work — poll less often by default to cut idle DB traffic (tunable for self-host).
-  const queuedRunsPollMs = parseInt(process.env.QUEUED_RUNS_POLL_MS || '15000', 10);
-  const processQueuedRunsInterval = setInterval(async () => {
-    try {
-      await processQueuedRuns();
-    } catch (error: any) {
-      logger.log('error', `Error in processQueuedRuns interval: ${error.message}`);
-    }
-  }, queuedRunsPollMs);
-  serverIntervals.push(processQueuedRunsInterval);
+  const startBackgroundPollers = () => {
+    const queuedRunsPollMs = parseInt(process.env.QUEUED_RUNS_POLL_MS || '15000', 10);
+    const processQueuedRunsInterval = setInterval(async () => {
+      try {
+        await processQueuedRuns();
+      } catch (error: any) {
+        logger.log('error', `Error in processQueuedRuns interval: ${error.message}`);
+      }
+    }, queuedRunsPollMs);
+    serverIntervals.push(processQueuedRunsInterval);
 
-  const browserPoolCleanupInterval = setInterval(() => {
-    browserPool.cleanupStaleBrowserSlots();
-  }, 60000);
-  serverIntervals.push(browserPoolCleanupInterval);
+    const browserPoolCleanupInterval = setInterval(() => {
+      browserPool.cleanupStaleBrowserSlots();
+    }, 60000);
+    serverIntervals.push(browserPoolCleanupInterval);
 
-  const stalePendingInterval = setInterval(async () => {
-    try {
-      await reenqueueStalePendingScraperRuns();
-    } catch (error: any) {
-      logger.log('error', `Error in reenqueueStalePendingScraperRuns: ${error.message}`);
+    const stalePendingInterval = setInterval(async () => {
+      try {
+        await reenqueueStalePendingScraperRuns();
+      } catch (error: any) {
+        logger.log('error', `Error in reenqueueStalePendingScraperRuns: ${error.message}`);
+      }
+    }, 90_000);
+    serverIntervals.push(stalePendingInterval);
+  };
+
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      logger.log('error', `Port ${SERVER_PORT} is already in use. Stop the other process and retry.`);
+    } else {
+      logger.log('error', `HTTP server error: ${error.message}`);
     }
-  }, 90_000);
-  serverIntervals.push(stalePendingInterval);
+    process.exit(1);
+  });
 
   server.listen(SERVER_PORT, '0.0.0.0', async () => {
     try {
       await connectDB();
       await syncDB();
+      startBackgroundPollers();
 
       logger.log('info', 'Cleaning up stale browser slots...');
       browserPool.cleanupStaleBrowserSlots();
@@ -261,63 +285,6 @@ if (require.main === module) {
 
       // Immediately ensure Agenda jobs exist for any pending runs (not only after 3 min / 90s poll).
       await reenqueueStalePendingScraperRuns({ minAgeMs: 0, maxRuns: 200 });
-
-      // Middleware: accept either `userId` (browser app, JWT-authenticated) or
-      // an `x-api-key` (Chrome extension) and resolve to userId via the User
-      // model, mirroring the HTTP `requireSignInOrApiKey` semantics.
-      io.of('/queued-run').use(async (socket, next) => {
-        try {
-          const queryUserId = socket.handshake.query.userId as string | undefined;
-          const rawApiKey =
-            (socket.handshake.auth as any)?.apiKey ||
-            (socket.handshake.headers['x-api-key'] as string | undefined) ||
-            (socket.handshake.query.apiKey as string | undefined);
-          const apiKey = Array.isArray(rawApiKey) ? rawApiKey[0] : rawApiKey;
-
-          if (apiKey && String(apiKey).trim()) {
-            const User = (await import('./models/User')).default;
-            const user = await User.findOne({ api_key: String(apiKey).trim() });
-            if (!user) return next(new Error('Invalid API key'));
-            (socket.data as any).userId = String(user.id);
-            return next();
-          }
-
-          if (queryUserId) {
-            (socket.data as any).userId = String(queryUserId);
-            return next();
-          }
-
-          return next(new Error('Missing userId or API key'));
-        } catch (err: any) {
-          logger.log('warn', `queued-run auth middleware error: ${err?.message || err}`);
-          return next(new Error('Authentication failed'));
-        }
-      });
-
-      io.of('/queued-run').on('connection', (socket) => {
-        const userId = (socket.data as any)?.userId as string | undefined;
-
-        if (userId) {
-          socket.join(`user-${userId}`);
-          logger.log('info', `Client joined queued-run namespace for user: ${userId}, socket: ${socket.id}`);
-
-          if (recentRecoveries.has(userId)) {
-            const recoveries = recentRecoveries.get(userId)!;
-            recoveries.forEach(recoveryData => {
-              socket.emit('run-recovered', recoveryData);
-              logger.log('info', `Sent stored recovery notification for run: ${recoveryData.runId} to user: ${userId}`);
-            });
-            recentRecoveries.delete(userId);
-          }
-
-          socket.on('disconnect', () => {
-            logger.log('info', `Client disconnected from queued-run namespace: ${socket.id}`);
-          });
-        } else {
-          logger.log('warn', `Client connected to queued-run namespace without userId: ${socket.id}`);
-          socket.disconnect();
-        }
-      });
 
       if (!isProduction && runEmbeddedWorkers) {
         // Development mode
@@ -418,7 +385,7 @@ if (require.main === module) {
                 }
 
                 run.status = 'failed';
-                  run.finishedAt = new Date().toLocaleString();
+                  run.finishedAt = new Date().toISOString();
                   run.log = 'Process interrupted during execution - partial data preserved';
                   run.serializableOutput = {
                     scrapeSchema: limitedData.scrapeSchemaOutput,

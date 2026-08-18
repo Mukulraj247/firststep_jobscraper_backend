@@ -20,11 +20,13 @@ import { addAirtableUpdateTask, processAirtableUpdates } from "../workflow-manag
 import { sendWebhook } from "../routes/webhook";
 import { convertPageToHTML, convertPageToMarkdown, convertPageToScreenshot } from '../markdownify/scrape';
 import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, persistExtractedDataForRun } from '../services/automation';
+import { resolveAutomationExecutionConfig } from '../services/automationConfigView';
 import {
     warmUpBeforeAutomation,
     getUnblockOptionsFromRuntimeConfig,
     attachCloudflareWaitOnNavigation,
 } from '../services/unblocker';
+import { installOutboundBrowserContextGuard } from '../services/listExtractor';
 
 const router = Router();
 
@@ -296,10 +298,28 @@ router.get("/robots/:id", requireAPIKey, async (req: Request, res: Response) => 
  *                   type: string
  *                   example: "Failed to retrieve runs"
  */
-router.get("/robots/:id/runs",requireAPIKey, async (req: Request, res: Response) => {
+router.get("/robots/:id/runs",requireAPIKey, async (req: AuthenticatedRequest, res: Response) => {
     try {
+        if (!req.user) {
+            return res.status(401).json({
+                statusCode: 401,
+                messageCode: "error",
+                message: "Unauthorized",
+            });
+        }
+        const robot = await Robot.findOne({
+            ...ownerIdFilter(req.user.id),
+            'recording_meta.id': req.params.id,
+        }).select('recording_meta.id').lean();
+        if (!robot) {
+            return res.status(404).json({
+                statusCode: 404,
+                messageCode: "not_found",
+                message: "Robot not found",
+            });
+        }
         const runs = await Run.find({
-            robotMetaId: req.params.id
+            robotMetaId: robot.recording_meta.id
         }).lean();
 
         const formattedRuns = runs.map(formatRunResponse);
@@ -387,12 +407,37 @@ router.get("/robots/:id/runs",requireAPIKey, async (req: Request, res: Response)
  *                   type: string
  *                   example: "Run with id not found."
  */
-router.get("/robots/:id/runs/:runId", requireAPIKey, async (req: Request, res: Response) => {
+router.get("/robots/:id/runs/:runId", requireAPIKey, async (req: AuthenticatedRequest, res: Response) => {
     try {
+        if (!req.user) {
+            return res.status(401).json({
+                statusCode: 401,
+                messageCode: "error",
+                message: "Unauthorized",
+            });
+        }
+        const robot = await Robot.findOne({
+            ...ownerIdFilter(req.user.id),
+            'recording_meta.id': req.params.id,
+        }).select('recording_meta.id').lean();
+        if (!robot) {
+            return res.status(404).json({
+                statusCode: 404,
+                messageCode: "not_found",
+                message: `Run with id "${req.params.runId}" for robot with id "${req.params.id}" not found.`,
+            });
+        }
         const run = await Run.findOne({
             runId: req.params.runId,
-            robotMetaId: req.params.id,
+            robotMetaId: robot.recording_meta.id,
         }).lean();
+        if (!run) {
+            return res.status(404).json({
+                statusCode: 404,
+                messageCode: "not_found",
+                message: `Run with id "${req.params.runId}" for robot with id "${req.params.id}" not found.`,
+            });
+        }
 
         const response = {
             statusCode: 200,
@@ -535,6 +580,7 @@ async function readyForRunHandler(browserId: string, id: string, userId: string,
 
 async function executeRun(id: string, userId: string, requestedFormats?: string[]) {
     let browser: any = null;
+    let disposeOutboundGuard: (() => Promise<void>) | undefined;
     
     try {
         const run = await Run.findOne({ runId: id });
@@ -561,7 +607,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
         if (retryCount >= 3) {
             logger.log('warn', `API Run ${id} has exceeded max retries (${retryCount}/3), marking as failed`);
         run.status = 'failed';
-        run.finishedAt = new Date().toLocaleString();
+        run.finishedAt = new Date().toISOString();
         run.log = `Max retries exceeded (${retryCount}/3) - Run permanently failed`;
         await run.save();
             return { success: false, error: 'Max retries exceeded' };
@@ -585,6 +631,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
             throw new Error('Could not create a new page');
         }
 
+        disposeOutboundGuard = await installOutboundBrowserContextGuard(currentPage.context());
         await applyAutomationRuntimeConfig(currentPage, recording);
 
         const robotType = (recording.recording_meta as any)?.type || (recording.recording_meta as any)?.robotType || 'extract';
@@ -687,7 +734,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                 }
 
                 run.status = 'success';
-                run.finishedAt = new Date().toLocaleString();
+                run.finishedAt = new Date().toISOString();
                 run.log = `${formats.join(', ')} conversion completed successfully`;
                 run.serializableOutput = serializableOutput;
                 run.binaryOutput = binaryOutput;
@@ -709,7 +756,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                         robotMetaId: plainRun.robotMetaId,
                         robotName: recording.recording_meta.name,
                         status: 'success',
-                        finishedAt: new Date().toLocaleString()
+                        finishedAt: new Date().toISOString()
                     };
 
                     serverIo
@@ -729,7 +776,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                     robot_name: recording.recording_meta.name,
                     status: 'success',
                     started_at: plainRun.startedAt,
-                    finished_at: new Date().toLocaleString(),
+                    finished_at: new Date().toISOString(),
                     metadata: {
                         browser_id: plainRun.browserId,
                         user_id: userId,
@@ -778,7 +825,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                 );
 
                 run.status = 'failed';
-                run.finishedAt = new Date().toLocaleString();
+                run.finishedAt = new Date().toISOString();
                 run.log = `${formats.join(', ')} conversion failed: ${error.message}`;
                 await run.save();
 
@@ -788,7 +835,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                         robotMetaId: plainRun.robotMetaId,
                         robotName: recording.recording_meta.name,
                         status: 'failed',
-                        finishedAt: new Date().toLocaleString(),
+                        finishedAt: new Date().toISOString(),
                         error: error.message
                     };
 
@@ -809,7 +856,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                         run_id: plainRun.runId,
                         robot_name: recording.recording_meta.name,
                         status: 'failed',
-                        finished_at: new Date().toLocaleString(),
+                        finished_at: new Date().toISOString(),
                         error: {
                             message: error.message,
                             type: 'ConversionError'
@@ -844,8 +891,14 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
         
         const INTERPRETATION_TIMEOUT = 600000;
 
-        const runtimeCfg = (plainRun.interpreterSettings as { runtimeConfig?: Record<string, unknown> } | undefined)
-            ?.runtimeConfig;
+        const runtimeCfg = resolveAutomationExecutionConfig(
+            recording,
+            (plainRun.interpreterSettings as { runtimeConfig?: Record<string, unknown> } | undefined)?.runtimeConfig
+        );
+        const executionSettings = {
+            ...(plainRun.interpreterSettings || {}),
+            runtimeConfig: runtimeCfg,
+        };
         const unblockOpts = getUnblockOptionsFromRuntimeConfig(runtimeCfg);
         await warmUpBeforeAutomation(currentPage, unblockOpts);
         const stopCloudflareNavWait = attachCloudflareWaitOnNavigation(currentPage.context(), unblockOpts);
@@ -853,7 +906,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
         let interpretationInfo;
         try {
             const interpretationPromise = browser.interpreter.InterpretRecording(
-                workflow, currentPage, (newPage: Page) => currentPage = newPage, plainRun.interpreterSettings
+                workflow, currentPage, (newPage: Page) => currentPage = newPage, executionSettings
             );
 
             const timeoutPromise = new Promise<never>((_, reject) => {
@@ -874,7 +927,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
         await destroyRemoteBrowser(plainRun.browserId, userId);
 
         run.status = 'success';
-            run.finishedAt = new Date().toLocaleString();
+            run.finishedAt = new Date().toISOString();
             run.log = interpretationInfo.log.join('\n');
             run.binaryOutput = uploadedBinaryOutput;
             await run.save();
@@ -887,7 +940,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                 robotMetaId: plainRun.robotMetaId,
                 robotName: recording.recording_meta.name,
                 status: 'success',
-                finishedAt: new Date().toLocaleString(),
+                finishedAt: new Date().toISOString(),
                 runByUserId: plainRun.runByUserId,
                 runByScheduleId: plainRun.runByScheduleId,
                 runByAPI: plainRun.runByAPI || false,
@@ -978,7 +1031,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
             robot_name: recording.recording_meta.name,
             status: "success",
             started_at: plainRun.startedAt,
-            finished_at: new Date().toLocaleString(),
+            finished_at: new Date().toISOString(),
             extracted_data: {
                 captured_texts: parsedSchema || {},
                 captured_lists: parsedList || {},
@@ -1027,7 +1080,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
             }
 
             run.status = 'failed';
-            run.finishedAt = new Date().toLocaleString();
+            run.finishedAt = new Date().toISOString();
             run.log = (run.log ? run.log + '\n' : '') + `Error: ${error.message}\n` + (error.stack ? error.stack : '');
             await run.save();
 
@@ -1038,7 +1091,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                     robotMetaId: run.robotMetaId,
                     robotName: recording ? recording.recording_meta.name : 'Unknown Robot',
                     status: 'failed',
-                    finishedAt: new Date().toLocaleString(),
+                    finishedAt: new Date().toISOString(),
                     runByUserId: run.runByUserId,
                     runByScheduleId: run.runByScheduleId,
                     runByAPI: run.runByAPI || false,
@@ -1059,7 +1112,7 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
                 robot_name: recording ? recording.recording_meta.name : 'Unknown Robot',
                 status: 'failed',
                 started_at: run.startedAt,
-                finished_at: new Date().toLocaleString(),
+                finished_at: new Date().toISOString(),
                 error: {
                     message: error.message,
                     stack: error.stack,
@@ -1094,6 +1147,8 @@ async function executeRun(id: string, userId: string, requestedFormats?: string[
             success: false,
             error: error.message,
         };
+    } finally {
+        await disposeOutboundGuard?.().catch(() => undefined);
     }
 }
 

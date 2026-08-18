@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   applySelectorPromotions,
   computeSelectorPromotions,
+  listNavigationAttempts,
   normalizeFieldSelectorList,
   normalizeListStartUrl,
   primaryItemSelector,
@@ -122,5 +123,21 @@ describe('waitForAsyncListHydration', () => {
     } as any;
     await expect(waitForAsyncListHydration(page, 'div.missing', 1500)).resolves.toBe(true);
     expect(page.evaluate).toHaveBeenCalled();
+  });
+});
+
+describe('listNavigationAttempts', () => {
+  it('keeps retrying a slow navigation within the scraper job budget', () => {
+    expect(listNavigationAttempts('https://example.com/jobs')).toEqual([
+      { waitUntil: 'domcontentloaded', timeout: 45_000 },
+      { waitUntil: 'commit', timeout: 20_000 },
+    ]);
+  });
+
+  it('gives Persistent its known HTTP/2-impaired navigation budget', () => {
+    expect(listNavigationAttempts('https://careers.persistent.com/explore-opportunities')).toEqual([
+      { waitUntil: 'domcontentloaded', timeout: 75_000 },
+      { waitUntil: 'commit', timeout: 20_000 },
+    ]);
   });
 });

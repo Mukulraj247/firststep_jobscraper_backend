@@ -16,12 +16,14 @@ import { convertPageToMarkdown, convertPageToHTML, convertPageToScreenshot } fro
 import { processRobotOutputFormats } from "../../utils/output-post-processor";
 import { getInterpretationFailureReason, hasExpectedRobotOutput } from "../../utils/output-validation";
 import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, persistExtractedDataForRun } from "../../services/automation";
+import { resolveAutomationExecutionConfig } from "../../services/automationConfigView";
 import {
   warmUpBeforeAutomation,
   getUnblockOptionsFromRuntimeConfig,
   attachCloudflareWaitOnNavigation,
 } from "../../services/unblocker";
 import { AddGeneratedFlags, withTimeout } from "../../utils/workflowHelpers";
+import { installOutboundBrowserContextGuard } from "../../services/listExtractor";
 
 async function createWorkflowAndStoreMetadata(id: string, userId: string) {
   try {
@@ -121,6 +123,7 @@ async function triggerIntegrationUpdates(runId: string, robotMetaId: string): Pr
 
 async function executeRun(id: string, userId: string) {
   let browser: any = null;
+  let disposeOutboundGuard: (() => Promise<void>) | undefined;
 
   try {
     const run = await Run.findOne({ runId: id });
@@ -155,7 +158,7 @@ async function executeRun(id: string, userId: string) {
       const recording: any = await Robot.findOne({ 'recording_meta.id': plainRun.robotMetaId, userId }).lean();
 
       run.status = 'failed';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       run.log = plainRun.log ? `${plainRun.log}\nMax retries exceeded (3/3) - Run failed after multiple attempts.` : `Max retries exceeded (3/3) - Run failed after multiple attempts.`;
       await run.save();
 
@@ -165,7 +168,7 @@ async function executeRun(id: string, userId: string) {
           robotMetaId: plainRun.robotMetaId,
           robotName: recording ? recording.recording_meta.name : 'Unknown Robot',
           status: 'failed',
-          finishedAt: new Date().toLocaleString()
+          finishedAt: new Date().toISOString()
         };
 
         getIo().of(run.browserId).emit('run-completed', failureSocketData);
@@ -198,6 +201,7 @@ async function executeRun(id: string, userId: string) {
       throw new Error('Could not create a new page');
     }
 
+    disposeOutboundGuard = await installOutboundBrowserContextGuard(currentPage.context());
     await applyAutomationRuntimeConfig(currentPage, recording);
 
     if (recording.recording_meta.type === 'scrape') {
@@ -295,7 +299,7 @@ async function executeRun(id: string, userId: string) {
         }
 
         run.status = 'success';
-        run.finishedAt = new Date().toLocaleString();
+        run.finishedAt = new Date().toISOString();
         run.log = `${formats.join(', ')} conversion completed successfully`;
         run.serializableOutput = serializableOutput;
         run.binaryOutput = binaryOutput;
@@ -318,7 +322,7 @@ async function executeRun(id: string, userId: string) {
             robotMetaId: plainRun.robotMetaId,
             robotName: recording.recording_meta.name,
             status: 'success',
-            finishedAt: new Date().toLocaleString()
+            finishedAt: new Date().toISOString()
           };
 
           getIo().of(plainRun.browserId).emit('run-completed', completionData);
@@ -337,7 +341,7 @@ async function executeRun(id: string, userId: string) {
           robot_name: recording.recording_meta.name,
           status: 'success',
           started_at: plainRun.startedAt,
-          finished_at: new Date().toLocaleString(),
+          finished_at: new Date().toISOString(),
           metadata: {
             browser_id: plainRun.browserId,
             user_id: userId,
@@ -379,7 +383,7 @@ async function executeRun(id: string, userId: string) {
         logger.log('error', `${formats.join(', ')} conversion failed for scheduled run ${id}: ${error.message}`);
 
         run.status = 'failed';
-        run.finishedAt = new Date().toLocaleString();
+        run.finishedAt = new Date().toISOString();
         run.log = `${formats.join(', ')} conversion failed: ${error.message}`;
         await run.save();
 
@@ -389,7 +393,7 @@ async function executeRun(id: string, userId: string) {
             robotMetaId: plainRun.robotMetaId,
             robotName: recording.recording_meta.name,
             status: 'failed',
-            finishedAt: new Date().toLocaleString()
+            finishedAt: new Date().toISOString()
           };
 
           getIo().of(plainRun.browserId).emit('run-completed', failureData);
@@ -440,8 +444,14 @@ async function executeRun(id: string, userId: string) {
 
     const INTERPRETATION_TIMEOUT = 600000;
 
-    const runtimeCfg = (plainRun.interpreterSettings as { runtimeConfig?: Record<string, unknown> } | undefined)
-      ?.runtimeConfig;
+    const runtimeCfg = resolveAutomationExecutionConfig(
+      recording,
+      (plainRun.interpreterSettings as { runtimeConfig?: Record<string, unknown> } | undefined)?.runtimeConfig
+    );
+    const executionSettings = {
+      ...(plainRun.interpreterSettings || {}),
+      runtimeConfig: runtimeCfg,
+    };
     const unblockOpts = getUnblockOptionsFromRuntimeConfig(runtimeCfg);
     await warmUpBeforeAutomation(currentPage, unblockOpts);
     const stopCloudflareNavWait = attachCloudflareWaitOnNavigation(currentPage.context(), unblockOpts);
@@ -449,7 +459,7 @@ async function executeRun(id: string, userId: string) {
     let interpretationInfo;
     try {
       const interpretationPromise = browser.interpreter.InterpretRecording(
-        workflow, currentPage, (newPage: Page) => currentPage = newPage, plainRun.interpreterSettings
+        workflow, currentPage, (newPage: Page) => currentPage = newPage, executionSettings
       );
 
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -519,7 +529,7 @@ async function executeRun(id: string, userId: string) {
     await destroyRemoteBrowser(plainRun.browserId, userId);
 
     run.status = 'success';
-    run.finishedAt = new Date().toLocaleString();
+    run.finishedAt = new Date().toISOString();
     run.log = interpretationInfo.log.join('\n');
     run.binaryOutput = uploadedBinaryOutput;
     await run.save();
@@ -571,7 +581,7 @@ async function executeRun(id: string, userId: string) {
         robotMetaId: plainRun.robotMetaId,
         robotName: recording.recording_meta.name,
         status: 'success',
-        finishedAt: new Date().toLocaleString()
+        finishedAt: new Date().toISOString()
       };
 
       getIo().of(plainRun.browserId).emit('run-completed', completionData);
@@ -586,7 +596,7 @@ async function executeRun(id: string, userId: string) {
       robot_name: recording.recording_meta.name,
       status: 'success',
       started_at: plainRun.startedAt,
-      finished_at: new Date().toLocaleString(),
+      finished_at: new Date().toISOString(),
       extracted_data: {
         captured_texts: Object.keys(categorizedOutput.scrapeSchema || {}).length > 0
           ? Object.entries(categorizedOutput.scrapeSchema).reduce((acc, [name, value]) => {
@@ -638,7 +648,7 @@ async function executeRun(id: string, userId: string) {
       }
 
       run.status = 'failed';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       await run.save();
 
       const recording: any = await Robot.findOne({ 'recording_meta.id': run.robotMetaId }).lean();
@@ -650,7 +660,7 @@ async function executeRun(id: string, userId: string) {
         robot_name: recording ? recording.recording_meta.name : 'Unknown Robot',
         status: 'failed',
         started_at: run.startedAt,
-        finished_at: new Date().toLocaleString(),
+        finished_at: new Date().toISOString(),
         error: {
           message: error.message,
           stack: error.stack,
@@ -675,7 +685,7 @@ async function executeRun(id: string, userId: string) {
           robotMetaId: run.robotMetaId,
           robotName: recording ? recording.recording_meta.name : 'Unknown Robot',
           status: 'failed',
-          finishedAt: new Date().toLocaleString()
+          finishedAt: new Date().toISOString()
         };
 
         getIo().of(run.browserId).emit('run-completed', failureSocketData);
@@ -694,6 +704,8 @@ async function executeRun(id: string, userId: string) {
       );
     }
     return false;
+  } finally {
+    await disposeOutboundGuard?.().catch(() => undefined);
   }
 }
 

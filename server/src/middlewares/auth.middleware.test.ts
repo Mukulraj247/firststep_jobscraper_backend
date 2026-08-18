@@ -29,7 +29,7 @@ describe('requireSignInOrApiKey', () => {
 
     await requireSignInOrApiKey(req, res, next);
 
-    expect(User.findOne).toHaveBeenCalledWith({ where: { api_key: 'secret-key' } });
+    expect(User.findOne).toHaveBeenCalledWith({ api_key: 'secret-key' });
     expect(next).toHaveBeenCalledTimes(1);
     expect((req as { user?: { id: number } }).user).toEqual({ id: 42 });
   });

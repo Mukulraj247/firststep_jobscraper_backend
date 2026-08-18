@@ -29,4 +29,10 @@ describe('normalizeAutomationUrl', () => {
   it('rejects non-http schemes', () => {
     expect(() => normalizeAutomationUrl('ftp://example.com')).toThrow(/http/);
   });
+
+  it('rejects embedded credentials', () => {
+    expect(() => normalizeAutomationUrl('https://user:secret@example.com/jobs')).toThrow(
+      /credentials/i
+    );
+  });
 });

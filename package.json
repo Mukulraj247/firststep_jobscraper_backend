@@ -92,7 +92,7 @@
     "worker:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/worker.ts",
     "worker:scheduler:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/schedule-worker.ts",
     "worker:enrichment:dev": "cross-env UV_THREADPOOL_SIZE=8 NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/enrichmentWorker.ts",
-    "client": "vite",
+    "client": "cross-env NODE_OPTIONS=--max-old-space-size=4096 vite",
     "build": "vite build",
     "install:ci": "npm ci --include=dev",
     "build:render-worker": "npm run install:ci && npm run build:server && npm run playwright:install",
@@ -110,8 +110,11 @@
     "camoufox:server:win": "py -3 server/src/services/camoufox-server.py",
     "playwright:install": "npx playwright@1.58.0 install chromium",
     "migrate:extracted": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/migrateExtractedCanonical.ts",
+    "backfill:run-list-fields": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/backfillRunListFields.ts",
     "backfill:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/backfillJobBoardFromExtracted.ts",
-    "repair:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/repairJobBoardDescriptions.ts"
+    "repair:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/repairJobBoardDescriptions.ts",
+    "repack:schedules": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/repackAllSchedules.ts",
+    "sync:agenda:production": "cross-env TS_NODE_TRANSPILE_ONLY=1 AGENDA_COLLECTION=agendaJobs npx ts-node --project server/tsconfig.json server/src/scripts/syncProductionAgenda.ts"
   },
   "overrides": {
     "playwright-core": "1.58.0"
@@ -120,6 +123,9 @@
     "@eslint/js": "^9.39.4",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@playwright/test": "^1.58.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.4",
     "@types/cookie-parser": "^1.4.7",
     "@types/express": "^4.17.13",
     "@types/js-cookie": "^3.0.6",
@@ -143,12 +149,14 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^15.15.0",
     "js-cookie": "^3.0.5",
+    "jsdom": "^25.0.1",
     "nodemon": "^2.0.15",
     "ts-node": "^10.4.0",
     "typedoc": "^0.23.8",
     "typescript-eslint": "^8.58.1",
     "vite": "^5.4.10",
     "vitest": "^2.1.9",
+    "vitest-axe": "^0.1.0",
     "zod": "^3.25.62"
   }
 }

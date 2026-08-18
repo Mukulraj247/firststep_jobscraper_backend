@@ -1,6 +1,33 @@
 import axios from 'axios';
 import { apiUrl } from '../apiConfig';
 
+export type AutomationDestinationType = 'webhook' | 'airtable' | 'database' | 'none';
+
+/** Browser-safe read model. Secret fields are accepted only by write payloads. */
+export interface PublicAutomationConfig {
+  schedule?: Record<string, unknown>;
+  performance?: Record<string, unknown>;
+  destinations?: {
+    webhook?: { enabled?: boolean; retryAttempts?: number; retryDelaySeconds?: number; timeoutSeconds?: number };
+    googleSheets?: { enabled?: boolean; spreadsheetId?: string; sheetName?: string };
+    airtable?: { enabled?: boolean; baseId?: string; tableName?: string };
+    database?: { enabled?: boolean; type?: 'postgres' | 'mysql'; tableName?: string };
+  };
+  userAgent?: string;
+  dataCleanup?: Record<string, unknown>;
+  pagination?: Record<string, unknown>;
+  popups?: Record<string, unknown>;
+  captcha?: Record<string, unknown>;
+  listExtraction?: Record<string, unknown>;
+  screenshots?: Record<string, unknown>;
+  columnOverrides?: ColumnOverridesMap;
+  databaseTargetColumns?: string[];
+  rowContext?: RowContextFields;
+  webhookConfigured: boolean;
+  proxyConfigured: boolean;
+  destinationType?: AutomationDestinationType;
+}
+
 export interface AutomationSummary {
   id: string;
   /** Parallel Scout-X scrape ID (SX12AB34). */
@@ -17,8 +44,10 @@ export interface AutomationSummary {
   latestRunId?: string | null;
   latestFailureReason?: string | null;
   latestFailureReasonSource?: string | null;
-  webhookUrl?: string;
-  config?: Record<string, any>;
+  webhookConfigured: boolean;
+  proxyConfigured: boolean;
+  destinationType?: AutomationDestinationType;
+  config?: PublicAutomationConfig;
   schedule?: {
     enabled?: boolean;
     cron?: string;
@@ -106,7 +135,10 @@ export const getDashboardAutomations = async (params?: {
   page?: number;
   limit?: number;
   tags?: string[];
-}): Promise<DashboardAutomationsResponse> => {
+  q?: string;
+  id?: string;
+  scheduleCron?: string;
+}, signal?: AbortSignal): Promise<DashboardAutomationsResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 10;
   const response = await axios.get(`${apiUrl}/api/dashboard/automations`, {
@@ -114,8 +146,12 @@ export const getDashboardAutomations = async (params?: {
       page,
       limit,
       ...(params?.tags?.length ? { tags: params.tags.join(',') } : {}),
+      ...(params?.q ? { q: params.q } : {}),
+      ...(params?.id ? { id: params.id } : {}),
+      ...(params?.scheduleCron ? { scheduleCron: params.scheduleCron } : {}),
     },
     withCredentials: true,
+    signal,
   });
   const data = response.data || {};
   return {
@@ -130,6 +166,70 @@ export const getDashboardAutomations = async (params?: {
       failedCount: 0,
     },
   };
+};
+
+export type OpsMetricsWindow = '15m' | '30m' | '1h' | '3h' | '6h' | '24h';
+
+export type OpsMetricsResponse = {
+  generatedAt: string;
+  window: OpsMetricsWindow;
+  windowMs: number;
+  since: string;
+  totals: {
+    runs: number;
+    passed: number;
+    failed: number;
+    running: number;
+    rowsExtracted: number;
+    jobsAddedToBoard: number;
+    activeRunsNow: number;
+    automations: number;
+  };
+  series: {
+    runs: Array<{ t: number; label: string; total: number; passed: number; failed: number }>;
+    jobsAdded: Array<{ t: number; label: string; jobsAdded: number }>;
+  };
+  tags: Array<{
+    tag: string;
+    label: string;
+    namespace: string;
+    namespaceLabel: string;
+    jobsAdded: number;
+    runs: number;
+  }>;
+  upcomingSchedules: {
+    automationsWithRuns: number;
+    totalScheduledRuns: number;
+    activeScheduledAutomations: number;
+    forecastFrom: string;
+    forecastUntil: string;
+  };
+  compute: {
+    scraperWorkerConcurrency: number;
+    scraperJobTimeoutMs: number;
+    runEmbeddedWorkers: boolean;
+    activeBrowsers: number;
+    activeBrowserIds: string[];
+    memoryUsage: {
+      rss: number;
+      heapTotal: number;
+      heapUsed: number;
+      external: number;
+      arrayBuffers?: number;
+    };
+    uptimeSeconds: number;
+  };
+  digitalOcean: any;
+};
+
+export const getDashboardMetrics = async (
+  window: OpsMetricsWindow = '1h'
+): Promise<OpsMetricsResponse> => {
+  const response = await axios.get(`${apiUrl}/api/dashboard/metrics`, {
+    params: { window },
+    withCredentials: true,
+  });
+  return response.data;
 };
 
 export interface SaasRunsListResponse {
@@ -152,7 +252,15 @@ export const listSaasRuns = async (params?: {
   anomaly?: string;
   failureReason?: string;
   q?: string;
-}): Promise<SaasRunsListResponse> => {
+  date?: string;
+  from?: string;
+  to?: string;
+  minJobsAdded?: number;
+  maxJobsAdded?: number;
+  jobsAddedExact?: number;
+  minDurationMs?: number;
+  maxDurationMs?: number;
+}, signal?: AbortSignal): Promise<SaasRunsListResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 10;
   const response = await axios.get(`${apiUrl}/api/runs`, {
@@ -164,8 +272,17 @@ export const listSaasRuns = async (params?: {
       ...(params?.anomaly ? { anomaly: params.anomaly } : {}),
       ...(params?.failureReason ? { failureReason: params.failureReason } : {}),
       ...(params?.q ? { q: params.q } : {}),
+      ...(params?.date ? { date: params.date } : {}),
+      ...(params?.from ? { from: params.from } : {}),
+      ...(params?.to ? { to: params.to } : {}),
+      ...(params?.minJobsAdded != null ? { minJobsAdded: params.minJobsAdded } : {}),
+      ...(params?.maxJobsAdded != null ? { maxJobsAdded: params.maxJobsAdded } : {}),
+      ...(params?.jobsAddedExact != null ? { jobsAddedExact: params.jobsAddedExact } : {}),
+      ...(params?.minDurationMs != null ? { minDurationMs: params.minDurationMs } : {}),
+      ...(params?.maxDurationMs != null ? { maxDurationMs: params.maxDurationMs } : {}),
     },
     withCredentials: true,
+    signal,
   });
   const data = response.data || {};
   return {
@@ -173,6 +290,84 @@ export const listSaasRuns = async (params?: {
     pagination: data.pagination || { page: 1, limit, total: 0, totalPages: 1 },
     countsByReason: data.countsByReason || {},
   };
+};
+
+export type SaasRunsListParams = {
+  page?: number;
+  limit?: number;
+  robotMetaId?: string;
+  status?: string;
+  anomaly?: string;
+  failureReason?: string;
+  q?: string;
+  date?: string;
+  from?: string;
+  to?: string;
+  minJobsAdded?: number;
+  maxJobsAdded?: number;
+  jobsAddedExact?: number;
+  minDurationMs?: number;
+  maxDurationMs?: number;
+};
+
+export interface SaasRunGroup {
+  robotMetaId: string;
+  name: string;
+  companyName?: string;
+  runCount: number;
+  latestRun: any;
+}
+
+export interface SaasRunGroupsResponse {
+  groups: SaasRunGroup[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+/** Paginated automation groups for the All Runs list (`GET /api/runs/groups`). */
+export const listSaasRunGroups = async (
+  params?: SaasRunsListParams,
+  signal?: AbortSignal
+): Promise<SaasRunGroupsResponse> => {
+  const page = params?.page ?? 1;
+  const limit = params?.limit ?? 10;
+  const response = await axios.get(`${apiUrl}/api/runs/groups`, {
+    params: {
+      page,
+      limit,
+      ...(params?.robotMetaId ? { robotMetaId: params.robotMetaId } : {}),
+      ...(params?.status ? { status: params.status } : {}),
+      ...(params?.anomaly ? { anomaly: params.anomaly } : {}),
+      ...(params?.failureReason ? { failureReason: params.failureReason } : {}),
+      ...(params?.q ? { q: params.q } : {}),
+      ...(params?.date ? { date: params.date } : {}),
+      ...(params?.from ? { from: params.from } : {}),
+      ...(params?.to ? { to: params.to } : {}),
+      ...(params?.minJobsAdded != null ? { minJobsAdded: params.minJobsAdded } : {}),
+      ...(params?.maxJobsAdded != null ? { maxJobsAdded: params.maxJobsAdded } : {}),
+      ...(params?.jobsAddedExact != null ? { jobsAddedExact: params.jobsAddedExact } : {}),
+      ...(params?.minDurationMs != null ? { minDurationMs: params.minDurationMs } : {}),
+      ...(params?.maxDurationMs != null ? { maxDurationMs: params.maxDurationMs } : {}),
+    },
+    withCredentials: true,
+    signal,
+  });
+  const data = response.data || {};
+  return {
+    groups: data.groups || [],
+    pagination: data.pagination || { page, limit, total: 0, totalPages: 1 },
+  };
+};
+
+export const deleteSaasRun = async (runId: string): Promise<boolean> => {
+  const response = await axios.delete(`${apiUrl}/api/runs/${encodeURIComponent(runId)}`, {
+    withCredentials: true,
+  });
+  return response.data?.success === true || response.status === 200;
 };
 
 export const createAutomation = async (payload: {
@@ -213,6 +408,18 @@ export const runAutomation = async (id: string) => {
   return response.data;
 };
 
+export const retryRun = async (runId: string, idempotencyKey: string) => {
+  const response = await axios.post(
+    `${apiUrl}/api/runs/${runId}/retry`,
+    {},
+    {
+      withCredentials: true,
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }
+  );
+  return response.data;
+};
+
 export const getAutomationData = async (id: string, page: number, limit: number): Promise<AutomationDataResponse> => {
   const response = await axios.get(`${apiUrl}/api/automations/${id}/data?page=${page}&limit=${limit}`, {
     withCredentials: true,
@@ -223,6 +430,45 @@ export const getAutomationData = async (id: string, page: number, limit: number)
 export const getSaasRun = async (id: string) => {
   const response = await axios.get(`${apiUrl}/api/runs/${id}`, { withCredentials: true });
   return response.data;
+};
+
+export type RunDetailRowsResponse = {
+  rows: Array<{ id: string; source: string; createdAt: string | null; data: Record<string, any> }>;
+  nextCursor: string | null;
+};
+
+export const getSaasRunRows = async (
+  id: string,
+  cursor?: string | null,
+  limit: number = 100
+): Promise<RunDetailRowsResponse> => {
+  const response = await axios.get(`${apiUrl}/api/runs/${id}/rows`, {
+    params: { limit, ...(cursor ? { cursor } : {}) },
+    withCredentials: true,
+  });
+  return { rows: response.data?.rows || [], nextCursor: response.data?.nextCursor || null };
+};
+
+export type RunDetailLogsResponse = {
+  logs: string[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+export const getSaasRunLogs = async (
+  id: string,
+  cursor?: string | null,
+  limit: number = 100
+): Promise<RunDetailLogsResponse> => {
+  const response = await axios.get(`${apiUrl}/api/runs/${id}/logs`, {
+    params: { limit, ...(cursor ? { cursor } : {}) },
+    withCredentials: true,
+  });
+  return {
+    logs: response.data?.logs || [],
+    nextCursor: response.data?.nextCursor || null,
+    hasMore: response.data?.hasMore === true,
+  };
 };
 
 export const updateRunFailureReason = async (
@@ -268,6 +514,16 @@ export const stopAllAutomationSchedules = async (): Promise<{ success: boolean; 
 /** Resumes every paused schedule for your account (same cron/timezone as before pause). */
 export const resumeAllAutomationSchedules = async (): Promise<{ success: boolean; resumedCount: number }> => {
   const response = await axios.post(`${apiUrl}/api/automations/schedules/resume-all`, {}, { withCredentials: true });
+  return response.data;
+};
+
+/** Re-spread all enabled schedules with random packed first-fire times. */
+export const repackAllAutomationSchedules = async (): Promise<{
+  success: boolean;
+  repackedCount: number;
+  skippedCount: number;
+}> => {
+  const response = await axios.post(`${apiUrl}/api/automations/schedules/repack-all`, {}, { withCredentials: true });
   return response.data;
 };
 

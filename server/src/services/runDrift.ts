@@ -88,6 +88,19 @@ const DEFAULT_CONFIG: DriftConfig = {
   escalationStreak: 2,
 };
 
+/**
+ * A single page-shell match can inflate one otherwise healthy extraction.
+ * Use the median of recent good runs so that one outlier cannot turn normal
+ * subsequent runs into false row-drop alerts.
+ */
+export function selectStableRowBaseline(rowCounts: number[]): number | null {
+  const sorted = rowCounts
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (sorted.length === 0) return null;
+  return sorted[Math.floor((sorted.length - 1) / 2)];
+}
+
 function isSoftRowDrop(run: RecentFinishedRun | null | undefined): boolean {
   if (!run) return false;
   return run.anomaly === 'row_drop' && !run.escalated;
@@ -244,7 +257,8 @@ export type BaselineLookup = {
 };
 
 /**
- * Last good run: completed/success, anomaly == null, rowsExtracted > 0.
+ * Stable recent good baseline: median of the latest completed/success runs
+ * with no anomaly and rowsExtracted > 0.
  * Else previewRows.length. Else none.
  */
 export async function getBaselineForRobot(
@@ -262,14 +276,18 @@ export async function getBaselineForRobot(
     query.runId = { $ne: excludeRunId };
   }
 
-  const lastGood = await Run.findOne(query)
+  const recentGoodRuns = await Run.find(query)
     .sort({ _id: -1 })
     .select('rowsExtracted')
+    .limit(5)
     .lean();
 
-  if (lastGood && typeof (lastGood as any).rowsExtracted === 'number' && (lastGood as any).rowsExtracted > 0) {
+  const baseline = selectStableRowBaseline(
+    recentGoodRuns.map((run: any) => Number(run.rowsExtracted))
+  );
+  if (baseline != null) {
     return {
-      baseline: Number((lastGood as any).rowsExtracted),
+      baseline,
       baselineSource: 'last_good_run',
     };
   }

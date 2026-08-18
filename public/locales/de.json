@@ -110,7 +110,8 @@
         "proxy": "Proxy",
         "apikey": "API-Schlüssel",
         "feedback": "Maxun Cloud beitreten",
-        "apidocs": "Website zu API"
+        "apidocs": "Website zu API",
+        "collapse": "Einklappen"
     },
     "jobboard": {
         "heading": "Job board",
@@ -157,11 +158,61 @@
         "settings": "Einstellungen",
         "search": "Ausführungen suchen...",
         "sort_tooltip": "Zum Sortieren klicken",
+        "retry": "Erneut versuchen",
+        "rows_per_page": "Ausführungen pro Seite",
+        "automations_per_page": "Automatisierungen pro Seite",
+        "automation_count": "{{count}} Automatisierungen",
+        "load_error": "Ausführungen konnten nicht geladen werden. Bitte erneut versuchen.",
         "placeholder": {
             "title": "Keine Durchläufe gefunden",
             "body": "Hier werden alle Ihre Roboter-Durchläufe angezeigt. Sobald ein Roboter aktiv ist, werden seine Durchläufe hier protokolliert.",
-            "search": "Keine Durchläufe entsprechen Ihrer Suche"
-        },  
+            "search": "Keine Durchläufe entsprechen Ihrer Suche",
+            "filtered": "Keine Ausführungen entsprechen den Filtern. Filter zurücksetzen, um alle Automatisierungen zu sehen."
+        },
+        "filters": {
+            "search_label": "Suche",
+            "date": "Datum",
+            "status_label": "Status",
+            "jobs_label": "Jobs hinzugefügt",
+            "duration_label": "Dauer",
+            "clear_all": "Alle löschen",
+            "showing_range": "{{from}}–{{to}} von {{total}}",
+            "pill_search": "Suche: {{q}}",
+            "pill_date": "Datum: {{date}}",
+            "pill_status": "Status: {{status}}",
+            "pill_jobs": "Jobs: {{jobs}}",
+            "pill_duration": "Dauer: {{duration}}",
+            "status": {
+                "any": "Alle",
+                "running": "Läuft",
+                "queued": "Warteschlange / ausstehend",
+                "completed": "Abgeschlossen",
+                "failed": "Fehlgeschlagen",
+                "aborted": "Abgebrochen",
+                "scheduled": "Geplant",
+                "dead": "Tot"
+            },
+            "jobs": {
+                "any": "Alle",
+                "exactly0": "Genau 0",
+                "moreThan2": "Mehr als 2",
+                "moreThan3": "Mehr als 3",
+                "moreThan4": "Mehr als 4"
+            },
+            "duration": {
+                "any": "Alle",
+                "lt5": "< 5 Min.",
+                "lt30": "< 30 Min.",
+                "gt30": "> 30 Min.",
+                "gt60": "> 1 Stunde"
+            }
+        },
+        "group": {
+            "untitled": "Automatisierung",
+            "last_run": "Zuletzt: {{time}}",
+            "jobs": "{{count}} Jobs",
+            "run_count": "{{count}} Ausführungen"
+        },
         "notifications": {
             "no_runs": "Keine Ausführungen gefunden. Bitte versuchen Sie es erneut.",
             "delete_success": "Ausführung erfolgreich gelöscht"
@@ -647,6 +698,7 @@
         },
         "loading": "Daten werden geladen...",
         "empty_output": "Keine Ausgabedaten verfügbar",
+        "empty_log": "Für diese Ausführung sind noch keine Protokolle vorhanden.",
         "captured_data": {
             "title": "Erfasste Daten",
             "download_csv": "CSV herunterladen",

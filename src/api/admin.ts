@@ -224,6 +224,7 @@ export type AdminAutomationSummary = {
   lastRunTime?: string | null;
   rowsExtracted?: number;
   latestRunId?: string | null;
+  webhookConfigured?: boolean;
   webhookUrl?: string;
   schedule?: AdminAutomationSchedule;
   ownerUserId?: string | null;

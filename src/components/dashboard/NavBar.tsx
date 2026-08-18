@@ -20,7 +20,8 @@ import {
   GitHub,
   LightMode,
   DarkMode,
-  Translate
+  Translate,
+  Menu as MenuIcon,
 } from "@mui/icons-material";
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../../context/auth';
@@ -29,6 +30,7 @@ import DiscordIcon from '../icons/DiscordIcon';
 import { apiUrl } from '../../apiConfig';
 import ScoutXLogo from "../../assets/scoutx-logo.png";
 import { useThemeMode } from '../../context/theme-provider';
+import { HAMBURGER_BUTTON_ID, shouldShowHamburger, useAppShellNav } from './AppShell';
 
 interface NavBarProps {
   recordingName: string;
@@ -45,6 +47,8 @@ export const NavBar: React.FC<NavBarProps> = ({
   const navigate = useNavigate();
   const { darkMode, toggleTheme } = useThemeMode();
   const { t, i18n } = useTranslation();
+  const { isMobile, shellMounted, drawerOpen, openDrawer } = useAppShellNav();
+  const showHamburger = shouldShowHamburger(isMobile, shellMounted);
 
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
@@ -118,7 +122,7 @@ export const NavBar: React.FC<NavBarProps> = ({
       <IconButton
         onClick={toggleTheme}
         sx={{
-          color: darkMode ? '#ffffff' : '#0000008A',
+          color: darkMode ? '#ffffff' : '#023345',
           '&:hover': {
             background: 'inherit'
           }
@@ -132,7 +136,23 @@ export const NavBar: React.FC<NavBarProps> = ({
   return (
     <>
       <NavBarWrapper mode={darkMode ? 'dark' : 'light'}>
-        <NavBarStart />
+        <NavBarStart>
+          {showHamburger ? (
+            <IconButton
+              id={HAMBURGER_BUTTON_ID}
+              onClick={openDrawer}
+              aria-label="Open navigation"
+              aria-controls="app-shell-drawer"
+              aria-expanded={drawerOpen}
+              sx={{
+                color: darkMode ? '#ffffff' : '#023345',
+                '&:hover': { background: 'inherit' },
+              }}
+            >
+              <MenuIcon />
+            </IconButton>
+          ) : null}
+        </NavBarStart>
         <NavBarLogoCenter
           role="button"
           tabIndex={0}
@@ -394,16 +414,16 @@ export const NavBar: React.FC<NavBarProps> = ({
   );
 };
 
-const NavBarWrapper = styled.div<{ mode: 'light' | 'dark' }>`
+const NavBarWrapper = styled.header<{ mode: 'light' | 'dark' }>`
   grid-area: navbar;
   position: relative;
-  background-color: ${({ mode }) => (mode === 'dark' ? '#000000ff' : '#ffffff')};
+  background-color: ${({ mode }) => (mode === 'dark' ? '#080808ff' : '#ffffff')};
   padding: 6px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: 56px;
-  border-bottom: 1px solid ${({ mode }) => (mode === 'dark' ? '#000000ff' : '#e0e0e0')};
+  border-bottom: 1px solid ${({ mode }) => (mode === 'dark' ? '#1a1a1a' : 'rgba(2, 51, 69, 0.12)')};
 `;
 
 const NavBarStart = styled.div`

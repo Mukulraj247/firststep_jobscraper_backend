@@ -1,26 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Chip, LinearProgress, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { Box, Button, Chip, LinearProgress, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AUTOMATION_ROW_CONTEXT_KEYS, getSaasRun, updateRunFailureReason } from '../api/automation';
+import {
+  AUTOMATION_ROW_CONTEXT_KEYS,
+  getSaasRun,
+  getSaasRunLogs,
+  getSaasRunRows,
+  updateRunFailureReason,
+} from '../api/automation';
+import {
+  nextTrackedRunStatus,
+  shouldRefreshRunDetails,
+} from '../utils/runDetailsPolling';
 
 const RUN_DETAIL_COLUMN_LABELS: Record<string, string> = {
   sectorIndustry: 'Sector / industry',
   f500: 'F500',
 };
 import { useGlobalInfoStore } from '../context/globalInfo';
-
-const renderScreenshot = (payload: any) => {
-  if (!payload) return null;
-  if (typeof payload === 'string') {
-    return <img src={payload} alt="run screenshot" style={{ maxWidth: '100%', borderRadius: 8 }} />;
-  }
-  if (payload.data) {
-    return <img src={`data:${payload.mimeType || 'image/png'};base64,${payload.data}`} alt="run screenshot" style={{ maxWidth: '100%', borderRadius: 8 }} />;
-  }
-  return <pre>{JSON.stringify(payload, null, 2)}</pre>;
-};
 
 const ACTIVE_STATUSES = new Set(['running', 'pending', 'queued']);
 
@@ -29,6 +27,11 @@ export const RunDetailsPage = () => {
   const navigate = useNavigate();
   const { notify } = useGlobalInfoStore();
   const [data, setData] = useState<any>(null);
+  const [rows, setRows] = useState<any[]>([]);
+  const [rowsCursor, setRowsCursor] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logsCursor, setLogsCursor] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadRun = useCallback(async () => {
@@ -41,6 +44,29 @@ export const RunDetailsPage = () => {
         notify('error', error?.response?.data?.error || 'Failed to load run details');
       }
       return null;
+    }
+  }, [id, notify]);
+
+  const loadRows = useCallback(async (cursor?: string | null, append = false) => {
+    try {
+      setDetailLoading(true);
+      const result = await getSaasRunRows(id, cursor);
+      setRows((current) => (append ? [...current, ...result.rows] : result.rows));
+      setRowsCursor(result.nextCursor);
+    } catch (error: any) {
+      notify('error', error?.response?.data?.error || 'Failed to load run rows');
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [id, notify]);
+
+  const loadLogs = useCallback(async (cursor?: string | null, append = false) => {
+    try {
+      const result = await getSaasRunLogs(id, cursor);
+      setLogs((current) => (append ? [...result.logs, ...current] : result.logs));
+      setLogsCursor(result.nextCursor);
+    } catch (error: any) {
+      notify('error', error?.response?.data?.error || 'Failed to load run logs');
     }
   }, [id, notify]);
 
@@ -61,16 +87,33 @@ export const RunDetailsPage = () => {
 
   // Initial load + polling while run is active
   useEffect(() => {
+    setRows([]);
+    setLogs([]);
+    setRowsCursor(null);
+    setLogsCursor(null);
     loadRun().then((result) => {
+      if (result) {
+        void loadRows();
+        void loadLogs();
+      }
       if (result && ACTIVE_STATUSES.has(result.run?.status)) {
+        let previousStatus = result.run?.status;
         pollRef.current = setInterval(async () => {
           const updated = await loadRun();
-          if (updated && !ACTIVE_STATUSES.has(updated.run?.status)) {
+          const nextStatus = updated?.run?.status;
+          if (updated && shouldRefreshRunDetails(previousStatus, nextStatus)) {
             if (pollRef.current) {
               clearInterval(pollRef.current);
               pollRef.current = null;
             }
+            setRowsCursor(null);
+            setLogsCursor(null);
+            await Promise.all([
+              loadRows(null, false),
+              loadLogs(null, false),
+            ]);
           }
+          previousStatus = nextTrackedRunStatus(previousStatus, nextStatus);
         }, 3000);
       }
     });
@@ -81,19 +124,19 @@ export const RunDetailsPage = () => {
         pollRef.current = null;
       }
     };
-  }, [loadRun]);
+  }, [loadLogs, loadRows, loadRun]);
 
   const columns = useMemo<string[]>(() => {
-    if (!data?.extractedRows?.length) return [];
+    if (!rows.length) return [];
     const keySet = new Set<string>();
-    data.extractedRows.forEach((row: any) => {
+    rows.forEach((row: any) => {
       Object.keys(row.data || {}).forEach((k) => keySet.add(k));
     });
     const keys = Array.from(keySet);
     const ctxSet = new Set<string>(AUTOMATION_ROW_CONTEXT_KEYS);
     const rest = keys.filter((k) => !ctxSet.has(k)).sort((a, b) => a.localeCompare(b));
     return [...AUTOMATION_ROW_CONTEXT_KEYS.filter((k) => keys.includes(k)), ...rest];
-  }, [data]);
+  }, [rows]);
 
   if (!data) {
     return <Box sx={{ p: 4 }}><Typography>Loading run details...</Typography></Box>;
@@ -220,7 +263,7 @@ export const RunDetailsPage = () => {
 
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" mb={2}>Extracted Rows</Typography>
-        {!data.extractedRows?.length ? (
+        {!rows.length ? (
           <Typography variant="body2" color="text.secondary">
             No row history for this run. That usually means nothing was extracted (0 matches on the page), or data has not been persisted yet.
             Check <strong>Logs</strong> below and confirm selectors match the live site. Use <strong>View Data</strong> for all stored rows for this automation.
@@ -236,7 +279,7 @@ export const RunDetailsPage = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {data.extractedRows.map((row: any) => (
+              {rows.map((row: any) => (
                 <TableRow key={row.id}>
                   <TableCell>{row.source}</TableCell>
                   {columns.map((column: string) => (
@@ -251,33 +294,23 @@ export const RunDetailsPage = () => {
             </TableBody>
           </Table>
         )}
+        {rowsCursor ? (
+          <Button sx={{ mt: 2 }} disabled={detailLoading} onClick={() => void loadRows(rowsCursor, true)}>
+            Load more rows
+          </Button>
+        ) : null}
       </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" mb={2}>Logs</Typography>
         <Box component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: 13, m: 0, maxHeight: 320, overflow: 'auto' }}>
-          {(data.logs || []).join('\n') || 'No logs recorded.'}
+          {logs.join('\n') || 'No logs recorded.'}
         </Box>
-      </Paper>
-
-      <Paper sx={{ p: 3 }}>
-        <Typography variant="h6" mb={2}>Screenshots</Typography>
-        {data.run.screenshots?.length ? (
-          <Stack spacing={2}>
-            {data.run.screenshots.map((shot: any) => (
-              <Accordion key={shot.key} defaultExpanded>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography>{shot.key}</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  {renderScreenshot(shot.value)}
-                </AccordionDetails>
-              </Accordion>
-            ))}
-          </Stack>
-        ) : (
-          <Typography color="text.secondary">No screenshots available for this run.</Typography>
-        )}
+        {logsCursor ? (
+          <Button sx={{ mt: 2 }} onClick={() => void loadLogs(logsCursor, true)}>
+            Load older logs
+          </Button>
+        ) : null}
       </Paper>
     </Box>
   );

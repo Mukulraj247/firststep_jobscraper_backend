@@ -57,7 +57,7 @@ export const SocketProvider = ({ children }: { children: JSX.Element }) => {
     const newQueueSocket = io(`${SERVER_ENDPOINT}/queued-run`, {
       transports: ["websocket", "polling"],
       rejectUnauthorized: false,
-      query: { userId }
+      withCredentials: true
     });
 
     newQueueSocket.on('connect', () => {

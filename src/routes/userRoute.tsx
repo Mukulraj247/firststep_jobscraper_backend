@@ -37,7 +37,7 @@ const UserRoute = () => {
     }, [location.pathname]);
     
     if (isCheckingAuth) {
-        return null; 
+        return null;
     }
     
     if (location.pathname === '/recording') {

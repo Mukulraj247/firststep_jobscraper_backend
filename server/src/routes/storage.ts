@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import logger from "../logger";
 import { createRemoteBrowserForRun, destroyRemoteBrowser, getActiveBrowserIdByState } from "../browser-management/controller";
 import { browserPool } from "../server";
@@ -15,6 +16,10 @@ import { encrypt } from '../utils/auth';
 import { cancelScheduledWorkflow, scheduleWorkflow } from '../storage/schedule';
 import { enqueueScraperRun, enqueueAbortRun, enqueueExecuteRun } from '../queue/scraperQueue';
 import { getAutomationConfig } from '../services/automation';
+import {
+  toOperationalRunConfig,
+  toPublicRunDto,
+} from '../services/automationConfigView';
 import { recoverOrphanedRuns } from '../services/orphanRunRecovery';
 export { recoverOrphanedRuns };
 import {
@@ -26,7 +31,7 @@ import {
 } from '../constants/output-formats';
 import { processWorkflowActions } from '../utils/workflowHelpers';
 import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
-import { buildRobotListSummary, pickLatestRun } from '../utils/robotListSummary';
+import { buildRecordingsSummary, buildRobotListSummary, pickLatestRun } from '../utils/robotListSummary';
 import {
   clampCrawlLimit,
   clampSearchLimit,
@@ -137,6 +142,43 @@ router.get('/recordings', requireSignIn, async (req: AuthenticatedRequest, res) 
   } catch (e) {
     logger.log('info', `Error while reading robots: ${e}`);
     return res.status(500).send({ error: 'Failed to retrieve robots' });
+  }
+});
+
+router.get('/recordings/summary', requireSignIn, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).send({ error: 'Unauthorized' });
+    }
+
+    const filter: any = { ...ownerIdFilter(req.user.id) };
+    const [total, robots] = await Promise.all([
+      Robot.countDocuments(filter),
+      Robot.find(filter)
+        .select({ recording_meta: 1, schedule: 1, userId: 1 })
+        .sort({ _id: -1 })
+        .lean(),
+    ]);
+
+    const metaIds = robots.map((r: any) => r.recording_meta?.id).filter(Boolean);
+    const latestRuns = metaIds.length
+      ? await Run.aggregate([
+          { $match: { robotMetaId: { $in: metaIds } } },
+          { $sort: { startedAt: -1, _id: -1 } },
+          { $group: { _id: '$robotMetaId', doc: { $first: '$$ROOT' } } },
+        ])
+      : [];
+    const runByMeta = new Map(latestRuns.map((x: any) => [x._id, x.doc]));
+
+    const summaries = robots.map((r: any) => {
+      const latest = runByMeta.get(r.recording_meta?.id);
+      return buildRobotListSummary(r, pickLatestRun(latest ? [latest] : []));
+    });
+
+    return res.send(buildRecordingsSummary(summaries, total));
+  } catch (e) {
+    logger.log('info', `Error while reading recordings summary: ${e}`);
+    return res.status(500).send({ error: 'Failed to retrieve recordings summary' });
   }
 });
 
@@ -801,6 +843,19 @@ router.delete('/runs/:id', requireSignIn, async (req: AuthenticatedRequest, res)
     return res.status(401).send({ error: 'Unauthorized' });
   }
   try {
+    const run = await Run.findOne({ runId: req.params.id }).select('runId robotMetaId').lean();
+    if (!run) {
+      return res.status(404).send({ error: 'Run not found' });
+    }
+    const robot = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': (run as any).robotMetaId,
+    })
+      .select('_id')
+      .lean();
+    if (!robot) {
+      return res.status(404).send({ error: 'Run not found' });
+    }
     await Run.deleteOne({ runId: req.params.id });
     capture(
       'maxun-oss-run-deleted',
@@ -841,6 +896,10 @@ router.put('/runs/:id', requireSignIn, async (req: AuthenticatedRequest, res) =>
     const runId = uuid();
 
     const placeholderBrowserId = uuid();
+    const operationalConfig = toOperationalRunConfig({
+      ...getAutomationConfig(recording),
+      ...(req.body?.runtimeConfig || {}),
+    });
 
     await Run.create({
       status: 'pending',
@@ -850,7 +909,10 @@ router.put('/runs/:id', requireSignIn, async (req: AuthenticatedRequest, res) =>
       startedAt: new Date().toISOString(),
       finishedAt: null,
       browserId: placeholderBrowserId,
-      interpreterSettings: req.body,
+      interpreterSettings: {
+        ...req.body,
+        runtimeConfig: operationalConfig,
+      },
       log: '[QUEUE] Run created and waiting for Agenda worker',
       runId,
       runByUserId: req.user.id,
@@ -865,10 +927,7 @@ router.put('/runs/:id', requireSignIn, async (req: AuthenticatedRequest, res) =>
         automationId: recording.recording_meta.id,
         runId,
         userId: String(req.user.id),
-        config: {
-          ...getAutomationConfig(recording),
-          ...(req.body?.runtimeConfig || {}),
-        },
+        config: operationalConfig,
       });
 
       const jobId = job.attrs._id?.toString() || 'unknown';
@@ -883,7 +942,7 @@ router.put('/runs/:id', requireSignIn, async (req: AuthenticatedRequest, res) =>
       await Run.updateOne({ runId }, {
         $set: {
           status: 'failed',
-          finishedAt: new Date().toLocaleString(),
+          finishedAt: new Date().toISOString(),
           errorMessage: queueError.message,
           log: `[QUEUE] Failed to enqueue Agenda job: ${queueError.message}`,
         }
@@ -909,11 +968,16 @@ router.put('/runs/:id', requireSignIn, async (req: AuthenticatedRequest, res) =>
  */
 router.get('/runs/run/:id', requireSignIn, async (req, res) => {
   try {
-    const run = await Run.findOne({ runId: req.params.runId }).lean();
+    const run = await Run.findOne({ runId: req.params.id }).lean();
     if (!run) {
       return res.status(404).send(null);
     }
-    return res.send(run);
+    const robot: any = await Robot.findOne({
+      ...ownerIdFilter((req as AuthenticatedRequest).user?.id || ''),
+      'recording_meta.id': run.robotMetaId,
+    }).lean();
+    if (!robot) return res.status(404).send(null);
+    return res.send(toPublicRunDto(run, robot, { detail: true }));
   } catch (e) {
     const { message } = e as Error;
     logger.log('error', `Error ${message} while reading a run with id: ${req.params.id}.json`);
@@ -945,10 +1009,10 @@ router.post('/runs/run/:id', requireSignIn, async (req: AuthenticatedRequest, re
         automationId: plainRun.robotMetaId,
         runId: req.params.id,
         userId: String(req.user.id),
-        config: {
+        config: toOperationalRunConfig({
           ...getAutomationConfig(recording),
           ...(plainRun.interpreterSettings?.runtimeConfig || {}),
-        }
+        })
       });
 
       run.status = 'pending';
@@ -964,7 +1028,7 @@ router.post('/runs/run/:id', requireSignIn, async (req: AuthenticatedRequest, re
     } catch (queueError: any) {
       logger.log('error', `Failed to queue Agenda run execution: ${queueError.message}`);
       run.status = 'failed';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       run.errorMessage = queueError.message;
       await run.save();
       return res.status(503).send({ error: 'Failed to queue run execution' });
@@ -975,7 +1039,7 @@ router.post('/runs/run/:id', requireSignIn, async (req: AuthenticatedRequest, re
     const run = await Run.findOne({ runId: req.params.id });
     if (run) {
       run.status = 'failed';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       await run.save();
     }
     logger.log('info', `Error while running a robot with id: ${req.params.id} - ${message}`);
@@ -1201,7 +1265,7 @@ router.post('/runs/abort/:id', requireSignIn, async (req: AuthenticatedRequest, 
 
     if (isQueued) {
       run.status = 'aborted';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       run.log = 'Run aborted while queued';
       await run.save();
       
@@ -1249,6 +1313,9 @@ let circuitBreakerOpenUntil = 0;
 
 async function processQueuedRuns() {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return;
+    }
     if (Date.now() < circuitBreakerOpenUntil) {
       return;
     }
@@ -1261,7 +1328,7 @@ async function processQueuedRuns() {
     const userId = queuedRun.runByUserId;
     if (userId === null || userId === undefined) {
       queuedRun.status = 'failed';
-      queuedRun.finishedAt = new Date().toLocaleString();
+      queuedRun.finishedAt = new Date().toISOString();
       queuedRun.log = 'Queued run is missing runByUserId';
       await queuedRun.save();
       return;
@@ -1278,7 +1345,7 @@ async function processQueuedRuns() {
 
       if (!recording) {
         queuedRun.status = 'failed';
-        queuedRun.finishedAt = new Date().toLocaleString();
+        queuedRun.finishedAt = new Date().toISOString();
         queuedRun.log = 'Recording not found';
         await queuedRun.save();
         return;
@@ -1306,7 +1373,7 @@ async function processQueuedRuns() {
       } catch (browserError: any) {
         logger.log('error', `Failed to create browser for queued run: ${browserError.message}`);
         queuedRun.status = 'failed';
-        queuedRun.finishedAt = new Date().toLocaleString();
+        queuedRun.finishedAt = new Date().toISOString();
         queuedRun.log = `Failed to create browser: ${browserError.message}`;
         await queuedRun.save();
       }

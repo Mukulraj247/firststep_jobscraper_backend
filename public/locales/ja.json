@@ -110,7 +110,8 @@
         "proxy": "プロキシ",
         "apikey": "APIキー",
         "feedback": "Maxunクラウドに参加する",
-        "apidocs": "WebサイトからAPI"
+        "apidocs": "WebサイトからAPI",
+        "collapse": "折りたたむ"
   },
   "jobboard": {
     "heading": "Job board",
@@ -157,10 +158,60 @@
         "settings": "設定",
         "search": "実行を検索...",
         "sort_tooltip": "クリックして並べ替え",
+        "retry": "再試行",
+        "rows_per_page": "ページあたりの実行数",
+        "automations_per_page": "ページあたりの自動化数",
+        "automation_count": "{{count}} 件の自動化",
+        "load_error": "実行の読み込みに失敗しました。もう一度お試しください。",
         "placeholder": {
             "title": "実行が見つかりません",
             "body": "すべてのロボットの実行はここに表示されます。ロボットがアクティブになると、その実行はここに記録されます。",
-            "search": "検索に一致する実行はありません"
+            "search": "検索に一致する実行はありません",
+            "filtered": "選択したフィルターに一致する実行はありません。フィルターを解除するとすべての自動化が表示されます。"
+        },
+        "filters": {
+            "search_label": "検索",
+            "date": "日付",
+            "status_label": "ステータス",
+            "jobs_label": "追加された求人",
+            "duration_label": "所要時間",
+            "clear_all": "すべてクリア",
+            "showing_range": "{{from}}–{{to}} / {{total}} 件",
+            "pill_search": "検索: {{q}}",
+            "pill_date": "日付: {{date}}",
+            "pill_status": "ステータス: {{status}}",
+            "pill_jobs": "求人: {{jobs}}",
+            "pill_duration": "所要時間: {{duration}}",
+            "status": {
+                "any": "すべて",
+                "running": "実行中",
+                "queued": "キュー / 保留",
+                "completed": "完了",
+                "failed": "失敗",
+                "aborted": "中止",
+                "scheduled": "予約済み",
+                "dead": "停止"
+            },
+            "jobs": {
+                "any": "すべて",
+                "exactly0": "ちょうど 0",
+                "moreThan2": "2 件超",
+                "moreThan3": "3 件超",
+                "moreThan4": "4 件超"
+            },
+            "duration": {
+                "any": "すべて",
+                "lt5": "5 分未満",
+                "lt30": "30 分未満",
+                "gt30": "30 分超",
+                "gt60": "1 時間超"
+            }
+        },
+        "group": {
+            "untitled": "自動化",
+            "last_run": "最新: {{time}}",
+            "jobs": "{{count}} 件の求人",
+            "run_count": "{{count}} 件の実行"
         },
         "notifications": {
             "no_runs": "実行が見つかりません。もう一度お試しください。",
@@ -648,6 +699,7 @@
         },
         "loading": "データを読み込み中...",
         "empty_output": "出力データがありません",
+        "empty_log": "この実行のログはまだありません。",
         "captured_data": {
             "title": "キャプチャしたデータ",
             "download_csv": "CSVをダウンロード",

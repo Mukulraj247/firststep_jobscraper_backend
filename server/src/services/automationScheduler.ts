@@ -1,8 +1,7 @@
 import logger from '../logger';
 import Robot from '../models/Robot';
 import Run from '../models/Run';
-import { getAgenda, scheduleRecurringTrigger, cancelScheduledTrigger, ScheduleTriggerData } from '../queue/scraperQueue';
-import { createQueuedAutomationRun } from './automationRun';
+import { getAgenda, scheduleRecurringTrigger, cancelScheduledTrigger, ScheduleTriggerData, updateScheduledTriggerNextRunAt } from '../queue/scraperQueue';
 import { Job } from 'agenda';
 import moment from 'moment-timezone';
 import {
@@ -18,6 +17,9 @@ import {
   MIN_AUTOMATION_GAP_MS,
   randomPreferredStartMs,
 } from '../utils/schedule';
+import { ACTIVE_RUN_STATUSES } from './runLifecycle';
+import { AdmissionError, runAdmission } from './runAdmission';
+import { ownerIdFilter } from '../utils/ownerId';
 
 type StoredSchedule = {
   enabled?: boolean;
@@ -29,8 +31,6 @@ type StoredSchedule = {
   lastRunAt?: Date | null;
   nextRunAt?: Date | null;
 };
-
-const ACTIVE_RUN_STATUSES = ['pending', 'queued', 'running', 'scheduled'] as const;
 
 const getScheduleJobId = (automationId: string) => `automation-schedule:${automationId}`;
 
@@ -79,7 +79,7 @@ export function resolveEffectiveScheduleState(robot: any): StoredSchedule {
 }
 
 /** Prefer root timestamps (written on fire); fall back to saasConfig. */
-function readScheduleTimestamps(robot: any, schedule: StoredSchedule): {
+export function readRobotScheduleTimestamps(robot: any, schedule: StoredSchedule): {
   lastRunAt: Date | null;
   nextRunAt: Date | null;
 } {
@@ -91,6 +91,13 @@ function readScheduleTimestamps(robot: any, schedule: StoredSchedule): {
     lastRunAt: lastRaw != null ? new Date(lastRaw) : null,
     nextRunAt: nextRaw != null ? new Date(nextRaw) : null,
   };
+}
+
+function readScheduleTimestamps(robot: any, schedule: StoredSchedule): {
+  lastRunAt: Date | null;
+  nextRunAt: Date | null;
+} {
+  return readRobotScheduleTimestamps(robot, schedule);
 }
 
 async function hasActiveRunForRobot(robotMetaId: string): Promise<boolean> {
@@ -112,6 +119,7 @@ function computeScheduleAdvance(
   const everyMs =
     (typeof schedule.every === 'number' && schedule.every > 0 ? schedule.every : null) ??
     intervalMsFromCron(cronExpr);
+  // Interval presets: next fire is exactly `everyMs` after this run (e.g. daily = 24h from previous run).
   const nextRunAt = everyMs
     ? computeNextRunFromInterval(everyMs, from)
     : cronExpr
@@ -122,6 +130,7 @@ function computeScheduleAdvance(
 
 async function persistScheduleAdvance(
   robotId: any,
+  automationId: string,
   advance: { lastRunAt: Date; nextRunAt: Date | null; everyMs: number | null }
 ): Promise<void> {
   await Robot.updateOne(
@@ -130,10 +139,15 @@ async function persistScheduleAdvance(
       $set: {
         'schedule.lastRunAt': advance.lastRunAt,
         'schedule.nextRunAt': advance.nextRunAt,
+        'recording_meta.saasConfig.schedule.lastRunAt': advance.lastRunAt,
+        'recording_meta.saasConfig.schedule.nextRunAt': advance.nextRunAt,
         ...(advance.everyMs ? { 'schedule.every': advance.everyMs } : {}),
       },
     }
   );
+  if (advance.nextRunAt) {
+    await updateScheduledTriggerNextRunAt(automationId, advance.nextRunAt);
+  }
 }
 
 async function collectOccupiedNextRunAts(excludeAutomationId?: string): Promise<number[]> {
@@ -314,15 +328,8 @@ async function processScheduledRun(job: Job<ScheduleTriggerData>) {
 
   logger.log('info', `Processing scheduled run: automationId=${automationId}, userId=${userId}`);
 
-  let searchUserId: any = userId;
-  if (/^[0-9a-fA-F]{24}$/.test(userId)) {
-      searchUserId = { $in: [userId, new (require('mongoose').Types.ObjectId)(userId)] };
-  } else if (!isNaN(Number(userId)) && userId.trim() !== '') {
-      searchUserId = { $in: [userId, Number(userId)] };
-  }
-
   const robot = await Robot.findOne({
-    userId: searchUserId,
+    ...ownerIdFilter(userId),
     'recording_meta.id': automationId,
   }).lean();
 
@@ -350,15 +357,29 @@ async function processScheduledRun(job: Job<ScheduleTriggerData>) {
   }
 
   const scheduleJobId = (schedule.jobId || '').replace('automation-schedule:', '') || undefined;
-  const normalizedUserId = isNaN(Number(userId)) ? userId : Number(userId);
+  const normalizedUserId = robot.userId ?? userId;
 
-  const result = await createQueuedAutomationRun(robot, normalizedUserId, {
-    source: 'scheduled',
-    scheduleJobId: scheduleJobId || undefined,
-  });
+  let result;
+  try {
+    const admission = await runAdmission.admitScheduled({
+      ownerId: normalizedUserId,
+      robot,
+      scheduleJobId: scheduleJobId || undefined,
+    });
+    result = admission.run;
+  } catch (error) {
+    if (
+      error instanceof AdmissionError &&
+      (error.code === 'AUTOMATION_RUN_ACTIVE' || error.code === 'ACCOUNT_RUN_LIMIT')
+    ) {
+      logger.log('info', `Skipping scheduled automation ${automationId}: ${error.message}`);
+      return;
+    }
+    throw error;
+  }
 
   const advance = computeScheduleAdvance(schedule, new Date());
-  await persistScheduleAdvance((robot as any)._id, advance);
+  await persistScheduleAdvance((robot as any)._id, automationId, advance);
 
   logger.log(
     'info',
@@ -447,19 +468,28 @@ export async function sweepMissedSchedules(options?: {
       const normalizedUserId = isNaN(Number(userId)) ? userId : Number(userId);
       const scheduleJobId = (schedule.jobId || '').replace('automation-schedule:', '') || undefined;
 
-      const result = await createQueuedAutomationRun(robot, normalizedUserId, {
-        source: 'scheduled',
+      const admission = await runAdmission.admitScheduled({
+        ownerId: normalizedUserId,
+        robot,
         scheduleJobId: scheduleJobId || undefined,
       });
+      const result = admission.run;
 
       const advance = computeScheduleAdvance(schedule, now);
-      await persistScheduleAdvance(robot._id, advance);
+      await persistScheduleAdvance(robot._id, automationId, advance);
       enqueued += 1;
       logger.log(
         'info',
         `Catch-up enqueued for automation ${automationId} run ${result.runId}. nextRunAt: ${advance.nextRunAt}`
       );
     } catch (error: any) {
+      if (
+        error instanceof AdmissionError &&
+        (error.code === 'AUTOMATION_RUN_ACTIVE' || error.code === 'ACCOUNT_RUN_LIMIT')
+      ) {
+        logger.log('info', `Catch-up skipped for automation ${automationId}: ${error.message}`);
+        continue;
+      }
       logger.log(
         'error',
         `Catch-up failed for automation ${automationId}: ${error?.message || error}`
@@ -544,4 +574,115 @@ export async function rehydrateAutomationSchedules() {
       })
     );
   }
+}
+
+/**
+ * Re-assign random packed first-fire times for every enabled schedule owned by
+ * the caller. Processes robots sequentially so slot packing sees prior saves.
+ */
+export async function repackAllAutomationSchedules(
+  ownerId: number | string
+): Promise<{ repackedCount: number; skippedCount: number }> {
+  const robots = await Robot.find(ownerIdFilter(ownerId));
+  let repackedCount = 0;
+  let skippedCount = 0;
+
+  for (const robot of robots) {
+    const effective = resolveEffectiveScheduleState(robot.toJSON());
+    if (!effective.enabled || (!effective.cron && !effective.every)) {
+      skippedCount += 1;
+      continue;
+    }
+
+    const tz =
+      effective.timezone ||
+      (robot.recording_meta as any)?.saasConfig?.schedule?.timezone ||
+      (robot.schedule as any)?.timezone ||
+      'UTC';
+
+    const before = readRobotScheduleTimestamps(robot.toJSON(), effective).nextRunAt;
+
+    const synced = await syncAutomationSchedule(robot.toJSON(), robot.userId, tz, {
+      packSlots: true,
+    });
+
+    await Robot.updateOne(
+      { _id: robot._id },
+      {
+        $set: {
+          schedule: synced,
+          'recording_meta.saasConfig.schedule.nextRunAt': synced.nextRunAt,
+          'recording_meta.saasConfig.schedule.lastRunAt': synced.lastRunAt,
+          ...(synced.every ? { 'recording_meta.saasConfig.schedule.every': synced.every } : {}),
+        },
+      }
+    );
+
+    logger.log(
+      'info',
+      `Repacked schedule for ${robot.recording_meta?.id}: before=${before?.toISOString() ?? 'null'} after=${synced.nextRunAt?.toISOString() ?? 'null'}`
+    );
+    repackedCount += 1;
+  }
+
+  return { repackedCount, skippedCount };
+}
+
+/**
+ * Maintenance: repack every enabled schedule in the database (all owners).
+ * Processes sequentially so 90s slot packing applies across the full fleet.
+ */
+export async function repackAllSchedulesGlobally(): Promise<{
+  repackedCount: number;
+  skippedCount: number;
+}> {
+  const robots: any[] = await Robot.find({
+    $or: [
+      { 'schedule.enabled': true },
+      { 'recording_meta.saasConfig.schedule.enabled': true },
+    ],
+  }).sort({ _id: 1 });
+
+  let repackedCount = 0;
+  let skippedCount = 0;
+
+  for (const robot of robots) {
+    const effective = resolveEffectiveScheduleState(robot);
+    if (!effective.enabled || (!effective.cron && !effective.every)) {
+      skippedCount += 1;
+      continue;
+    }
+
+    const tz =
+      effective.timezone ||
+      robot.recording_meta?.saasConfig?.schedule?.timezone ||
+      robot.schedule?.timezone ||
+      'UTC';
+
+    const before = readRobotScheduleTimestamps(robot, effective).nextRunAt;
+
+    const synced = await syncAutomationSchedule(robot, robot.userId, tz, {
+      packSlots: true,
+    });
+
+    await Robot.updateOne(
+      { _id: robot._id },
+      {
+        $set: {
+          schedule: synced,
+          'recording_meta.saasConfig.schedule.nextRunAt': synced.nextRunAt,
+          'recording_meta.saasConfig.schedule.lastRunAt': synced.lastRunAt,
+          ...(synced.every ? { 'recording_meta.saasConfig.schedule.every': synced.every } : {}),
+        },
+      }
+    );
+
+    logger.log(
+      'info',
+      `Global repack ${robot.recording_meta?.id}: before=${before?.toISOString() ?? 'null'} after=${synced.nextRunAt?.toISOString() ?? 'null'}`
+    );
+    repackedCount += 1;
+  }
+
+  return { repackedCount, skippedCount };
 }

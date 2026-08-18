@@ -5,7 +5,13 @@ import Robot from '../models/Robot';
 import { createRemoteBrowserForRun, destroyRemoteBrowser } from '../browser-management/controller';
 import { getAgenda, SCRAPER_JOB_CONCURRENCY, ScraperJobData, requeueScraperRun, computeScraperLockLifetimeMs } from '../queue/scraperQueue';
 import { processRunExecution } from './execution';
-import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, getAutomationConfig, persistExtractedDataForRun } from '../services/automation';
+import {
+  applyAutomationRuntimeConfig,
+  computeElapsedRunDurationMs,
+  dispatchAutomationWebhook,
+  getAutomationConfig,
+  persistExtractedDataForRun,
+} from '../services/automation';
 import { runListExtraction, applySelectorPromotions, primaryItemSelector } from '../services/listExtractor';
 import {
   evaluateRunDrift,
@@ -47,7 +53,11 @@ import {
   shouldDisableChromiumHttp2,
 } from '../services/navigationDiagnostics';
 import { emitQueuedRunEvent } from './scrapeSocket';
-import { applyLayoutChangeSuggestion, resolveFailureReason } from '../utils/failureReason';
+import {
+  applyLayoutChangeSuggestion,
+  normalizeFailureReason,
+  resolveFailureReason,
+} from '../utils/failureReason';
 import {
   isChildProcessIsolationEnabled,
   runScraperJobInChild,
@@ -57,6 +67,12 @@ import {
 } from './scrapeJobSupervisor';
 import { detectAtsBoard, fetchAtsBoardJobs } from '../services/atsAdapters';
 import { getScrapeHeartbeatMs } from '../utils/scrapeHeartbeat';
+import { isTerminalRunStatus } from '../services/runLifecycle';
+import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
+import {
+  resolveAutomationExecutionConfig,
+  toOperationalRunConfig,
+} from '../services/automationConfigView';
 
 export const EXECUTION_TIMEOUT_MS = parseInt(process.env.SCRAPER_JOB_TIMEOUT_MS || '120000', 10);
 /** Total attempts per run (1 = no retries). Lower on constrained/free instances to avoid retry storms. */
@@ -140,18 +156,14 @@ const appendRunLog = async (run: any, message: string, opts?: { flush?: boolean 
   }
 };
 
-const computeDuration = (startedAt: string) => {
-  const started = new Date(startedAt).getTime();
-  if (Number.isNaN(started)) return null;
-  return Math.max(0, Date.now() - started);
-};
+const computeDuration = (startedAt: string) => computeElapsedRunDurationMs(startedAt);
 
 async function markFailed(run: any, errorMessage: string, finalState: 'pending' | 'failed' | 'dead') {
   await appendRunLog(run, errorMessage, { flush: true });
   run.status = finalState;
   run.errorMessage = errorMessage;
   const terminal = finalState === 'failed' || finalState === 'dead';
-  run.finishedAt = terminal ? new Date().toLocaleString() : '';
+  run.finishedAt = terminal ? new Date().toISOString() : '';
   run.duration = terminal ? computeDuration(run.startedAt) : null;
 
   if (terminal) {
@@ -162,6 +174,11 @@ async function markFailed(run: any, errorMessage: string, finalState: 'pending' 
     });
     run.failureReason = resolved.failureReason;
     run.failureReasonSource = resolved.failureReasonSource;
+    run.normalizedFailureReason = normalizeFailureReason({
+      failureReason: run.failureReason,
+      failureReasonSource: run.failureReasonSource,
+      errorMessage,
+    });
   }
 
   (run as any)._pendingLogWrites = 0;
@@ -274,7 +291,7 @@ async function finalizeExtractedListRows(opts: {
   run.anomaly = drift.anomaly;
   run.anomalyMeta = drift.anomalyMeta;
   run.status = drift.runStatus;
-  run.finishedAt = new Date().toLocaleString();
+  run.finishedAt = new Date().toISOString();
   run.duration = computeDuration(run.startedAt);
   run.errorMessage = drift.errorMessage;
   // Suggest layout_change when selectors likely no longer match (zero rows / escalated miss).
@@ -288,6 +305,11 @@ async function finalizeExtractedListRows(opts: {
     });
     run.failureReason = suggested.failureReason;
     run.failureReasonSource = suggested.failureReasonSource;
+    run.normalizedFailureReason = normalizeFailureReason({
+      failureReason: run.failureReason,
+      failureReasonSource: run.failureReasonSource,
+      errorMessage: run.errorMessage,
+    });
   }
   await run.save();
 
@@ -458,7 +480,10 @@ async function processConfiguredListExtraction(
   const page = lease.page;
 
   try {
-    await appendRunLog(run, `Starting configured list extraction on ${automation.recording_meta.url}`);
+    await appendRunLog(
+      run,
+      `Starting configured list extraction on ${safeOutboundUrlLogLabel(automation.recording_meta.url)}`
+    );
     await applyAutomationRuntimeConfig(page, automation);
 
     if (await detectCloudflareChallenge(page)) {
@@ -688,7 +713,7 @@ export async function runScraperJobPayload(
   data: ScraperJobData & { queueJobId?: string },
   options?: { agendaJob?: AgendaJob<ScraperJobData> }
 ): Promise<void> {
-  const { automationId, runId, userId, config } = data;
+  const { automationId, runId, userId, config: queuedConfig } = data;
   logger.log('info', `Processing scraper job: runId=${runId}, automationId=${automationId}`);
   const attemptsMade = data._attemptsMade || 0;
   const queueJobId = data.queueJobId || 'unknown';
@@ -747,6 +772,19 @@ export async function runScraperJobPayload(
     throw new ScraperJobCancelledError(runId, 'Run not found');
   }
 
+  if (isTerminalRunStatus(run.status)) {
+    await appendRunLog(
+      run,
+      `Skipping duplicate Agenda job ${queueJobId}; run is already terminal (${run.status})`,
+      { flush: true }
+    );
+    logger.log(
+      'info',
+      `Skipping duplicate scraper job: runId=${runId} status=${run.status} queueJobId=${queueJobId}`
+    );
+    return;
+  }
+
   const automation: any = await Robot.findOne({
     'recording_meta.id': automationId,
   }).lean();
@@ -760,6 +798,8 @@ export async function runScraperJobPayload(
     }
     throw new ScraperJobCancelledError(runId, `Automation ${automationId} not found`);
   }
+  const config = resolveAutomationExecutionConfig(automation, queuedConfig);
+  const retryConfig = toOperationalRunConfig(config);
 
   if (run.status === 'aborted' || run.status === 'aborting') {
     throw new ScraperJobCancelledError(runId, 'Run aborted');
@@ -790,7 +830,7 @@ export async function runScraperJobPayload(
           automationId,
           runId,
           userId: String(userId),
-          config,
+          config: retryConfig,
           _attemptsMade: attemptsMade,
         },
         { force: true, delayMs: parkMs }
@@ -800,13 +840,14 @@ export async function runScraperJobPayload(
   }
 
   try {
+    await assertSafeOutboundUrl(String(automation?.recording_meta?.url || ''));
     run.status = 'running';
     run.queueJobId = queueJobId;
     run.retryCount = attemptsMade;
     run.errorMessage = null;
     run.interpreterSettings = {
       ...(run.interpreterSettings || {}),
-      runtimeConfig: config,
+      runtimeConfig: retryConfig,
     };
     await run.save();
     startHeartbeat();
@@ -817,7 +858,7 @@ export async function runScraperJobPayload(
       robotMetaId: run.robotMetaId,
       robotName: automation.recording_meta.name,
       status: 'running',
-      startedAt: new Date().toLocaleString(),
+      startedAt: new Date().toISOString(),
     });
 
     await appendRunLog(run, `Dequeued Agenda job ${queueJobId} (attempt ${attemptsMade + 1}/${MAX_ATTEMPTS})`);
@@ -1003,7 +1044,12 @@ export async function runScraperJobPayload(
       refreshedRun.errorMessage =
         refreshedRun.errorMessage ||
         'Zero rows extracted and run did not finalize normally. Selectors likely broke, the list did not render, or the target URL filters are wrong.';
-      refreshedRun.finishedAt = refreshedRun.finishedAt || new Date().toLocaleString();
+      refreshedRun.normalizedFailureReason = normalizeFailureReason({
+        failureReason: refreshedRun.failureReason,
+        failureReasonSource: refreshedRun.failureReasonSource,
+        errorMessage: refreshedRun.errorMessage,
+      });
+      refreshedRun.finishedAt = refreshedRun.finishedAt || new Date().toISOString();
       refreshedRun.duration = computeDuration(refreshedRun.startedAt);
       await appendRunLog(refreshedRun, refreshedRun.errorMessage, { flush: true });
       await refreshedRun.save();
@@ -1061,7 +1107,7 @@ export async function runScraperJobPayload(
     if (!refreshedRun.anomaly) {
       refreshedRun.errorMessage = null;
     }
-    refreshedRun.finishedAt = refreshedRun.finishedAt || new Date().toLocaleString();
+    refreshedRun.finishedAt = refreshedRun.finishedAt || new Date().toISOString();
     if (typeof refreshedRun.rowsExtracted !== 'number') {
       refreshedRun.rowsExtracted = 0;
     }
@@ -1159,6 +1205,11 @@ export async function runScraperJobPayload(
         );
         latestRun.status = 'pending';
         latestRun.errorMessage = `CAPTCHA on attempt ${attemptsMade + 1}; retry in ${delaySec}s`;
+        latestRun.normalizedFailureReason = normalizeFailureReason({
+          failureReason: latestRun.failureReason,
+          failureReasonSource: latestRun.failureReasonSource,
+          errorMessage: latestRun.errorMessage,
+        });
         latestRun.retryCount = attemptsMade + 1;
         latestRun.finishedAt = '';
         latestRun.duration = null;
@@ -1170,7 +1221,7 @@ export async function runScraperJobPayload(
               automationId,
               runId,
               userId: String(userId),
-              config,
+              config: retryConfig,
               _attemptsMade: attemptsMade + 1,
             },
             { force: true, delayMs }
@@ -1201,7 +1252,7 @@ export async function runScraperJobPayload(
             robotMetaId: latestRun.robotMetaId,
             robotName: automation?.recording_meta?.name || 'Unknown Robot',
             status: 'dead',
-            finishedAt: new Date().toLocaleString(),
+            finishedAt: new Date().toISOString(),
             reason: 'captcha',
           });
         } catch (emitError: any) {
@@ -1245,7 +1296,7 @@ export async function runScraperJobPayload(
               automationId,
               runId,
               userId: String(userId),
-              config,
+              config: retryConfig,
               _attemptsMade: attemptsMade + 1,
             },
             { force: true, delayMs }
@@ -1277,7 +1328,7 @@ export async function runScraperJobPayload(
             robotMetaId: latestRun.robotMetaId,
             robotName: robot?.recording_meta?.name || 'Unknown Robot',
             status: 'dead',
-            finishedAt: new Date().toLocaleString(),
+            finishedAt: new Date().toISOString(),
           });
         } catch (emitError: any) {
           logger.log('warn', `Failed to emit final failure for run ${runId}: ${emitError.message}`);

@@ -1,4 +1,4 @@
-import { Locator, Page } from 'playwright-core';
+import { BrowserContext, Locator, Page, Route } from 'playwright-core';
 import logger from '../logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -24,6 +24,7 @@ import {
   CaptchaGateOptions,
 } from './scraping/captchaGate';
 import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
+import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
 
 const SMART_EXTRACTOR_SCRIPT_PATH = path.join(__dirname, '../workflow-management/scripts/smartJobExtractor.js');
 
@@ -87,6 +88,74 @@ const DEFAULT_ITEM_SELECTOR_TIMEOUT_MS = 45_000;
 const DEFAULT_SPINNER_BUDGET_MS = 8_000;
 const DEFAULT_LOAD_MORE_WAIT_MS = 12_000;
 const EMPTY_STRIKE_LIMIT = 3;
+
+/**
+ * Guard every HTTP(S) browser request, including subresources and redirects.
+ *
+ * This is a best-effort browser-layer SSRF check: Chromium and any configured
+ * proxy resolve/connect after this route decision, so DNS rebinding and proxy
+ * egress remain outside Node's authority. Production-grade enforcement needs a
+ * hardened egress proxy/firewall which pins and filters destination addresses.
+ */
+type RouteOwner = Pick<Page, 'route' | 'unroute'>;
+
+async function installOutboundRouteGuard(owner: RouteOwner): Promise<() => Promise<void>> {
+  const handler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    const requestUrl = request.url();
+    if (!/^https?:\/\//i.test(requestUrl)) {
+      await route.continue();
+      return;
+    }
+
+    try {
+      await assertSafeOutboundUrl(requestUrl);
+      await route.continue();
+    } catch {
+      await route.abort('blockedbyclient');
+    }
+  };
+
+  await owner.route('**/*', handler);
+  return async () => {
+    await owner.unroute('**/*', handler);
+  };
+}
+
+export async function installOutboundNavigationGuard(page: Page): Promise<() => Promise<void>> {
+  return installOutboundRouteGuard(page);
+}
+
+/** Context routes cover every existing and future interpreter-created page. */
+export async function installOutboundBrowserContextGuard(
+  context: Pick<BrowserContext, 'route' | 'unroute'>
+): Promise<() => Promise<void>> {
+  return installOutboundRouteGuard(context);
+}
+
+/**
+ * Keep navigation retries within the 120s scraper job budget. The prior two
+ * 60s attempts could consume the whole job before extraction or worker retry.
+ */
+export const listNavigationAttempts = (url?: string) => {
+  try {
+    if (url && new URL(url).hostname.toLowerCase() === 'careers.persistent.com') {
+      // This host has documented Chromium HTTP/2 instability. It can take
+      // longer to establish a response even with HTTP/2 disabled. Keep 25s
+      // of the default 120s job budget for hydration and extraction.
+      return [
+        { waitUntil: 'domcontentloaded' as const, timeout: 75_000 },
+        { waitUntil: 'commit' as const, timeout: 20_000 },
+      ];
+    }
+  } catch {
+    // Use the default budget for malformed URLs.
+  }
+  return [
+    { waitUntil: 'domcontentloaded' as const, timeout: 45_000 },
+    { waitUntil: 'commit' as const, timeout: 20_000 },
+  ];
+};
 
 const normalizeWhitespace = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -1021,7 +1090,7 @@ const paginateByNextButton = async (
     const changed = after.url !== before.url;
     logger.log(
       'info',
-      `List extractor path-URL pagination to ${pathUrl} (changed=${changed})`
+      `List extractor path-URL pagination on ${safeOutboundUrlLogLabel(pathUrl)} (changed=${changed})`
     );
     return changed;
   }
@@ -1056,16 +1125,34 @@ const paginateByPageNumber = async (
   if (samePageParam || nextUrl.toString() === currentUrl) return false;
   await gotoForListExtraction(page, nextUrl.toString());
   await page.waitForTimeout(pagination.pageDelayMs || DEFAULT_SCROLL_DELAY_MS);
-  logger.log('info', `List extractor navigated to page loop URL ${nextUrl}`);
+  logger.log('info', `List extractor navigated page loop on ${safeOutboundUrlLogLabel(nextUrl.toString())}`);
   return true;
 };
 
 async function gotoForListExtraction(page: Page, url: string): Promise<void> {
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  } catch (err: any) {
-    logger.log('warn', `List extractor goto failed on first try: ${err.message}; retrying with commit wait`);
-    await page.goto(url, { waitUntil: 'commit', timeout: 60_000 });
+  await assertSafeOutboundUrl(url);
+  const attempts = listNavigationAttempts(url);
+  let lastError: unknown;
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    try {
+      await page.goto(url, attempt);
+      lastError = undefined;
+      break;
+    } catch (error: any) {
+      lastError = error;
+      if (index < attempts.length - 1) {
+        logger.log(
+          'warn',
+          `List extractor goto failed (${attempt.waitUntil}, ${attempt.timeout}ms): ${error.message}; retrying`
+        );
+      }
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
   }
 
   // Let late-binding React/Next.js chunks finish hydrating. `networkidle` on
@@ -1076,13 +1163,13 @@ async function gotoForListExtraction(page: Page, url: string): Promise<void> {
     await page.waitForLoadState('networkidle', { timeout: 15_000 });
   } catch { /* ignore — SPA heartbeats keep network open */ }
 
-  logger.log('info', `List extractor navigation to ${url} completed`);
+  logger.log('info', `List extractor navigation to ${safeOutboundUrlLogLabel(url)} completed`);
   const cloudflareCleared = await waitForCloudflareIfPresent(page);
   if (!cloudflareCleared) {
     // Fail fast — continuing pagination on a challenge page burns the job
     // hard-timeout (SCRAPER_JOB_TIMEOUT_MS) with 0 rows every page.
     throw new Error(
-      `Cloudflare challenge did not clear after navigating to ${url}`
+      `Cloudflare challenge did not clear after navigating to ${safeOutboundUrlLogLabel(url)}`
     );
   }
 }
@@ -1146,13 +1233,14 @@ export const runListExtraction = async (
   };
 
   const disposeDialog = installDialogHandler(page, popupsOptions);
+  const disposeOutboundGuard = await installOutboundBrowserContextGuard(page.context());
 
   try {
     const effectiveStartUrl = normalizeListStartUrl(startUrl, safeConfig.pagination);
     if (effectiveStartUrl !== startUrl) {
       logger.log(
         'info',
-        `List extractor reset start URL pagination: ${startUrl} → ${effectiveStartUrl}`
+        `List extractor reset start URL pagination on ${safeOutboundUrlLogLabel(effectiveStartUrl)}`
       );
     }
     await gotoForListExtraction(page, effectiveStartUrl);
@@ -1199,7 +1287,10 @@ export const runListExtraction = async (
       winningItemSelector || primaryItemSelector(safeConfig.itemSelector);
 
     if (!primaryItemSelector(safeConfig.itemSelector)) {
-      logger.log('info', `No item selector provided for ${effectiveStartUrl}. Attempting smart job extraction...`);
+      logger.log(
+        'info',
+        `No item selector provided for ${safeOutboundUrlLogLabel(effectiveStartUrl)}. Attempting smart job extraction...`
+      );
       const smart = await runSmartExtraction();
       return { rows: smart.map(cleanRow), selectorPromotions: [] };
     }
@@ -1288,6 +1379,7 @@ export const runListExtraction = async (
     }
     throw error;
   } finally {
+    await disposeOutboundGuard().catch(() => undefined);
     try {
       disposeDialog();
     } catch {

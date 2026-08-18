@@ -1,8 +1,13 @@
 import { Router, Request, Response } from 'express';
 import Robot from '../models/Robot';
 import { requireSignIn } from '../middlewares/auth';
-import axios from 'axios';
 import { v4 as uuid } from "uuid";
+import { postJsonWithRetry } from '../services/destinations';
+import { safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
+import {
+    resolveStoredLegacyWebhookSettings,
+    validateLegacyWebhookSettings,
+} from '../utils/webhookDeliverySettings';
 
 export const router = Router();
 
@@ -64,6 +69,7 @@ router.post('/add', requireSignIn, async (req: Request, res: Response) => {
         if (!webhook.url) {
             return res.status(400).json({ ok: false, error: 'Webhook URL is required' });
         }
+        validateLegacyWebhookSettings(webhook);
 
         // Validate URL format
         try {
@@ -85,15 +91,14 @@ router.post('/add', requireSignIn, async (req: Request, res: Response) => {
             return res.status(400).json({ ok: false, error: 'Webhook with this url already exists' });
         }
 
+        const deliverySettings = resolveStoredLegacyWebhookSettings(webhook);
         const newWebhook: WebhookConfig = {
             ...webhook,
             id: webhook.id || uuid(),
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastCalledAt: null, 
-            retryAttempts: webhook.retryAttempts || 3,
-            retryDelay: webhook.retryDelay || 5,
-            timeout: webhook.timeout || 30,
+            ...deliverySettings,
         };
 
         const updatedWebhooks = [...currentWebhooks, newWebhook];
@@ -107,6 +112,9 @@ router.post('/add', requireSignIn, async (req: Request, res: Response) => {
             webhook: newWebhook
         });
     } catch (error: any) {
+        if (error instanceof RangeError) {
+            return res.status(400).json({ ok: false, error: error.message });
+        }
         console.log(`Could not add webhook - ${error}`);
         res.status(500).json({ ok: false, error: 'Could not add webhook configuration' });
     }
@@ -125,6 +133,7 @@ router.post('/update', requireSignIn, async (req: Request, res: Response) => {
         if (!webhook || !robotId || !webhook.id) {
             return res.status(400).json({ ok: false, error: 'Webhook configuration, webhook ID, and robot ID are required' });
         }
+        validateLegacyWebhookSettings(webhook);
 
         // Validate URL format if provided
         if (webhook.url) {
@@ -175,6 +184,9 @@ router.post('/update', requireSignIn, async (req: Request, res: Response) => {
             webhook: updatedWebhook
         });
     } catch (error: any) {
+        if (error instanceof RangeError) {
+            return res.status(400).json({ ok: false, error: error.message });
+        }
         console.log(`Could not update webhook - ${error}`);
         res.status(500).json({ ok: false, error: 'Could not update webhook configuration' });
     }
@@ -264,6 +276,8 @@ router.post('/test', requireSignIn, async (req: Request, res: Response) => {
         if (!webhook || !robotId) {
             return res.status(400).json({ ok: false, error: 'Webhook configuration and robot ID are required' });
         }
+        validateLegacyWebhookSettings(webhook);
+        const deliverySettings = resolveStoredLegacyWebhookSettings(webhook);
 
         const robot = await Robot.findOne({ 'recording_meta.id': robotId });
 
@@ -357,9 +371,10 @@ router.post('/test', requireSignIn, async (req: Request, res: Response) => {
 
         await updateWebhookLastCalled(robotId, webhook.id);
 
-        const response = await axios.post(webhook.url, testPayload, {
-            timeout: (webhook.timeout || 30) * 1000,
-            validateStatus: (status) => status < 500 
+        const response = await postJsonWithRetry(webhook.url, testPayload, {
+            attempts: 1,
+            timeoutMs: deliverySettings.timeout * 1000,
+            deadlineMs: deliverySettings.timeout * 1000,
         });
 
         const success = response.status >= 200 && response.status < 300;
@@ -369,12 +384,15 @@ router.post('/test', requireSignIn, async (req: Request, res: Response) => {
             message: success ? 'Test webhook sent successfully' : 'Webhook endpoint responded with non-success status',
             details: {
                 status: response.status,
-                statusText: response.statusText,
+                statusText: '',
                 success: success
             }
         });
     } catch (error: any) {
-        console.log(`Could not test webhook - ${error}`);
+        if (error instanceof RangeError) {
+            return res.status(400).json({ ok: false, error: error.message });
+        }
+        console.log('Could not test webhook');
         
         try {
             await updateWebhookLastCalled(robotId, webhook.id);
@@ -396,7 +414,7 @@ router.post('/test', requireSignIn, async (req: Request, res: Response) => {
             error: errorMessage,
             details: {
                 code: error.code,
-                message: error.message
+                message: errorMessage
             }
         });
     }
@@ -436,33 +454,25 @@ export const sendWebhook = async (robotId: string, eventType: string, data: any)
 };
 
 // Helper function to send webhook with retry logic
-const sendWebhookWithRetry = async (robotId: string, webhook: WebhookConfig, payload: any, attempt: number = 1): Promise<void> => {
-    const maxRetries = webhook.retryAttempts || 3;
-    const retryDelay = webhook.retryDelay || 5;
-    const timeout = webhook.timeout || 30;
+const sendWebhookWithRetry = async (robotId: string, webhook: WebhookConfig, payload: any): Promise<void> => {
+    const deliverySettings = resolveStoredLegacyWebhookSettings(webhook as unknown as Record<string, unknown>);
 
     try {
         await updateWebhookLastCalled(robotId, webhook.id);
 
-        const response = await axios.post(webhook.url, payload, {
-            timeout: timeout * 1000,
-            validateStatus: (status) => status >= 200 && status < 300
+        const response = await postJsonWithRetry(webhook.url, payload, {
+            retryAttempts: deliverySettings.retryAttempts,
+            delayMs: deliverySettings.retryDelay * 1000,
+            timeoutMs: deliverySettings.timeout * 1000,
+            deadlineMs: 120_000,
         });
 
-        console.log(`Webhook sent successfully to ${webhook.url}: ${response.status}`);
+        console.log(`Webhook sent successfully to ${safeOutboundUrlLogLabel(webhook.url)}: ${response.status}`);
     } catch (error: any) {
-        console.error(`Webhook failed for ${webhook.url} (attempt ${attempt}):`, error.message);
-
-        if (attempt < maxRetries) {
-            const delay = retryDelay * Math.pow(2, attempt - 1);
-            console.log(`Retrying webhook ${webhook.url} in ${delay} seconds...`);
-
-            setTimeout(async () => {
-                await sendWebhookWithRetry(robotId, webhook, payload, attempt + 1);
-            }, delay * 1000);
-        } else {
-            console.error(`Webhook ${webhook.url} failed after ${maxRetries} attempts`);
-        }
+        console.error(
+            `Webhook ${safeOutboundUrlLogLabel(webhook.url)} failed after ${deliverySettings.retryAttempts + 1} attempts:`,
+            error.message
+        );
     }
 };
 

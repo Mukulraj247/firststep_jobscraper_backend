@@ -6,6 +6,7 @@ import logger from '../logger';
 import Run from '../models/Run';
 import { enqueueScraperRun } from '../queue/scraperQueue';
 import { getScrapeHeartbeatStaleMs, isRunningLeaseStale } from '../utils/scrapeHeartbeat';
+import { toOperationalRunConfig } from './automationConfigView';
 
 export type RecoverOrphanedRunsOptions = {
   /**
@@ -102,7 +103,7 @@ export async function recoverOrphanedRuns(options?: RecoverOrphanedRunsOptions):
               automationId: runData.robotMetaId,
               runId: runData.runId,
               userId: String(runData.runByUserId || ''),
-              config: runData.interpreterSettings?.runtimeConfig || {},
+              config: toOperationalRunConfig(runData.interpreterSettings?.runtimeConfig || {}),
             });
 
             logger.log(
@@ -113,7 +114,7 @@ export async function recoverOrphanedRuns(options?: RecoverOrphanedRunsOptions):
             const crashRecoveryMessage = `Dead letter: max crash-recovery retries exceeded (3/3).`;
 
             run.status = 'dead';
-            run.finishedAt = new Date().toLocaleString();
+            run.finishedAt = new Date().toISOString();
             run.errorMessage = crashRecoveryMessage;
             run.heartbeatAt = null;
             run.log = runData.log ? `${runData.log}\n${crashRecoveryMessage}` : crashRecoveryMessage;

@@ -499,3 +499,39 @@ export function sanitizeAutomationTags(
 export function getAllCatalogTagStrings(): string[] {
   return Array.from(ALLOWED);
 }
+
+/** Namespaces shown on the ops dashboard “Jobs by tag” grid. */
+export const JOB_CATEGORY_TAG_NAMESPACES: TagNamespace[] = [
+  'role',
+  'function',
+  'industry',
+  'level',
+  'type',
+  'edu',
+  'comp',
+];
+
+export type DashboardTagDefinition = {
+  tag: string;
+  label: string;
+  namespace: TagNamespace;
+  namespaceLabel: string;
+};
+
+/** Full job-category catalog for dashboard tag rollups (roles, industries, functions, etc.). */
+export function getJobCategoryDashboardTags(): DashboardTagDefinition[] {
+  return TAG_CATALOG.filter((ns) => JOB_CATEGORY_TAG_NAMESPACES.includes(ns.namespace)).flatMap(
+    (ns) =>
+      ns.values.map((value) => ({
+        tag: formatTag(ns.namespace, value),
+        label: value,
+        namespace: ns.namespace,
+        namespaceLabel: ns.label,
+      })),
+  );
+}
+
+/** Role-only catalog used by the ops dashboard “Jobs by tag” grid. */
+export function getRoleDashboardTags(): DashboardTagDefinition[] {
+  return getJobCategoryDashboardTags().filter((tag) => tag.namespace === 'role');
+}

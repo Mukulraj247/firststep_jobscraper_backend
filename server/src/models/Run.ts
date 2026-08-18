@@ -1,4 +1,10 @@
 import mongoose, { Document, Schema } from 'mongoose';
+import {
+  addAdmissionGuardReleaseToTerminalUpdate,
+  addFailureClassificationToTerminalUpdate,
+  isFailureRunStatus,
+  isTerminalRunStatus,
+} from '../services/runLifecycle';
 
 export interface IRun extends Document {
   /**
@@ -18,6 +24,20 @@ export interface IRun extends Document {
   interpreterSettings: any;
   log?: string | null;
   runId: string;
+  /** Stable account owner used by admission/idempotency (legacy rows use runByUserId). */
+  ownerId?: string | null;
+  /** Native date used for deterministic run ordering without parsing legacy strings. */
+  sortAt?: Date | null;
+  retryOfRunId?: string | null;
+  originalRunId?: string | null;
+  retrySequence?: number | null;
+  retryRequestKey?: string | null;
+  /** Reserved for Task 6 failure normalization. */
+  normalizedFailureReason?: string | null;
+  /** Internal unique reservation while this automation run is active. */
+  activeAutomationKey?: string | null;
+  /** Internal per-account active-run slot. */
+  accountActiveSlot?: number | null;
   runByUserId?: mongoose.Types.ObjectId | string | number | null;
   runByScheduleId?: string | null;
   runByAPI?: boolean | null;
@@ -30,6 +50,12 @@ export interface IRun extends Document {
   queueJobId?: string | null;
   /** Denormalized list-extraction row count; always written on finish (default 0). */
   rowsExtracted: number;
+  /** Net-new / promoted job-board rows from this run (queued + readyFromList). */
+  jobsAddedToBoard?: number;
+  /** Board enqueue: rows considered from extraction. */
+  jobsBoardConsidered?: number;
+  /** Board enqueue: skipped as already on board / fresh. */
+  jobsBoardDeduped?: number;
   /** Drift anomaly taxonomy: zero_rows | row_drop | null */
   anomaly?: string | null;
   anomalyMeta?: {
@@ -61,6 +87,15 @@ const RunSchema: Schema = new Schema(
     interpreterSettings: { type: Schema.Types.Mixed, default: null },
     log: { type: String, default: null },
     runId: { type: String, required: true },
+    ownerId: { type: String, default: null },
+    sortAt: { type: Date, default: null },
+    retryOfRunId: { type: String, default: null },
+    originalRunId: { type: String, default: null },
+    retrySequence: { type: Number, default: null },
+    retryRequestKey: { type: String, default: undefined },
+    normalizedFailureReason: { type: String, default: null },
+    activeAutomationKey: { type: String, default: undefined },
+    accountActiveSlot: { type: Number, default: undefined },
     runByUserId: { type: Schema.Types.Mixed, default: null },
     runByScheduleId: { type: String, default: null },
     runByAPI: { type: Boolean, default: null },
@@ -72,6 +107,9 @@ const RunSchema: Schema = new Schema(
     errorMessage: { type: String, default: null },
     queueJobId: { type: String, default: null },
     rowsExtracted: { type: Number, default: 0 },
+    jobsAddedToBoard: { type: Number, default: 0 },
+    jobsBoardConsidered: { type: Number, default: 0 },
+    jobsBoardDeduped: { type: Number, default: 0 },
     anomaly: { type: String, default: null },
     anomalyMeta: { type: Schema.Types.Mixed, default: null },
     scoutId: { type: String, default: null },
@@ -93,12 +131,80 @@ RunSchema.set('toJSON', {
   },
 });
 
+RunSchema.pre('save', function releaseAdmissionGuardsOnTerminalSave() {
+  if (isFailureRunStatus(this.status as string | null | undefined)) {
+    const classified = addFailureClassificationToTerminalUpdate({
+      status: this.status,
+      failureReason: this.failureReason,
+      failureReasonSource: this.failureReasonSource,
+      normalizedFailureReason: this.normalizedFailureReason,
+      errorMessage: this.errorMessage,
+    });
+    this.set('failureReason', classified.failureReason);
+    this.set('failureReasonSource', classified.failureReasonSource);
+    this.set('normalizedFailureReason', classified.normalizedFailureReason);
+  }
+  if (isTerminalRunStatus(this.status as string | null | undefined)) {
+    this.set('activeAutomationKey', undefined);
+    this.set('accountActiveSlot', undefined);
+  }
+});
+
+RunSchema.pre(
+  ['updateOne', 'updateMany', 'findOneAndUpdate'],
+  function releaseAdmissionGuardsOnTerminalUpdate() {
+    const update = this.getUpdate() as Record<string, any> | null;
+    if (update) {
+      this.setUpdate(
+        addAdmissionGuardReleaseToTerminalUpdate(
+          addFailureClassificationToTerminalUpdate(update)
+        )
+      );
+    }
+  }
+);
+
 RunSchema.index({ robotMetaId: 1, startedAt: 1 }, { name: 'run_robot_meta_started_at_idx' });
 RunSchema.index({ robotMetaId: 1, _id: -1 }, { name: 'run_robot_meta_id_desc_idx' });
 RunSchema.index({ status: 1, startedAt: 1 }, { name: 'run_status_started_at_idx' });
 RunSchema.index({ runId: 1 }, { unique: true, name: 'run_id_uidx' });
 RunSchema.index({ scoutId: 1, startedAt: -1 }, { name: 'run_scout_id_started_at_idx' });
+RunSchema.index(
+  { ownerId: 1, retryRequestKey: 1 },
+  {
+    unique: true,
+    name: 'run_owner_retry_request_key_uidx',
+    partialFilterExpression: { retryRequestKey: { $type: 'string' } },
+  }
+);
+RunSchema.index(
+  { ownerId: 1, activeAutomationKey: 1 },
+  {
+    unique: true,
+    name: 'run_owner_active_automation_uidx',
+    partialFilterExpression: { activeAutomationKey: { $type: 'string' } },
+  }
+);
+RunSchema.index(
+  { ownerId: 1, accountActiveSlot: 1 },
+  {
+    unique: true,
+    name: 'run_owner_active_slot_uidx',
+    partialFilterExpression: { accountActiveSlot: { $type: 'number' } },
+  }
+);
 
+/** Post-backfill list indexes (ownerId + sortAt); require backfillRunListFields. */
+RunSchema.index({ ownerId: 1, sortAt: -1, _id: -1 }, { name: 'run_owner_sort_at_desc_idx' });
+RunSchema.index({ ownerId: 1, status: 1, sortAt: -1 }, { name: 'run_owner_status_sort_at_idx' });
+RunSchema.index(
+  { ownerId: 1, normalizedFailureReason: 1, sortAt: -1 },
+  { name: 'run_owner_failure_reason_sort_at_idx' }
+);
+RunSchema.index(
+  { ownerId: 1, robotMetaId: 1, sortAt: -1 },
+  { name: 'run_owner_robot_meta_sort_at_idx' }
+);
 
 const Run = mongoose.models.Run || mongoose.model<IRun>('Run', RunSchema);
 

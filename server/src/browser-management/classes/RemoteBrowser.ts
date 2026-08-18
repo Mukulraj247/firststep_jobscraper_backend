@@ -19,6 +19,7 @@ import { FingerprintGenerator } from "fingerprint-generator";
 import { BrowserLaunchProfile, connectToRemoteBrowser } from '../browserConnection';
 import { applyStealthOverrides } from '../../services/unblocker';
 import { forceCloseBrowser } from '../../services/browserProcess';
+import { toOperationalRunConfig } from '../../services/automationConfigView';
 
 declare global {
   interface Window {
@@ -838,7 +839,11 @@ export class RemoteBrowser {
                         }
                     }, {})
                 }
-                logger.log('debug', `Starting interpretation with settings: ${JSON.stringify(this.interpreterSettings, null, 2)}`);
+                const safeSettings = {
+                    ...this.interpreterSettings,
+                    runtimeConfig: toOperationalRunConfig(this.interpreterSettings.runtimeConfig),
+                };
+                logger.log('debug', `Starting interpretation with settings: ${JSON.stringify(safeSettings, null, 2)}`);
                 await this.interpreter.interpretRecordingInEditor(
                     workflow, this.currentPage,
                     (newPage: Page) => this.currentPage = newPage,

@@ -3,6 +3,7 @@ import {
   evaluateRunDrift,
   loadDriftConfig,
   RunDriftOutcome,
+  selectStableRowBaseline,
   type DriftConfig,
 } from './runDrift';
 
@@ -170,5 +171,19 @@ describe('loadDriftConfig', () => {
 
   it('respects kill switch', () => {
     expect(loadDriftConfig({ DRIFT_DETECTION_ENABLED: 'false' }).enabled).toBe(false);
+  });
+});
+
+describe('selectStableRowBaseline', () => {
+  it('uses the median so a single inflated extraction cannot poison drift detection', () => {
+    expect(selectStableRowBaseline([29, 4, 4, 4, 4])).toBe(4);
+  });
+
+  it('uses the lower median when two runs include an inflated outlier', () => {
+    expect(selectStableRowBaseline([29, 4])).toBe(4);
+  });
+
+  it('uses the newest run when there is no history to stabilize', () => {
+    expect(selectStableRowBaseline([30])).toBe(30);
   });
 });

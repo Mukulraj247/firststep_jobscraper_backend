@@ -1,9 +1,13 @@
 import { v4 as uuid } from 'uuid';
+import mongoose from 'mongoose';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
 import { enqueueScraperRun, requeueScraperRun } from '../queue/scraperQueue';
 import { getAutomationConfig } from './automation';
 import logger from '../logger';
+import { toOperationalRunConfig } from './automationConfigView';
+import { normalizeOwnerIdForWrite } from '../utils/ownerId';
+import { normalizeFailureReason } from '../utils/failureReason';
 
 /** Default: only re-check runs that have been pending this long (periodic poller). */
 const STALE_PENDING_MS = 3 * 60 * 1000;
@@ -20,6 +24,9 @@ export type ReenqueuePendingOptions = {
  */
 export async function reenqueueStalePendingScraperRuns(options?: ReenqueuePendingOptions): Promise<void> {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return;
+    }
     const minAgeMs = options?.minAgeMs ?? STALE_PENDING_MS;
     const maxRuns = options?.maxRuns ?? 40;
     const runs = await Run.find({ status: 'pending' }).limit(maxRuns).lean();
@@ -60,10 +67,10 @@ export async function reenqueueStalePendingScraperRuns(options?: ReenqueuePendin
         automationId: run.robotMetaId,
         runId: run.runId,
         userId: String(run.runByUserId),
-        config: {
+        config: toOperationalRunConfig({
           ...getAutomationConfig(robot),
           ...(run.interpreterSettings?.runtimeConfig || {}),
-        },
+        }),
         _attemptsMade: run.retryCount || 0,
       });
       ensured += 1;
@@ -83,11 +90,27 @@ export async function createQueuedAutomationRun(
     source?: 'manual' | 'scheduled';
     scheduleJobId?: string | null;
     runtimeConfig?: Record<string, any>;
+    lineage?: {
+      retryOfRunId: string;
+      originalRunId: string;
+      retrySequence: number;
+      retryRequestKey: string;
+    };
+    admission?: {
+      activeAutomationKey: string;
+      accountActiveSlot: number;
+    };
   }
 ) {
   const runId = uuid();
   const browserId = uuid();
   const source = options?.source || 'manual';
+  const ownerId = normalizeOwnerIdForWrite(userId);
+  const sortAt = new Date();
+  const operationalConfig = toOperationalRunConfig({
+    ...getAutomationConfig(robot),
+    ...(options?.runtimeConfig || {}),
+  });
 
   try {
     await Run.create({
@@ -106,15 +129,16 @@ export async function createQueuedAutomationRun(
         maxConcurrency: 1,
         maxRepeats: 1,
         debug: true,
-        runtimeConfig: {
-          ...getAutomationConfig(robot),
-          ...(options?.runtimeConfig || {}),
-        },
+        runtimeConfig: operationalConfig,
       },
       log: source === 'scheduled'
         ? `[SCHEDULE] Run created by scheduler${options?.scheduleJobId ? ` (${options.scheduleJobId})` : ''}`
         : '[QUEUE] Run created and waiting for Agenda worker',
       runId,
+      ownerId,
+      sortAt,
+      ...(options?.lineage || {}),
+      ...(options?.admission || {}),
       runByUserId: userId,
       runByScheduleId: source === 'scheduled' ? (options?.scheduleJobId || uuid()) : null,
       serializableOutput: {},
@@ -125,18 +149,42 @@ export async function createQueuedAutomationRun(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.log('error', `Failed to create Run document for robot ${robot.recording_meta.id}: ${message}`);
+    if ((err as any)?.code === 11000) {
+      throw err;
+    }
     throw new Error(`Failed to create Run document: ${message}`);
   }
 
-  const job = await enqueueScraperRun({
-    automationId: robot.recording_meta.id,
-    runId,
-    userId: String(userId),
-    config: {
-      ...getAutomationConfig(robot),
-      ...(options?.runtimeConfig || {}),
-    },
-  });
+  let job;
+  try {
+    job = await enqueueScraperRun({
+      automationId: robot.recording_meta.id,
+      runId,
+      userId: String(userId),
+      config: operationalConfig,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const finishedAt = new Date().toISOString();
+    await Run.updateOne(
+      { runId },
+      {
+        $set: {
+          status: 'failed',
+          finishedAt,
+          errorMessage: message,
+          normalizedFailureReason: normalizeFailureReason({ errorMessage: message }),
+          log: `[QUEUE] Failed to enqueue Agenda job: ${message}`,
+        },
+        $unset: {
+          activeAutomationKey: 1,
+          accountActiveSlot: 1,
+        },
+      }
+    );
+    logger.log('error', `Failed to enqueue Run ${runId}: ${message}`);
+    throw err;
+  }
 
   const jobId = job.attrs._id?.toString() || 'unknown';
   await Run.updateOne({ runId }, { $set: {

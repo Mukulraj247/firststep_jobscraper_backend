@@ -16,6 +16,7 @@ import { convertPageToMarkdown, convertPageToHTML, convertPageToScreenshot } fro
 import { processRobotOutputFormats } from '../utils/output-post-processor';
 import { getInterpretationFailureReason, hasExpectedRobotOutput } from '../utils/output-validation';
 import { applyAutomationRuntimeConfig, dispatchAutomationWebhook, persistExtractedDataForRun } from '../services/automation';
+import { resolveAutomationExecutionConfig } from '../services/automationConfigView';
 import {
   warmUpBeforeAutomation,
   getUnblockOptionsFromRuntimeConfig,
@@ -24,6 +25,8 @@ import {
 import { destroyRemoteBrowser } from '../browser-management/controller';
 import { AddGeneratedFlags, withTimeout } from '../utils/workflowHelpers';
 import { killScrapeChildForRun } from './scrapeJobSupervisor';
+import { installOutboundBrowserContextGuard } from '../services/listExtractor';
+import { normalizeFailureReason } from '../utils/failureReason';
 
 export interface ExecuteRunData {
   userId: string;
@@ -79,6 +82,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
   logger.log('info', `Processing run execution job for runId: ${data.runId}, browserId: ${data.browserId}`);
 
   let browser: any;
+  let disposeOutboundGuard: (() => Promise<void>) | undefined;
 
   try {
     const run = await Run.findOne({ runId: data.runId });
@@ -161,6 +165,8 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
 
       if (!currentPage) throw new Error(`No current page available for browser ${browserId} after ${BROWSER_PAGE_TIMEOUT / 1000}s timeout`);
 
+      disposeOutboundGuard = await installOutboundBrowserContextGuard(currentPage.context());
+      try {
       await applyAutomationRuntimeConfig(currentPage, recording);
 
       if (recording.recording_meta.type === 'scrape') {
@@ -215,7 +221,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
           }
 
           run.status = 'success';
-          run.finishedAt = new Date().toLocaleString();
+          run.finishedAt = new Date().toISOString();
           run.log = `${formats.join(', ').toUpperCase()} conversion completed successfully`;
           run.serializableOutput = serializableOutput;
           run.binaryOutput = binaryOutput;
@@ -236,12 +242,12 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
             robotMetaId: plainRun.robotMetaId,
             robotName: recording.recording_meta.name,
             status: 'success',
-            finishedAt: new Date().toLocaleString(),
+            finishedAt: new Date().toISOString(),
           });
 
           const webhookPayload: any = {
             runId: data.runId, robotId: plainRun.robotMetaId, robotName: recording.recording_meta.name,
-            status: 'success', finishedAt: new Date().toLocaleString(),
+            status: 'success', finishedAt: new Date().toISOString(),
           };
           if (formats.includes('markdown')) webhookPayload.markdown = markdown;
           if (formats.includes('html')) webhookPayload.html = html;
@@ -260,14 +266,20 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
         } catch (error: any) {
           logger.log('error', `${formats.join(', ')} conversion failed for run ${data.runId}: ${error.message}`);
           run.status = 'failed';
-          run.finishedAt = new Date().toLocaleString();
+          run.finishedAt = new Date().toISOString();
           run.log = `${formats.join(', ').toUpperCase()} conversion failed: ${error.message}`;
+          run.errorMessage = error.message;
+          run.normalizedFailureReason = normalizeFailureReason({
+            failureReason: run.failureReason,
+            failureReasonSource: run.failureReasonSource,
+            errorMessage: error.message,
+          });
           await run.save();
 
           emitRunEvent(browserId, data.userId, 'run-completed', {
             runId: data.runId, robotMetaId: plainRun.robotMetaId,
             robotName: recording.recording_meta.name, status: 'failed',
-            finishedAt: new Date().toLocaleString(),
+            finishedAt: new Date().toISOString(),
           });
 
           capture('maxun-oss-run-created', {
@@ -297,13 +309,20 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       emitRunEvent(browserId, data.userId, 'run-started', {
         runId: data.runId, robotMetaId: plainRun.robotMetaId,
         robotName: recording.recording_meta.name, status: 'running',
-        startedAt: new Date().toLocaleString(),
+        startedAt: new Date().toISOString(),
       });
 
       browser.interpreter.setRunId(data.runId);
 
       const INTERPRETATION_TIMEOUT = 600000;
-      const runtimeCfg = (plainRun.interpreterSettings as { runtimeConfig?: Record<string, unknown> } | undefined)?.runtimeConfig;
+      const runtimeCfg = resolveAutomationExecutionConfig(
+        recording,
+        (plainRun.interpreterSettings as { runtimeConfig?: Record<string, unknown> } | undefined)?.runtimeConfig
+      );
+      const executionSettings = {
+        ...(plainRun.interpreterSettings || {}),
+        runtimeConfig: runtimeCfg,
+      };
       const unblockOpts = getUnblockOptionsFromRuntimeConfig(runtimeCfg);
       await warmUpBeforeAutomation(currentPage, unblockOpts);
       const stopCloudflareNavWait = attachCloudflareWaitOnNavigation(currentPage.context(), unblockOpts);
@@ -314,7 +333,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
           AddGeneratedFlags(recording.recording),
           currentPage,
           (newPage: Page) => { currentPage = newPage; },
-          plainRun.interpreterSettings,
+          executionSettings,
         );
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error(`Workflow interpretation timed out after ${INTERPRETATION_TIMEOUT / 1000}s`)), INTERPRETATION_TIMEOUT)
@@ -407,7 +426,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       }
 
       run.status = 'success';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       run.log = interpretationInfo.log.join('\n');
       run.binaryOutput = uploadedBinaryOutput;
       run.serializableOutput = {
@@ -445,12 +464,12 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       emitRunEvent(browserId, data.userId, 'run-completed', {
         runId: data.runId, robotMetaId: plainRun.robotMetaId,
         robotName: recording.recording_meta.name, status: 'success',
-        finishedAt: new Date().toLocaleString(),
+        finishedAt: new Date().toISOString(),
       });
 
       await sendWebhook(plainRun.robotMetaId, 'run_completed', {
         robot_id: plainRun.robotMetaId, run_id: data.runId, robot_name: recording.recording_meta.name,
-        status: 'success', started_at: plainRun.startedAt, finished_at: new Date().toLocaleString(),
+        status: 'success', started_at: plainRun.startedAt, finished_at: new Date().toISOString(),
         extracted_data: {
           captured_texts: Object.keys(categorizedOutput.scrapeSchema || {}).length > 0
             ? Object.entries(categorizedOutput.scrapeSchema).reduce((acc, [name, value]) => { acc[name] = Array.isArray(value) ? value : [value]; return acc; }, {} as Record<string, any[]>)
@@ -476,6 +495,9 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       logger.log('info', `Browser ${browserId} destroyed after successful run ${data.runId}`);
 
       return { success: true };
+    } finally {
+      await disposeOutboundGuard?.().catch(() => undefined);
+    }
 
     } catch (executionError: any) {
       logger.log('error', `Run execution failed for run ${data.runId}: ${executionError.message}`);
@@ -495,8 +517,14 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       } catch {}
 
       run.status = 'failed';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       run.log = `Failed: ${executionError.message}`;
+      run.errorMessage = executionError.message;
+      run.normalizedFailureReason = normalizeFailureReason({
+        failureReason: run.failureReason,
+        failureReasonSource: run.failureReasonSource,
+        errorMessage: executionError.message,
+      });
       await run.save();
 
       try {
@@ -504,7 +532,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
         emitRunEvent(browserId, data.userId, 'run-completed', {
           runId: data.runId, robotMetaId: plainRun.robotMetaId,
           robotName: recording?.recording_meta?.name || 'Unknown Robot', status: 'failed',
-          finishedAt: new Date().toLocaleString(), hasPartialData: partialDataExtracted,
+          finishedAt: new Date().toISOString(), hasPartialData: partialDataExtracted,
         });
       } catch {}
 
@@ -512,7 +540,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       await sendWebhook(plainRun.robotMetaId, 'run_failed', {
         robot_id: plainRun.robotMetaId, run_id: data.runId,
         robot_name: recording?.recording_meta?.name || 'Unknown Robot',
-        status: 'failed', started_at: plainRun.startedAt, finished_at: new Date().toLocaleString(),
+        status: 'failed', started_at: plainRun.startedAt, finished_at: new Date().toISOString(),
         error: { message: executionError.message, stack: executionError.stack, type: 'ExecutionError' },
         partial_data_extracted: partialDataExtracted,
         metadata: { browser_id: plainRun.browserId, user_id: data.userId },
@@ -548,15 +576,21 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
       const run = await Run.findOne({ runId: data.runId });
       if (run) {
         run.status = 'failed';
-        run.finishedAt = new Date().toLocaleString();
+        run.finishedAt = new Date().toISOString();
         run.log = `Failed: ${errorMessage}`;
+        run.errorMessage = errorMessage;
+        run.normalizedFailureReason = normalizeFailureReason({
+          failureReason: run.failureReason,
+          failureReasonSource: run.failureReasonSource,
+          errorMessage,
+        });
         await run.save();
 
         const recording: any = await Robot.findOne({ 'recording_meta.id': run.robotMetaId }).lean();
         await sendWebhook(run.robotMetaId, 'run_failed', {
           robot_id: run.robotMetaId, run_id: data.runId,
           robot_name: recording?.recording_meta?.name || 'Unknown Robot',
-          status: 'failed', started_at: run.startedAt, finished_at: new Date().toLocaleString(),
+          status: 'failed', started_at: run.startedAt, finished_at: new Date().toISOString(),
           error: { message: errorMessage },
           metadata: { browser_id: run.browserId, user_id: data.userId },
         });
@@ -564,7 +598,7 @@ export async function processRunExecution(job: AgendaJob<ExecuteRunData> | { dat
         emitRunEvent(run.browserId, data.userId, 'run-completed', {
           runId: data.runId, robotMetaId: run.robotMetaId,
           robotName: recording?.recording_meta?.name || 'Unknown Robot',
-          status: 'failed', finishedAt: new Date().toLocaleString(),
+          status: 'failed', finishedAt: new Date().toISOString(),
         });
       }
     } catch {}
@@ -619,15 +653,15 @@ export async function abortRun(runId: string, userId: string): Promise<boolean> 
 
     if (!browser) {
       run.status = 'aborted';
-      run.finishedAt = new Date().toLocaleString();
+      run.finishedAt = new Date().toISOString();
       run.log = 'Aborted: Browser not found or already closed';
       await run.save();
-      emitToBrowserNamespace(plainRun.browserId, 'run-aborted', { runId, robotName, status: 'aborted', finishedAt: new Date().toLocaleString() });
+      emitToBrowserNamespace(plainRun.browserId, 'run-aborted', { runId, robotName, status: 'aborted', finishedAt: new Date().toISOString() });
       return true;
     }
 
     run.status = 'aborted';
-    run.finishedAt = new Date().toLocaleString();
+    run.finishedAt = new Date().toISOString();
     run.log = 'Run aborted by user';
     await run.save();
 
@@ -640,7 +674,7 @@ export async function abortRun(runId: string, userId: string): Promise<boolean> 
       await triggerIntegrationUpdates(runId, plainRun.robotMetaId);
     }
 
-    emitToBrowserNamespace(plainRun.browserId, 'run-aborted', { runId, robotName, status: 'aborted', finishedAt: new Date().toLocaleString() });
+    emitToBrowserNamespace(plainRun.browserId, 'run-aborted', { runId, robotName, status: 'aborted', finishedAt: new Date().toISOString() });
 
     try {
       await new Promise(resolve => setTimeout(resolve, 500));

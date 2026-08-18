@@ -1,18 +1,17 @@
-import React, { useEffect, useState } from "react";
-import { RecordingsTable } from "./RecordingsTable";
-import { Grid } from "@mui/material";
-import { RunSettings, RunSettingsModal } from "../run/RunSettings";
+import React, { useCallback, useEffect, useState } from 'react';
+import { ScrapersPage } from '../../features/scrapers/ScrapersPage';
+import { RunSettings, RunSettingsModal } from '../run/RunSettings';
 import {
   ScheduleSettings,
   ScheduleSettingsPage,
-} from "./pages/ScheduleSettingsPage";
-import { RobotIntegrationPage } from "./pages/RobotIntegrationPage";
-import { RobotSettingsPage } from "./pages/RobotSettingsPage";
-import { RobotEditPage } from "./pages/RobotEditPage";
-import { RobotDuplicatePage } from "./pages/RobotDuplicatePage";
-import { useNavigate, useLocation, useParams } from "react-router-dom";
-import { useGlobalInfoStore } from "../../context/globalInfo";
-import { useTranslation } from "react-i18next";
+} from './pages/ScheduleSettingsPage';
+import { RobotIntegrationPage } from './pages/RobotIntegrationPage';
+import { RobotSettingsPage } from './pages/RobotSettingsPage';
+import { RobotEditPage } from './pages/RobotEditPage';
+import { RobotDuplicatePage } from './pages/RobotDuplicatePage';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useGlobalInfoStore } from '../../context/globalInfo';
+import { useTranslation } from 'react-i18next';
 
 interface RecordingsProps {
   handleEditRecording: (id: string, fileName: string) => void;
@@ -22,7 +21,6 @@ interface RecordingsProps {
 }
 
 export const Recordings = ({
-  handleEditRecording,
   handleRunRecording,
   setRecordingInfo,
   handleScheduleRecording,
@@ -33,30 +31,27 @@ export const Recordings = ({
   const { notify } = useGlobalInfoStore();
   const { t } = useTranslation();
 
-  const handleNavigate = (
-    path: string,
-    id: string,
-    name: string,
-    params: string[]
-  ) => {
-    setParams(params);
-    setRecordingInfo(id, name);
-    navigate(path);
-  };
+  const handleNavigate = useCallback(
+    (path: string, id: string, name: string, robotParams: string[]) => {
+      setParams(robotParams);
+      setRecordingInfo(id, name);
+      navigate(path);
+    },
+    [navigate, setRecordingInfo]
+  );
 
   const handleClose = () => {
     setParams([]);
-    setRecordingInfo("", "");
-    navigate("/robots"); // Navigate back to the main robots page
+    setRecordingInfo('', '');
+    navigate('/robots');
   };
 
   useEffect(() => {
-    // Helper function to get and clear a cookie
     const getAndClearCookie = (name: string) => {
       const value = document.cookie
-        .split("; ")
+        .split('; ')
         .find((row) => row.startsWith(`${name}=`))
-        ?.split("=")[1];
+        ?.split('=')[1];
 
       if (value) {
         document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
@@ -65,28 +60,23 @@ export const Recordings = ({
       return value;
     };
 
-    const authStatus = getAndClearCookie("robot_auth_status");
-    const airtableAuthStatus = getAndClearCookie("airtable_auth_status");
-    const robotId = getAndClearCookie("robot_auth_robotId");
+    const authStatus = getAndClearCookie('robot_auth_status');
+    const airtableAuthStatus = getAndClearCookie('airtable_auth_status');
+    const robotId = getAndClearCookie('robot_auth_robotId');
 
-    if (airtableAuthStatus === "success" && robotId) {
-      console.log("Airtable Auth Status:", airtableAuthStatus);
-      notify(
-        airtableAuthStatus,
-        t("recordingtable.notifications.auth_success")
-      );
-      handleNavigate(`/robots/${robotId}/integrate/airtable`, robotId, "", []);
-    } else if (authStatus === "success" && robotId) {
-      console.log("Google Auth Status:", authStatus);
-      notify(authStatus, t("recordingtable.notifications.auth_success"));
-      handleNavigate(`/robots/${robotId}/integrate/googleSheets`, robotId, "", []);
+    if (airtableAuthStatus === 'success' && robotId) {
+      notify(airtableAuthStatus, t('recordingtable.notifications.auth_success'));
+      handleNavigate(`/robots/${robotId}/integrate/airtable`, robotId, '', []);
+    } else if (authStatus === 'success' && robotId) {
+      notify(authStatus, t('recordingtable.notifications.auth_success'));
+      handleNavigate(`/robots/${robotId}/integrate/googleSheets`, robotId, '', []);
     }
-  }, []);
+  }, [handleNavigate, notify, t]);
 
   const getCurrentPageComponent = () => {
     const currentPath = location.pathname;
 
-    if (currentPath.endsWith("/run")) {
+    if (currentPath.endsWith('/run')) {
       return (
         <RunSettingsModal
           isOpen={true}
@@ -96,17 +86,20 @@ export const Recordings = ({
           params={params}
         />
       );
-    } else if (currentPath.endsWith("/schedule")) {
+    }
+    if (currentPath.endsWith('/schedule')) {
       return <ScheduleSettingsPage handleStart={handleScheduleRecording} />;
-    } else if (currentPath.includes("/integrate")) {
-      return (
-        <RobotIntegrationPage handleStart={() => {}} robotPath={"robots"} />
-      );
-    } else if (currentPath.endsWith("/settings")) {
+    }
+    if (currentPath.includes('/integrate')) {
+      return <RobotIntegrationPage handleStart={() => {}} robotPath="robots" />;
+    }
+    if (currentPath.endsWith('/settings')) {
       return <RobotSettingsPage handleStart={() => {}} />;
-    } else if (currentPath.endsWith("/edit")) {
+    }
+    if (currentPath.endsWith('/edit')) {
       return <RobotEditPage handleStart={() => {}} />;
-    } else if (currentPath.endsWith("/duplicate")) {
+    }
+    if (currentPath.endsWith('/duplicate')) {
       return <RobotDuplicatePage handleStart={() => {}} />;
     }
     return null;
@@ -114,44 +107,37 @@ export const Recordings = ({
 
   const currentPath = location.pathname;
   const isConfigPage =
-    currentPath.includes("/schedule") ||
-    currentPath.includes("/integrate") ||
-    currentPath.includes("/settings") ||
-    currentPath.includes("/edit") ||
-    currentPath.includes("/duplicate") ||
-    currentPath.includes("/run");
+    currentPath.includes('/schedule') ||
+    currentPath.includes('/integrate') ||
+    currentPath.includes('/settings') ||
+    currentPath.includes('/edit') ||
+    currentPath.includes('/duplicate') ||
+    currentPath.includes('/run');
 
   if (isConfigPage) {
     return getCurrentPageComponent();
   }
 
   return (
-    <React.Fragment>
-      <Grid container direction="column" sx={{ padding: "30px" }}>
-        <Grid item xs>
-          <RecordingsTable
-            handleEditRecording={handleEditRecording}
-            handleRunRecording={(id, name, params) =>
-              handleNavigate(`/robots/${id}/run`, id, name, params)
-            }
-            handleScheduleRecording={(id, name, params) =>
-              handleNavigate(`/robots/${id}/schedule`, id, name, params)
-            }
-            handleIntegrateRecording={(id, name, params) =>
-              handleNavigate(`/robots/${id}/integrate`, id, name, params)
-            }
-            handleSettingsRecording={(id, name, params) =>
-              handleNavigate(`/robots/${id}/settings`, id, name, params)
-            }
-            handleEditRobot={(id, name, params) =>
-              handleNavigate(`/robots/${id}/edit`, id, name, params)
-            }
-            handleDuplicateRobot={(id, name, params) =>
-              handleNavigate(`/robots/${id}/duplicate`, id, name, params)
-            }
-          />
-        </Grid>
-      </Grid>
-    </React.Fragment>
+    <ScrapersPage
+      handleRunRecording={(id, name, robotParams) =>
+        handleNavigate(`/robots/${id}/run`, id, name, robotParams)
+      }
+      handleScheduleRecording={(id, name, robotParams) =>
+        handleNavigate(`/robots/${id}/schedule`, id, name, robotParams)
+      }
+      handleIntegrateRecording={(id, name, robotParams) =>
+        handleNavigate(`/robots/${id}/integrate`, id, name, robotParams)
+      }
+      handleSettingsRecording={(id, name, robotParams) =>
+        handleNavigate(`/robots/${id}/settings`, id, name, robotParams)
+      }
+      handleEditRobot={(id, name, robotParams) =>
+        handleNavigate(`/robots/${id}/edit`, id, name, robotParams)
+      }
+      handleDuplicateRobot={(id, name, robotParams) =>
+        handleNavigate(`/robots/${id}/duplicate`, id, name, robotParams)
+      }
+    />
   );
 };

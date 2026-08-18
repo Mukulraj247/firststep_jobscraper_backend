@@ -11,6 +11,8 @@ import {
   normalizeLocation,
   normalizeSalaryRange,
 } from './jobPageParser';
+import { resolveSafeOutboundUrl } from '../utils/outboundUrlPolicy';
+import { assertPinnedPeerAddress, createPinnedLookup } from './safeOutboundHttp';
 
 export type AtsProvider =
   | 'greenhouse'
@@ -172,6 +174,24 @@ const httpClient: AxiosInstance = axios.create({
   httpsAgent: keepAliveAgent,
   httpAgent: keepAliveHttpAgent,
   validateStatus: (s) => s >= 200 && s < 500,
+});
+
+// ATS URLs are derived from user targets or remote HTML. Never let Axios
+// auto-follow a redirect, because every destination must be policy-checked.
+httpClient.interceptors.request.use(async (config) => {
+  const rawUrl = config.baseURL ? new URL(config.url || '', config.baseURL).toString() : config.url || '';
+  const target = await resolveSafeOutboundUrl(rawUrl);
+  const selected = target.addresses[0];
+  if (!selected) throw new Error('ATS outbound hostname could not be resolved');
+  (config as any).lookup = createPinnedLookup(selected.address, selected.family);
+  (config as any).__safeOutboundAddress = selected.address;
+  config.maxRedirects = 0;
+  return config;
+});
+httpClient.interceptors.response.use((response) => {
+  const expected = (response.config as any).__safeOutboundAddress;
+  if (expected) assertPinnedPeerAddress(expected, response.request?.socket?.remoteAddress);
+  return response;
 });
 
 const empty = (): ParsedJobFields => ({
@@ -994,6 +1014,21 @@ export interface AtsBoardDetection {
 }
 
 const FINDLY_DEFAULT_API_BASE = 'https://jobsapi-internal.m-cloud.io/api/';
+const FINDLY_API_HOSTS = new Set(['jobsapi-internal.m-cloud.io', 'jobsapi.m-cloud.io']);
+
+/** HTML controls this value, so permit only the known Findly API hosts. */
+export function assertSafeFindlyApiBase(rawApiBase: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawApiBase);
+  } catch {
+    throw new Error('Findly API base is invalid');
+  }
+  if (parsed.protocol !== 'https:' || !FINDLY_API_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new Error('Findly API base is not an allowed Findly host');
+  }
+  return parsed.toString();
+}
 
 /** URL query keys that map onto Findly/m-cloud `facet[]` filters. */
 const FINDLY_FACET_ALIASES: Record<string, string> = {
@@ -1168,6 +1203,7 @@ async function fetchFindlyBoardJobs(
 
   const cfg = parseFindlyConfigFromHtml(htmlRes.data);
   if (!cfg) return null;
+  cfg.apiBase = assertSafeFindlyApiBase(cfg.apiBase);
 
   let origin: string;
   try {

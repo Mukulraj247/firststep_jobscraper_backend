@@ -4,6 +4,13 @@ import { Pool } from 'pg';
 import type { IRun } from '../models/Run';
 import type { IRobot } from '../models/Robot';
 import logger from '../logger';
+import {
+  isUnsafeOutboundUrlError,
+} from '../utils/outboundUrlPolicy';
+import { requestSafeOutboundUrl } from './safeOutboundHttp';
+import type { SafeOutboundHttpOptions } from './safeOutboundHttp';
+import { resolveStoredDestinationWebhookSettings } from '../utils/webhookDeliverySettings';
+import { neutralizeSpreadsheetCell } from '../utils/spreadsheet';
 
 interface ExtractedRow {
   source: string;
@@ -57,27 +64,68 @@ const storeDestinationResults = async (run: IRun | any, results: DestinationResu
   await run.save();
 };
 
-async function postJsonWithRetry(url: string, payload: any, options?: { attempts?: number; delayMs?: number; timeoutMs?: number }) {
-  const attempts = options?.attempts || 3;
-  const delayMs = options?.delayMs || 5000;
-  const timeoutMs = options?.timeoutMs || 30000;
+const WEBHOOK_RESPONSE_MAX_BYTES = 4096;
+export async function postJsonWithRetry(
+  url: string,
+  payload: any,
+  options?: {
+    attempts?: number;
+    retryAttempts?: number;
+    delayMs?: number;
+    timeoutMs?: number;
+    deadlineMs?: number;
+    transport?: SafeOutboundHttpOptions['transport'];
+    resolve?: SafeOutboundHttpOptions['resolve'];
+  }
+) {
+  const attempts = options?.retryAttempts !== undefined
+    ? options.retryAttempts + 1
+    : options?.attempts ?? 3;
+  const delayMs = options?.delayMs ?? 5000;
+  const timeoutMs = options?.timeoutMs ?? 30000;
+  const deadlineMs = options?.deadlineMs ?? 120_000;
+  const deadlineAt = Date.now() + deadlineMs;
   let lastError: any = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(`Webhook delivery deadline exceeded after ${deadlineMs}ms`);
+    }
+    let responseToCancel: Awaited<ReturnType<typeof requestSafeOutboundUrl>> | undefined;
+    let timeoutReject: ((error: Error) => void) | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutReject = reject;
+    });
+    const attemptTimeoutMs = Math.min(timeoutMs, remainingMs);
+    const deadlineLimited = attemptTimeoutMs === remainingMs;
+    const timer = setTimeout(() => {
+      void responseToCancel?.body.cancel().catch(() => undefined);
+      timeoutReject?.(new Error(
+        deadlineLimited
+          ? `Webhook delivery deadline exceeded after ${deadlineMs}ms`
+          : `Webhook request timed out after ${timeoutMs}ms`
+      ));
+    }, attemptTimeoutMs);
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      const bodyText = await response.text().catch(() => '');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}: ${bodyText.slice(0, 300)}`);
+      const response = await Promise.race([
+        requestSafeOutboundUrl(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          timeoutMs,
+          transport: options?.transport,
+          resolve: options?.resolve,
+        }),
+        timeout,
+      ]);
+      responseToCancel = response;
+      const bodyText = await Promise.race([
+        response.text(WEBHOOK_RESPONSE_MAX_BYTES).catch(() => ''),
+        timeout,
+      ]);
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
 
       return {
@@ -86,11 +134,19 @@ async function postJsonWithRetry(url: string, payload: any, options?: { attempts
         attempt,
       };
     } catch (error: any) {
-      clearTimeout(timer);
       lastError = error;
-      if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+      if (isUnsafeOutboundUrlError(error)) {
+        throw error;
       }
+      if (attempt < attempts) {
+        const retryDelayMs = delayMs * attempt;
+        if (Date.now() + retryDelayMs >= deadlineAt) {
+          throw new Error(`Webhook delivery deadline exceeded after ${deadlineMs}ms`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -100,6 +156,7 @@ async function postJsonWithRetry(url: string, payload: any, options?: { attempts
 async function dispatchWebhookDestination(run: IRun | any, robot: IRobot | any, rows: ExtractedRow[]): Promise<DestinationResult> {
   const config = getAutomationConfig(robot);
   const destinationConfig = config.destinations?.webhook;
+  const deliverySettings = resolveStoredDestinationWebhookSettings(destinationConfig);
   const webhookUrl = destinationConfig?.url || config.webhookUrl;
 
   if (!webhookUrl || destinationConfig?.enabled === false) {
@@ -122,16 +179,17 @@ async function dispatchWebhookDestination(run: IRun | any, robot: IRobot | any, 
   };
 
   const response = await postJsonWithRetry(webhookUrl, payload, {
-    attempts: destinationConfig?.retryAttempts || 3,
-    delayMs: (destinationConfig?.retryDelaySeconds || 5) * 1000,
-    timeoutMs: (destinationConfig?.timeoutSeconds || 30) * 1000,
+    retryAttempts: deliverySettings.retryAttempts,
+    delayMs: deliverySettings.retryDelaySeconds * 1000,
+    timeoutMs: deliverySettings.timeoutSeconds * 1000,
+    deadlineMs: 120_000,
   });
 
   await appendRunLog(run, `Destination webhook succeeded with status ${response.status} on attempt ${response.attempt}`);
   return {
     destination: 'webhook',
     status: 'success',
-    message: `Delivered to ${webhookUrl}`,
+    message: 'Webhook delivered',
     meta: {
       status: response.status,
       attempt: response.attempt,
@@ -172,10 +230,13 @@ async function dispatchGoogleSheetsDestination(run: IRun | any, robot: IRobot | 
   }
 
   const headers = Object.keys(flatRows[0]);
+  const safeHeaders = headers.map(neutralizeSpreadsheetCell);
   const values = flatRows.map((row) =>
     headers.map((header) => {
       const typedRow = row as Record<string, any>;
-      return typeof typedRow[header] === 'object' ? JSON.stringify(typedRow[header]) : typedRow[header];
+      const value =
+        typeof typedRow[header] === 'object' ? JSON.stringify(typedRow[header]) : typedRow[header];
+      return neutralizeSpreadsheetCell(value);
     })
   );
 
@@ -202,12 +263,12 @@ async function dispatchGoogleSheetsDestination(run: IRun | any, robot: IRobot | 
   }).catch(() => ({ data: { values: [] } } as any));
 
   const existingHeaders = existingHeaderResponse.data?.values?.[0] || [];
-  const requestValues = existingHeaders.length === 0 ? [headers, ...values] : values;
+  const requestValues = existingHeaders.length === 0 ? [safeHeaders, ...values] : values;
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: destinationConfig.spreadsheetId,
     range: `${sheetName}!A1`,
-    valueInputOption: 'USER_ENTERED',
+    valueInputOption: 'RAW',
     requestBody: {
       values: requestValues,
     },

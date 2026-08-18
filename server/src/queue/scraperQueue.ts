@@ -352,6 +352,29 @@ export async function scheduleRecurringTrigger(
   return nextRunAt;
 }
 
+/** Keep Agenda's next fire aligned with DB after each scheduled run advances timestamps. */
+export async function updateScheduledTriggerNextRunAt(
+  automationId: string,
+  nextRunAt: Date
+): Promise<void> {
+  try {
+    const agenda = await getAgenda();
+    const jobs = await agenda.jobs({
+      name: 'schedule-triggers',
+      'data.automationId': automationId,
+    });
+    const job = jobs?.[0];
+    if (!job) return;
+    job.attrs.nextRunAt = new Date(nextRunAt);
+    await job.save();
+  } catch (err: any) {
+    logger.log(
+      'warn',
+      `Failed to sync Agenda nextRunAt for automation ${automationId}: ${err?.message || err}`
+    );
+  }
+}
+
 export async function cancelScheduledTrigger(automationId: string): Promise<void> {
   const agenda = await getAgenda();
   const count = await agenda.cancel({ name: 'schedule-triggers', 'data.automationId': automationId });

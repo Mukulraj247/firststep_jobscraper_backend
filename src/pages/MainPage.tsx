@@ -1,11 +1,11 @@
 import React, { useCallback, useContext, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MainMenu } from "../components/dashboard/MainMenu";
-import { Stack, Box } from "@mui/material";
+import { AppShell } from "../components/dashboard/AppShell";
 import { Recordings } from "../components/robot/Recordings";
-import { Runs } from "../components/run/Runs";
+import { RunsPage } from './RunsPage';
 import ProxyForm from '../components/proxy/ProxyForm';
 import { DashboardPage } from './DashboardPage';
+import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
 import { useGlobalInfoStore, useCacheInvalidation } from "../context/globalInfo";
@@ -18,6 +18,7 @@ import { apiUrl } from "../apiConfig";
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/auth';
 import { useSocketStore } from '../context/socket';
+import { Box } from '@mui/material';
 
 interface MainPageProps {
   handleEditRecording: (id: string, fileName: string) => void;
@@ -311,7 +312,6 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
     switch (content) {
       case 'robots':
         return <Recordings
-          handleEditRecording={handleEditRecording}
           handleRunRecording={handleRunRecording}
           setRecordingInfo={setRecordingInfo}
           handleScheduleRecording={handleScheduleRecording}
@@ -319,7 +319,7 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
       case 'jobs':
         return <JobBoardPage />;
       case 'runs':
-        return <Runs
+        return <RunsPage
           currentInterpretationLog={currentInterpretationLog}
           abortRunHandler={abortRunHandler}
           runId={ids.runId}
@@ -331,34 +331,29 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
         return <ProxyForm />;
       case 'dashboard':
         return <DashboardPage />;
+      case 'automations':
+        return <AutomationsPage />;
       default:
         return null;
     }
   }
 
-return (
-  <Box sx={{ display: 'flex', minHeight: 'calc(100vh - 64px)', width: '100%' }}>
-    <Box sx={{ 
-      width: 230,
-      flexShrink: 0,
-      position: 'sticky',
-      top: 64,
-      height: 'calc(100vh - 64px)', 
-      overflowY: 'auto',
-      zIndex: 1000 
-    }}>
-      <MainMenu value={content} handleChangeContent={setContent} />
-    </Box>
-    
-    <Box sx={{ 
-      flex: 1,
-      minWidth: 0, 
-      overflow: 'auto',
-      minHeight: 'calc(100vh - 64px)',
-      width: 'calc(100% - 250px)' 
-    }}>
-      {DisplayContent()}
-    </Box>
-  </Box>
-)
+  const growsWithContent = content === 'automations' || content === 'failures' || content === 'runs' || content === 'robots';
+
+  return (
+    <AppShell value={content} handleChangeContent={setContent}>
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: growsWithContent ? '100%' : 0,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: growsWithContent ? 'visible' : 'auto',
+        }}
+      >
+        {DisplayContent()}
+      </Box>
+    </AppShell>
+  );
 }

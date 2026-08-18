@@ -6,8 +6,7 @@ import Run from '../models/Run';
 import ExtractedData from '../models/ExtractedData';
 import logger from '../logger';
 import moment from 'moment-timezone';
-import { createQueuedAutomationRun } from '../services/automationRun';
-import { syncAutomationSchedule, resolveEffectiveScheduleState } from '../services/automationScheduler';
+import { syncAutomationSchedule, resolveEffectiveScheduleState, readRobotScheduleTimestamps, repackAllAutomationSchedules } from '../services/automationScheduler';
 import {
   applyColumnOverrides,
   applyReadPipelineToExtractedData,
@@ -35,11 +34,90 @@ import {
   normalizeScoutIdInput,
 } from '../utils/scoutId';
 import { sanitizeAutomationTags } from '../constants/tagCatalog';
-import { FAILURE_REASON_CODES, isAllowedFailureReason } from '../utils/failureReason';
+import {
+  buildFailureReasonAggregationStages,
+  FAILURE_REASON_CODES,
+  isAllowedFailureReason,
+} from '../utils/failureReason';
+import { buildOpsMetrics, parseOpsMetricsWindow } from '../services/opsMetrics';
+import {
+  accountRobotSummaryCache,
+  buildLatestRunPerRobotPipeline,
+  buildLatestRunPerRobotMatch,
+  buildOwnerRunScope,
+  buildRunFailureCountsPipeline,
+  buildRunGroupsPipeline,
+  buildRunListPaginationPipeline,
+  filteredDashboardCacheKey,
+  filteredDashboardRunTotalsCache,
+  resolveRunListIndexHint,
+  ROBOT_DASHBOARD_LIST_SELECT,
+} from '../services/dashboardQueries';
+import {
+  assertSafeOutboundUrl,
+  createUnsafeOutboundUrlResponse,
+  isUnsafeOutboundUrlError,
+} from '../utils/outboundUrlPolicy';
+import { validateDestinationWebhookSettings } from '../utils/webhookDeliverySettings';
+import {
+  mergeMaskedAutomationConfig,
+  toPublicAutomationConfig,
+} from '../services/automationConfigView';
+import { AdmissionError, runAdmission } from '../services/runAdmission';
+import {
+  pageLegacyOutputRows,
+  pageLogLinesFromEnd,
+  redactLogPage,
+} from '../services/runDetailPagination';
 
 const router = Router();
 
 const FAILURE_REASONS = new Set<string>(FAILURE_REASON_CODES);
+
+type OutboundConfigurationError = Error & { outboundField?: string };
+
+async function assertSafeConfigurationUrl(rawUrl: unknown, field: 'targetUrl' | 'webhookUrl') {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) return;
+  try {
+    await assertSafeOutboundUrl(rawUrl);
+  } catch (error) {
+    if (isUnsafeOutboundUrlError(error)) {
+      (error as OutboundConfigurationError).outboundField = field;
+    }
+    throw error;
+  }
+}
+
+async function assertSafeAutomationConfiguration(input: {
+  targetUrl?: unknown;
+  webhookUrl?: unknown;
+  config?: any;
+}) {
+  const webhookSettings = input.config?.destinations?.webhook;
+  if (webhookSettings && typeof webhookSettings === 'object') {
+    validateDestinationWebhookSettings(webhookSettings);
+  }
+  await assertSafeConfigurationUrl(input.targetUrl, 'targetUrl');
+  const webhookCandidates = [
+    input.webhookUrl,
+    input.config?.webhookUrl,
+    input.config?.destinations?.webhook?.url,
+  ];
+  const checked = new Set<string>();
+  for (const candidate of webhookCandidates) {
+    if (typeof candidate !== 'string' || !candidate.trim() || checked.has(candidate)) continue;
+    checked.add(candidate);
+    await assertSafeConfigurationUrl(candidate, 'webhookUrl');
+  }
+}
+
+function sendUnsafeOutboundUrlResponse(res: any, error: OutboundConfigurationError) {
+  const response = createUnsafeOutboundUrlResponse(
+    error.outboundField || 'targetUrl',
+    error as any
+  );
+  return res.status(response.status).json(response.body);
+}
 
 function getCompanyName(robot: any): string {
   const meta = robot?.recording_meta || {};
@@ -132,6 +210,206 @@ const parseListPagination = (req: any) => {
   return { page, limit, skip };
 };
 
+const DETAIL_PAGE_DEFAULT = 100;
+const DETAIL_PAGE_MAX = 100;
+
+const parseDetailLimit = (raw: unknown) => {
+  const value = parseInt(String(raw ?? DETAIL_PAGE_DEFAULT), 10);
+  return Math.min(DETAIL_PAGE_MAX, Math.max(1, Number.isFinite(value) ? value : DETAIL_PAGE_DEFAULT));
+};
+
+const encodeDetailCursor = (value: Record<string, unknown>) =>
+  Buffer.from(JSON.stringify(value)).toString('base64url');
+
+const decodeDetailCursor = (raw: unknown): Record<string, any> | null => {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+type SaasRunListQuery = {
+  page: number;
+  limit: number;
+  skip: number;
+  empty: boolean;
+  match: Record<string, unknown>;
+  fromDate: Date | null;
+  toDate: Date | null;
+  minDurationMs: number | null;
+  maxDurationMs: number | null;
+  failureReasons: string[];
+};
+
+function parseOptionalNonNegativeNumber(raw: unknown): number | null {
+  if (raw == null || String(raw).trim() === '') return null;
+  const value = Number(String(raw).trim());
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+async function resolveSaasRunListQuery(req: any): Promise<SaasRunListQuery> {
+  const { page, limit, skip } = parseListPagination(req);
+  const emptyResult = (): SaasRunListQuery => ({
+    page,
+    limit,
+    skip,
+    empty: true,
+    match: {},
+    fromDate: null,
+    toDate: null,
+    minDurationMs: null,
+    maxDurationMs: null,
+    failureReasons: [],
+  });
+
+  const qFilter = req.query.q != null ? String(req.query.q).trim() : '';
+  const robotMetaIdFilter = req.query.robotMetaId != null ? String(req.query.robotMetaId).trim() : '';
+
+  const runExtras: Record<string, unknown> = {};
+  let robotMetaConstraint: Record<string, unknown> | null = null;
+
+  if (robotMetaIdFilter) {
+    const owned = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': robotMetaIdFilter,
+    })
+      .select('_id')
+      .lean();
+    if (!owned) {
+      const err: any = new Error('Automation not found');
+      err.statusCode = 404;
+      throw err;
+    }
+    robotMetaConstraint = { robotMetaId: robotMetaIdFilter };
+  } else if (qFilter) {
+    const re = new RegExp(qFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const matchedIds = (await Robot.distinct('recording_meta.id', {
+      ...ownerIdFilter(req.user.id),
+      $or: [
+        { 'recording_meta.name': re },
+        { 'recording_meta.companyName': re },
+        { 'recording_meta.saasConfig.companyName': re },
+        { 'recording_meta.scoutId': re },
+      ],
+    })) as unknown[];
+    const ids = matchedIds.filter(Boolean).map(String);
+    if (!ids.length) {
+      return emptyResult();
+    }
+    robotMetaConstraint = { robotMetaId: { $in: ids } };
+  }
+
+  if (robotMetaIdFilter && qFilter) {
+    const re = new RegExp(qFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const robot = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': robotMetaIdFilter,
+    })
+      .select('recording_meta.name recording_meta.companyName recording_meta.scoutId recording_meta.saasConfig')
+      .lean();
+    if (robot) {
+      const name = String(robot.recording_meta?.name || '');
+      const company = getCompanyName(robot);
+      const scoutId = String(robot.recording_meta?.scoutId || '');
+      if (!re.test(name) && !re.test(company) && !re.test(scoutId)) {
+        return emptyResult();
+      }
+    }
+  }
+
+  const statusRaw = req.query.status != null ? String(req.query.status).trim() : '';
+  if (statusRaw) {
+    const statuses = statusRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (statuses.length === 1) {
+      runExtras.status = statuses[0];
+    } else if (statuses.length > 1) {
+      runExtras.status = { $in: statuses };
+    }
+  }
+
+  const anomalyRaw = req.query.anomaly != null ? String(req.query.anomaly).trim() : '';
+  if (anomalyRaw) {
+    runExtras.anomaly = anomalyRaw;
+  }
+
+  const failureReasonRaw =
+    req.query.failureReason != null ? String(req.query.failureReason).trim() : '';
+  let failureReasons: string[] = [];
+  if (failureReasonRaw) {
+    failureReasons = failureReasonRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => isAllowedFailureReason(s));
+  }
+
+  const minJobsAdded = parseOptionalNonNegativeNumber(req.query.minJobsAdded);
+  const maxJobsAdded = parseOptionalNonNegativeNumber(req.query.maxJobsAdded);
+  const jobsAddedExact = parseOptionalNonNegativeNumber(req.query.jobsAddedExact);
+  if (jobsAddedExact != null) {
+    runExtras.jobsAddedToBoard = jobsAddedExact;
+  } else {
+    const jobsRange: Record<string, number> = {};
+    if (minJobsAdded != null) jobsRange.$gte = minJobsAdded;
+    if (maxJobsAdded != null) jobsRange.$lte = maxJobsAdded;
+    if (Object.keys(jobsRange).length) {
+      runExtras.jobsAddedToBoard = jobsRange;
+    }
+  }
+
+  const minDurationMs = parseOptionalNonNegativeNumber(req.query.minDurationMs);
+  const maxDurationMs = parseOptionalNonNegativeNumber(req.query.maxDurationMs);
+
+  const dateRaw = req.query.date != null ? String(req.query.date).trim() : '';
+  const fromRaw = req.query.from != null ? String(req.query.from).trim() : '';
+  const toRaw = req.query.to != null ? String(req.query.to).trim() : '';
+  let fromDate: Date | null = null;
+  let toDate: Date | null = null;
+  if (dateRaw) {
+    const day = new Date(`${dateRaw}T00:00:00.000Z`);
+    if (!Number.isNaN(day.getTime())) {
+      fromDate = day;
+      toDate = new Date(day.getTime() + 24 * 60 * 60 * 1000);
+    }
+  } else {
+    if (fromRaw) {
+      const d = new Date(fromRaw);
+      if (!Number.isNaN(d.getTime())) fromDate = d;
+    }
+    if (toRaw) {
+      const d = new Date(toRaw);
+      if (!Number.isNaN(d.getTime())) toDate = d;
+    }
+  }
+
+  const ownedMetaIds = robotMetaIdFilter
+    ? [robotMetaIdFilter]
+    : ((await Robot.distinct('recording_meta.id', ownerIdFilter(req.user.id))) as unknown[])
+        .map(String)
+        .filter(Boolean);
+
+  const match = buildOwnerRunScope(req.user.id, ownedMetaIds);
+  Object.assign(match, runExtras, robotMetaConstraint || {});
+
+  return {
+    page,
+    limit,
+    skip,
+    empty: false,
+    match,
+    fromDate,
+    toDate,
+    minDurationMs,
+    maxDurationMs,
+    failureReasons,
+  };
+}
+
 /** Mirrors dashboard chips derived from `mapAutomation` schedule output. */
 const robotScheduleSummaryFlags = (robot: any): { active: boolean; paused: boolean } => {
   const eff = resolveEffectiveScheduleState(robot);
@@ -148,6 +426,10 @@ const robotScheduleSummaryFlags = (robot: any): { active: boolean; paused: boole
 };
 
 async function computeAccountRobotSummary(userId: any) {
+  const cacheKey = `account:${normalizeOwnerIdForWrite(userId)}`;
+  const cached = accountRobotSummaryCache.get(cacheKey);
+  if (cached) return cached;
+
   let activeScheduledCount = 0;
   let pausedScheduleCount = 0;
   // Only schedule fields — never pull recording workflows for summary chips.
@@ -160,39 +442,65 @@ async function computeAccountRobotSummary(userId: any) {
     if (active) activeScheduledCount += 1;
     if (paused) pausedScheduleCount += 1;
   }
-  return { activeScheduledCount, pausedScheduleCount };
+  const summary = { activeScheduledCount, pausedScheduleCount };
+  accountRobotSummaryCache.set(cacheKey, summary);
+  return summary;
 }
 
 /**
  * Sum latest-run row counts + success/fail chips for every robot matching `ownerFilter`
  * (same filter as the dashboard list, across all pages).
  */
-async function computeFilteredDashboardRunTotals(robotMetaIds: string[]): Promise<{
+async function computeFilteredDashboardRunTotals(
+  userId: any,
+  robotMetaIds: string[]
+): Promise<{
   rowsExtractedTotal: number;
   successfulCount: number;
   failedCount: number;
   latestRuns: Map<string, any>;
   rowCounts: Map<string, number>;
 }> {
-  const latestRuns = await fetchLatestRunPerRobotMetaIds(robotMetaIds);
+  const cacheKey = filteredDashboardCacheKey(userId, robotMetaIds);
+  const cached = filteredDashboardRunTotalsCache.get(cacheKey);
+  if (cached) {
+    return {
+      rowsExtractedTotal: cached.rowsExtractedTotal,
+      successfulCount: cached.successfulCount,
+      failedCount: cached.failedCount,
+      latestRuns: new Map(cached.latestRuns),
+      rowCounts: new Map(
+        cached.latestRuns.map(([metaId, run]: [string, any]) => [
+          String(run?.runId || metaId),
+          typeof run?.rowsExtracted === 'number' ? run.rowsExtracted : 0,
+        ])
+      ),
+    };
+  }
+
+  const latestRuns = await fetchLatestRunPerRobotMetaIds(userId, robotMetaIds);
   let successfulCount = 0;
   let failedCount = 0;
-  const runIds: string[] = [];
+  let rowsExtractedTotal = 0;
+  const rowCounts = new Map<string, number>();
 
   for (const run of latestRuns.values()) {
     const status = buildDashboardStatus(run);
     if (status === 'completed') successfulCount += 1;
     if (status === 'failed') failedCount += 1;
-    if (run?.runId) runIds.push(String(run.runId));
+    const rows = typeof run?.rowsExtracted === 'number' ? run.rowsExtracted : 0;
+    rowsExtractedTotal += rows;
+    if (run?.runId) rowCounts.set(String(run.runId), rows);
   }
 
-  const rowCounts = await batchExtractedRowCounts(runIds);
-  let rowsExtractedTotal = 0;
-  for (const count of rowCounts.values()) {
-    rowsExtractedTotal += count;
-  }
-
-  return { rowsExtractedTotal, successfulCount, failedCount, latestRuns, rowCounts };
+  const result = { rowsExtractedTotal, successfulCount, failedCount, latestRuns, rowCounts };
+  filteredDashboardRunTotalsCache.set(cacheKey, {
+    rowsExtractedTotal,
+    successfulCount,
+    failedCount,
+    latestRuns: Array.from(latestRuns.entries()),
+  });
+  return result;
 }
 
 /**
@@ -200,35 +508,22 @@ async function computeFilteredDashboardRunTotals(robotMetaIds: string[]): Promis
  * sorts by `_id` (insert order) so we never ship serializableOutput/logs through
  * the aggregation pipeline — that was the main refresh latency source.
  */
-async function fetchLatestRunPerRobotMetaIds(robotMetaIds: string[]): Promise<Map<string, any>> {
+async function fetchLatestRunPerRobotMetaIds(
+  userId: unknown,
+  robotMetaIds: string[]
+): Promise<Map<string, any>> {
   const latestRuns = new Map<string, any>();
-  if (robotMetaIds.length === 0) {
+  const ownerId = normalizeOwnerIdForWrite(userId);
+  if (!ownerId || robotMetaIds.length === 0) {
     return latestRuns;
   }
 
-  const rows = await Run.aggregate([
-    { $match: { robotMetaId: { $in: robotMetaIds } } },
-    {
-      $project: {
-        robotMetaId: 1,
-        runId: 1,
-        status: 1,
-        startedAt: 1,
-        finishedAt: 1,
-        name: 1,
-        anomaly: 1,
-        failureReason: 1,
-        failureReasonSource: 1,
-      },
-    },
-    { $sort: { _id: -1 } },
-    {
-      $group: {
-        _id: '$robotMetaId',
-        run: { $first: '$$ROOT' },
-      },
-    },
-  ]);
+  const match = buildLatestRunPerRobotMatch(userId, robotMetaIds);
+  const pipeline = buildLatestRunPerRobotPipeline(userId, robotMetaIds);
+  const agg = Run.aggregate(pipeline);
+  const hint = resolveRunListIndexHint(match);
+  if (hint) agg.hint(hint);
+  const rows = await agg;
 
   for (const row of rows) {
     if (row?.run) {
@@ -243,18 +538,12 @@ const mapAutomation = (
   latestRun?: any,
   rowsExtracted: number = 0
 ) => {
-  const config = getAutomationConfig(robot);
+  const config = toPublicAutomationConfig(getAutomationConfig(robot));
   const eff = resolveEffectiveScheduleState(robot);
   const hasInterval = !!(eff.cron || eff.every);
-  const rootSch = robot.schedule || {};
-  const nextRunIso =
-    rootSch.nextRunAt != null
-      ? new Date(rootSch.nextRunAt).toISOString()
-      : null;
-  const lastRunIso =
-    rootSch.lastRunAt != null
-      ? new Date(rootSch.lastRunAt).toISOString()
-      : null;
+  const scheduleTimestamps = readRobotScheduleTimestamps(robot, eff);
+  const nextRunIso = scheduleTimestamps.nextRunAt?.toISOString() ?? null;
+  const lastRunIso = scheduleTimestamps.lastRunAt?.toISOString() ?? null;
   const schedule =
     eff.enabled || hasInterval
       ? {
@@ -284,13 +573,26 @@ const mapAutomation = (
     latestRunId: latestRun?.runId || null,
     latestFailureReason: latestRun?.failureReason || null,
     latestFailureReasonSource: latestRun?.failureReasonSource || null,
-    webhookUrl: config.webhookUrl || '',
+    webhookConfigured: config.webhookConfigured,
+    proxyConfigured: config.proxyConfigured,
+    destinationType: config.destinationType,
     config,
     schedule,
   };
 };
 
 router.use(requireSignInOrApiKey);
+
+router.get('/dashboard/metrics', async (req: any, res: any) => {
+  try {
+    const window = parseOpsMetricsWindow(req.query.window);
+    const metrics = await buildOpsMetrics({ userId: req.user.id, window });
+    return res.json(metrics);
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch ops dashboard metrics: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch dashboard metrics' });
+  }
+});
 
 router.get('/dashboard/automations', async (req: any, res: any) => {
   try {
@@ -302,41 +604,97 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
       ? tagsFilterRaw.split(',').map((t) => t.trim()).filter(Boolean)
       : [];
     if (tagsFilter.length) {
-      ownerFilter['recording_meta.tags'] = { $all: tagsFilter };
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.tags': { $all: tagsFilter } },
+            { 'recording_meta.saasConfig.tags': { $all: tagsFilter } },
+          ],
+        },
+      ];
     }
 
-    const [summary, total, robots, allMetaIdRows] = await Promise.all([
+    const qFilter = req.query.q != null ? String(req.query.q).trim() : '';
+    if (qFilter) {
+      const re = new RegExp(qFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.name': re },
+            { 'recording_meta.companyName': re },
+            { 'recording_meta.saasConfig.companyName': re },
+          ],
+        },
+      ];
+    }
+
+    const idFilter = req.query.id != null ? String(req.query.id).trim() : '';
+    if (idFilter) {
+      const re = new RegExp(idFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.id': re },
+            { 'recording_meta.scoutId': re },
+          ],
+        },
+      ];
+    }
+
+    const scheduleCron =
+      req.query.scheduleCron != null ? String(req.query.scheduleCron).trim() : '';
+    if (scheduleCron === 'none') {
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $and: [
+            {
+              $or: [
+                { 'recording_meta.saasConfig.schedule.cron': { $in: [null, ''] } },
+                { 'recording_meta.saasConfig.schedule.cron': { $exists: false } },
+              ],
+            },
+            {
+              $or: [
+                { 'schedule.cron': { $in: [null, ''] } },
+                { 'schedule.cron': { $exists: false } },
+              ],
+            },
+          ],
+        },
+      ];
+    } else if (scheduleCron) {
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.saasConfig.schedule.cron': scheduleCron },
+            { 'schedule.cron': scheduleCron },
+          ],
+        },
+      ];
+    }
+
+    const [summary, total, robots, allMetaIdsRaw] = await Promise.all([
       computeAccountRobotSummary(req.user.id),
       Robot.countDocuments(ownerFilter),
       Robot.find(ownerFilter)
-        .select([
-          'schedule',
-          'recording_meta.id',
-          'recording_meta.scoutId',
-          'recording_meta.name',
-          'recording_meta.companyName',
-          'recording_meta.tags',
-          'recording_meta.url',
-          'recording_meta.createdAt',
-          'recording_meta.updatedAt',
-          'recording_meta.saasConfig.webhookUrl',
-          'recording_meta.saasConfig.schedule',
-          'recording_meta.saasConfig.companyName',
-          'recording_meta.saasConfig.tags',
-        ].join(' '))
+        .select(ROBOT_DASHBOARD_LIST_SELECT.join(' '))
         .sort({ _id: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      Robot.find(ownerFilter).select('recording_meta.id').lean(),
+      Robot.distinct('recording_meta.id', ownerFilter),
     ]);
 
-    const allMetaIds = allMetaIdRows
-      .map((robot: any) => robot.recording_meta?.id)
+    const allMetaIds = (allMetaIdsRaw as unknown[])
       .filter(Boolean)
       .map(String);
 
-    const runTotals = await computeFilteredDashboardRunTotals(allMetaIds);
+    const runTotals = await computeFilteredDashboardRunTotals(req.user.id, allMetaIds);
 
     const summaryOut = {
       totalAutomations: total,
@@ -447,69 +805,63 @@ router.post('/automations/schedules/resume-all', async (req: any, res: any) => {
   try {
     const robots = await Robot.find(ownerIdFilter(req.user.id));
     let resumedCount = 0;
-    const RESUME_BATCH = 8;
 
-    for (let i = 0; i < robots.length; i += RESUME_BATCH) {
-      const batch = robots.slice(i, i + RESUME_BATCH);
-      const results = await Promise.all(
-        batch.map(async (robot) => {
-          const effective = resolveEffectiveScheduleState(robot.toJSON());
-          const hasInterval = !!(effective.cron || effective.every);
-          if (effective.enabled || !hasInterval) {
-            return 0;
-          }
+    for (const robot of robots) {
+      const effective = resolveEffectiveScheduleState(robot.toJSON());
+      const hasInterval = !!(effective.cron || effective.every);
+      if (effective.enabled || !hasInterval) {
+        continue;
+      }
 
-          const existingConfig = (robot.recording_meta as any).saasConfig || {};
-          const tz =
-            effective.timezone ||
-            existingConfig.schedule?.timezone ||
-            (robot.schedule as any)?.timezone ||
-            'UTC';
+      const existingConfig = (robot.recording_meta as any).saasConfig || {};
+      const tz =
+        effective.timezone ||
+        existingConfig.schedule?.timezone ||
+        (robot.schedule as any)?.timezone ||
+        'UTC';
 
-          const v = effective.cron
-            ? validateAutomationScheduleCron(effective.cron, tz)
-            : { ok: true as const };
-          if (!v.ok) {
-            logger.log(
-              'warn',
-              `resume-all: skip automation ${robot.recording_meta?.id} — invalid stored cron: ${(v as any).error}`
-            );
-            return 0;
-          }
+      const v = effective.cron
+        ? validateAutomationScheduleCron(effective.cron, tz)
+        : { ok: true as const };
+      if (!v.ok) {
+        logger.log(
+          'warn',
+          `resume-all: skip automation ${robot.recording_meta?.id} — invalid stored cron: ${(v as any).error}`
+        );
+        continue;
+      }
 
-          const nextSaasConfig = {
-            ...existingConfig,
-            schedule: {
-              enabled: true,
-              cron: effective.cron || '',
-              timezone: tz,
-              ...(effective.every != null ? { every: effective.every } : {}),
-            },
-          };
+      const nextSaasConfig = {
+        ...existingConfig,
+        schedule: {
+          enabled: true,
+          cron: effective.cron || '',
+          timezone: tz,
+          ...(effective.every != null ? { every: effective.every } : {}),
+        },
+      };
 
-          const nextMeta = {
-            ...robot.recording_meta,
-            updatedAt: new Date().toLocaleString(),
-            saasConfig: nextSaasConfig,
-          };
+      const nextMeta = {
+        ...robot.recording_meta,
+        updatedAt: new Date().toLocaleString(),
+        saasConfig: nextSaasConfig,
+      };
 
-          const nextSchedule = await syncAutomationSchedule(
-            {
-              ...robot.toJSON(),
-              recording_meta: nextMeta,
-              schedule: robot.schedule,
-            },
-            req.user.id,
-            tz
-          );
-
-          robot.recording_meta = nextMeta;
-          robot.schedule = nextSchedule;
-          await robot.save();
-          return 1;
-        })
+      const nextSchedule = await syncAutomationSchedule(
+        {
+          ...robot.toJSON(),
+          recording_meta: nextMeta,
+          schedule: robot.schedule,
+        },
+        req.user.id,
+        tz,
+        { packSlots: true }
       );
-      resumedCount += results.reduce((sum: number, n: number) => sum + n, 0);
+
+      robot.recording_meta = nextMeta;
+      robot.schedule = nextSchedule;
+      await robot.save();
+      resumedCount += 1;
     }
 
     logger.log('info', `Resumed all pausable schedules for user ${req.user.id}: ${resumedCount} automation(s)`);
@@ -518,6 +870,23 @@ router.post('/automations/schedules/resume-all', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to resume all schedules: ${error.message}`);
     return res.status(500).json({ error: 'Failed to resume all schedules' });
+  }
+});
+
+/**
+ * Re-spread enabled schedules with random packed first-fire times (sequential slot packing).
+ */
+router.post('/automations/schedules/repack-all', async (req: any, res: any) => {
+  try {
+    const { repackedCount, skippedCount } = await repackAllAutomationSchedules(req.user.id);
+    logger.log(
+      'info',
+      `Repacked all schedules for user ${req.user.id}: repacked=${repackedCount} skipped=${skippedCount}`
+    );
+    return res.json({ success: true, repackedCount, skippedCount });
+  } catch (error: any) {
+    logger.log('error', `Failed to repack all schedules: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to repack all schedules' });
   }
 });
 
@@ -598,7 +967,7 @@ router.get('/automations/lookup', async (req: any, res: any) => {
 
     const metaId = robot.recording_meta.id;
     const latestRun =
-      (await fetchLatestRunPerRobotMetaIds([metaId])).get(metaId) ?? null;
+      (await fetchLatestRunPerRobotMetaIds(req.user.id, [metaId])).get(metaId) ?? null;
 
     return res.json({
       found: true,
@@ -620,7 +989,7 @@ router.get('/automations/:id', async (req: any, res: any) => {
 
     const metaId = robot.recording_meta.id;
     const latestRun =
-      (await fetchLatestRunPerRobotMetaIds([metaId])).get(metaId) ?? null;
+      (await fetchLatestRunPerRobotMetaIds(req.user.id, [metaId])).get(metaId) ?? null;
     const rowsExtracted = latestRun?.runId
       ? (await batchExtractedRowCounts([String(latestRun.runId)])).get(String(latestRun.runId)) || 0
       : 0;
@@ -654,6 +1023,11 @@ router.post('/automations', async (req: any, res: any) => {
     }
 
     const normalizedStartUrl = normalizeAutomationUrl(startUrl);
+    await assertSafeAutomationConfiguration({
+      targetUrl: normalizedStartUrl,
+      webhookUrl,
+      config,
+    });
 
     const duplicateUrl = await Robot.findOne({
       ...ownerIdFilter(req.user.id),
@@ -779,6 +1153,7 @@ router.post('/automations', async (req: any, res: any) => {
     const nextSchedule = await syncAutomationSchedule(robot.toJSON(), req.user.id, tz);
     robot.schedule = nextSchedule;
     await robot.save();
+    const publicConfig = toPublicAutomationConfig(getAutomationConfig(robot));
 
     return res.status(201).json({
       automation: {
@@ -791,11 +1166,20 @@ router.post('/automations', async (req: any, res: any) => {
         status: 'idle',
         lastRunTime: null,
         rowsExtracted: 0,
-        config: getAutomationConfig(robot),
+        webhookConfigured: publicConfig.webhookConfigured,
+        proxyConfigured: publicConfig.proxyConfigured,
+        destinationType: publicConfig.destinationType,
+        config: publicConfig,
         schedule: nextSchedule,
       },
     });
   } catch (error: any) {
+    if (error instanceof RangeError) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (isUnsafeOutboundUrlError(error)) {
+      return sendUnsafeOutboundUrlResponse(res, error);
+    }
     logger.log('error', `Failed to create automation: ${error.message}`);
     if (error?.code === 11000) {
       const key = String(error?.message || '');
@@ -879,6 +1263,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
       robot.recording_meta = nextMeta;
       robot.markModified('recording_meta');
       await robot.save();
+      const publicConfig = toPublicAutomationConfig(nextMeta.saasConfig);
 
       return res.json({
         success: true,
@@ -890,13 +1275,21 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
           companyName: getCompanyName({ recording_meta: nextMeta }),
           tags: getAutomationTags({ recording_meta: nextMeta }),
           targetUrl: nextMeta.url || '',
-          config: nextMeta.saasConfig || {},
+          webhookConfigured: publicConfig.webhookConfigured,
+          proxyConfigured: publicConfig.proxyConfigured,
+          destinationType: publicConfig.destinationType,
+          config: publicConfig,
           schedule: robot.schedule,
         },
       });
     }
 
     const normalizedStartUrl = startUrl ? normalizeAutomationUrl(startUrl) : undefined;
+    await assertSafeAutomationConfiguration({
+      targetUrl: normalizedStartUrl,
+      webhookUrl,
+      config,
+    });
 
     // If the caller is updating config.schedule in the same payload, validate
     // the cron now so we don't silently accept garbage then fail at schedule
@@ -917,7 +1310,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     }
 
     const prevSaas = getAutomationConfig(robot) || {};
-    const incoming = (config && typeof config === 'object') ? { ...config } : {};
+    const incoming = mergeMaskedAutomationConfig(prevSaas, config);
     const companyName =
       typeof bodyCompany === 'string'
         ? bodyCompany.trim()
@@ -952,7 +1345,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     const nextSaasConfig: Record<string, any> = {
       ...prevSaas,
       ...incoming,
-      ...(webhookUrl !== undefined ? { webhookUrl } : {}),
+      ...(typeof webhookUrl === 'string' && webhookUrl.trim() ? { webhookUrl } : {}),
       companyName: companyName !== undefined ? companyName : getCompanyName(robot),
       ...(tagsToSet !== undefined ? { tags: tagsToSet } : {}),
       destinations: {
@@ -961,7 +1354,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
         webhook: {
           ...((prevSaas as any).destinations?.webhook || {}),
           ...((incoming as any).destinations?.webhook || {}),
-          ...(webhookUrl !== undefined
+          ...(typeof webhookUrl === 'string' && webhookUrl.trim()
             ? { url: webhookUrl || (incoming as any).destinations?.webhook?.url || '' }
             : {}),
         },
@@ -1046,6 +1439,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     robot.schedule = nextSchedule;
     robot.markModified('recording_meta');
     await robot.save();
+    const publicConfig = toPublicAutomationConfig(nextMeta.saasConfig);
 
     return res.json({
       success: true,
@@ -1056,11 +1450,20 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
         companyName: getCompanyName({ recording_meta: nextMeta }),
         tags: getAutomationTags({ recording_meta: nextMeta }),
         targetUrl: nextMeta.url || '',
-        config: nextMeta.saasConfig || {},
+        webhookConfigured: publicConfig.webhookConfigured,
+        proxyConfigured: publicConfig.proxyConfigured,
+        destinationType: publicConfig.destinationType,
+        config: publicConfig,
         schedule: nextSchedule,
       },
     });
   } catch (error: any) {
+    if (error instanceof RangeError) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (isUnsafeOutboundUrlError(error)) {
+      return sendUnsafeOutboundUrlResponse(res, error);
+    }
     logger.log('error', `Failed to update automation config ${req.params.id}: ${error.message}`);
     return res.status(500).json({ error: 'Failed to update automation config' });
   }
@@ -1077,18 +1480,47 @@ router.post('/automations/:id/run', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Automation not found' });
     }
 
-    const result = await createQueuedAutomationRun(robot, req.user.id, {
-      source: 'manual',
+    const admission = await runAdmission.admitManual({
+      ownerId: req.user.id,
+      robot,
       runtimeConfig: getAutomationConfig(robot),
     });
 
     return res.json({
-      ...result,
+      ...admission.run,
       automationId: robot.recording_meta.id,
     });
   } catch (error: any) {
+    if (error instanceof AdmissionError) {
+      return res.status(error.statusCode).json({ error: error.message, code: error.code });
+    }
     logger.log('error', `Failed to run automation ${req.params.id}: ${error.message}`);
     return res.status(500).json({ error: 'Failed to run automation' });
+  }
+});
+
+router.post('/runs/:runId/retry', async (req: any, res: any) => {
+  try {
+    const rawKey = req.get('Idempotency-Key');
+    const admission = await runAdmission.admitRetry({
+      ownerId: req.user.id,
+      runId: req.params.runId,
+      requestKey: rawKey || '',
+    });
+    return res.status(admission.created ? 201 : 200).json({
+      ...admission.run,
+      previouslyAccepted: !admission.created,
+    });
+  } catch (error: any) {
+    if (error instanceof AdmissionError) {
+      return res.status(error.statusCode).json({
+        error: error.message,
+        code: error.code,
+        ...(error.activeRunId ? { activeRunId: error.activeRunId } : {}),
+      });
+    }
+    logger.log('error', `Failed to retry run ${req.params.runId}: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to retry run' });
   }
 });
 
@@ -1333,9 +1765,114 @@ router.put('/automations/:id/columns', async (req: any, res: any) => {
   }
 });
 
+router.get('/runs/groups', async (req: any, res: any) => {
+  try {
+    const query = await resolveSaasRunListQuery(req);
+    if (query.empty) {
+      return res.json({
+        groups: [],
+        pagination: { page: query.page, limit: query.limit, total: 0, totalPages: 1 },
+      });
+    }
+
+    const failureReasonStages = buildFailureReasonAggregationStages(query.failureReasons);
+    const pipeline = buildRunGroupsPipeline({
+      match: query.match,
+      skip: query.skip,
+      limit: query.limit,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+      minDurationMs: query.minDurationMs,
+      maxDurationMs: query.maxDurationMs,
+      failureReasonPageStages: failureReasonStages.page,
+    });
+
+    const indexHint = resolveRunListIndexHint(query.match);
+    const groupsAgg = Run.aggregate(pipeline);
+    if (indexHint) groupsAgg.hint(indexHint);
+    const agg = await groupsAgg;
+    const bucket = agg[0] || { pageGroups: [], totals: [] };
+    const total = bucket.totals[0]?.total ?? 0;
+    const totalPages = total === 0 ? 1 : Math.ceil(total / query.limit);
+    const pageGroups = bucket.pageGroups || [];
+
+    const pageMetaIds = [
+      ...new Set(pageGroups.map((g: any) => g._id).filter(Boolean)),
+    ];
+    const pageRobots = pageMetaIds.length
+      ? await Robot.find({
+          ...ownerIdFilter(req.user.id),
+          'recording_meta.id': { $in: pageMetaIds },
+        })
+          .select(
+            'recording_meta.id recording_meta.name recording_meta.url recording_meta.companyName recording_meta.scoutId recording_meta.saasConfig'
+          )
+          .lean()
+      : [];
+    const robotById = new Map(pageRobots.map((r: any) => [r.recording_meta.id, r]));
+
+    const groups = pageGroups.map((group: any) => {
+      const robot = robotById.get(group._id);
+      const latestRun = group.latestRun || {};
+      const extractedCount = typeof latestRun.rowsExtracted === 'number' ? latestRun.rowsExtracted : 0;
+      const hydrated = enrichRunForList(latestRun, robot, extractedCount);
+      return {
+        robotMetaId: group._id,
+        name: robot?.recording_meta?.name || hydrated.name || 'Automation',
+        companyName: getCompanyName(robot) || hydrated.companyName || '',
+        runCount: typeof group.runCount === 'number' ? group.runCount : 0,
+        latestRun: hydrated,
+      };
+    });
+
+    return res.json({
+      groups,
+      pagination: { page: query.page, limit: query.limit, total, totalPages },
+    });
+  } catch (error: any) {
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ error: error.message || 'Automation not found' });
+    }
+    logger.log('error', `Failed to fetch run groups: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch run groups' });
+  }
+});
+
+router.delete('/runs/:id', async (req: any, res: any) => {
+  try {
+    const runId = String(req.params.id || '').trim();
+    if (!runId) {
+      return res.status(400).json({ error: 'Run id is required' });
+    }
+
+    const run: any = await Run.findOne({ runId }).select('runId robotMetaId ownerId runByUserId').lean();
+    if (!run) {
+      return res.status(404).json({ error: 'Run not found' });
+    }
+
+    const robot = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': run.robotMetaId,
+    })
+      .select('_id')
+      .lean();
+    if (!robot) {
+      return res.status(404).json({ error: 'Run not found' });
+    }
+
+    await Run.deleteOne({ runId });
+    return res.json({ success: true });
+  } catch (error: any) {
+    logger.log('error', `Failed to delete run ${req.params.id}: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to delete run' });
+  }
+});
+
 router.get('/runs/:id', async (req: any, res: any) => {
   try {
-    const run: any = await Run.findOne({ runId: req.params.id }).lean();
+    const run: any = await Run.findOne({ runId: req.params.id })
+      .select('-serializableOutput -binaryOutput -log')
+      .lean();
 
     if (!run) {
       return res.status(404).json({ error: 'Run not found' });
@@ -1350,39 +1887,9 @@ router.get('/runs/:id', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Run not found' });
     }
 
-    const extractedFromDb = await ExtractedData.find({ runId: run.runId })
-      .sort({ createdAt: 1 })
-      .lean();
-
-    const robotCfg = getAutomationConfig(robot);
-    const overrides = robotCfg.columnOverrides || {};
-
-    /** When nothing was persisted (0-row extraction, or rare persistence gaps), still surface output from the run document. */
-    let extractedRowsPayload = extractedFromDb.map((row: any) => ({
-      id: row.id,
-      source: row.source,
-      data: applyReadPipelineToExtractedData(
-        row.data,
-        row.createdAt ? new Date(row.createdAt) : new Date(),
-        overrides,
-        robotCfg.rowContext
-      ),
-      createdAt: row.createdAt,
-    }));
-
-    if (extractedRowsPayload.length === 0 && run.serializableOutput && typeof run.serializableOutput === 'object') {
-      const cfg = getAutomationConfig(robot);
-      const synthetic = extractRowsFromOutput(run.serializableOutput, cfg);
-      extractedRowsPayload = synthetic.map((row, index) => ({
-        id: `from-run-output-${index}`,
-        source: row.source,
-        data: mergeRowContextIntoRowData(applyColumnOverrides(row.data, overrides), cfg.rowContext),
-        createdAt: null as Date | null,
-      }));
-    }
-
+    const publicRun = await enrichRunForSaas(run, robot);
     return res.json({
-      run: await enrichRunForSaas(run, robot),
+      run: publicRun,
       automation: {
         id: robot.recording_meta.id,
         scoutId: getScoutId(robot),
@@ -1390,13 +1897,172 @@ router.get('/runs/:id', async (req: any, res: any) => {
         companyName: getCompanyName(robot),
         targetUrl: robot.recording_meta.url || '',
       },
-      extractedRows: extractedRowsPayload,
       durationMs: computeRunDurationMs(run.startedAt, run.finishedAt),
-      logs: typeof run.log === 'string' ? run.log.split('\n').filter(Boolean) : [],
     });
   } catch (error: any) {
     logger.log('error', `Failed to fetch run ${req.params.id}: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch run details' });
+  }
+});
+
+router.get('/runs/:id/logs', async (req: any, res: any) => {
+  try {
+    const [run]: any[] = await Run.aggregate([
+      { $match: { runId: req.params.id } },
+      {
+        $project: {
+          runId: 1,
+          robotMetaId: 1,
+          interpreterSettings: 1,
+          logLength: { $strLenCP: { $ifNull: ['$log', ''] } },
+        },
+      },
+    ]);
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+
+    const robot: any = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': run.robotMetaId,
+    }).lean();
+    if (!robot) return res.status(404).json({ error: 'Run not found' });
+
+    const limit = parseDetailLimit(req.query.limit);
+    const cursor = decodeDetailCursor(req.query.cursor);
+    const logLength = typeof run.logLength === 'number' ? run.logLength : 0;
+    const end = typeof cursor?.end === 'number' && cursor.end >= 0
+      ? Math.min(Math.floor(cursor.end), logLength)
+      : logLength;
+    const page = await pageLogLinesFromEnd({
+      end,
+      limit,
+      readChunk: async (start, length) => {
+        const [result]: any[] = await Run.aggregate([
+          { $match: { runId: req.params.id } },
+          {
+            $project: {
+              chunk: {
+                $substrCP: [{ $ifNull: ['$log', ''] }, start, length],
+              },
+            },
+          },
+        ]);
+        return typeof result?.chunk === 'string' ? result.chunk : '';
+      },
+    });
+    const logs = redactLogPage(page.lines, run, robot);
+    return res.json({
+      logs,
+      nextCursor: page.nextEnd !== null ? encodeDetailCursor({ end: page.nextEnd }) : null,
+      hasMore: page.nextEnd !== null,
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch run logs ${req.params.id}: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch run logs' });
+  }
+});
+
+router.get('/runs/:id/rows', async (req: any, res: any) => {
+  try {
+    const run: any = await Run.findOne({ runId: req.params.id }).select('runId robotMetaId').lean();
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+
+    const robot: any = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': run.robotMetaId,
+    }).lean();
+    if (!robot) return res.status(404).json({ error: 'Run not found' });
+
+    const limit = parseDetailLimit(req.query.limit);
+    const cursor = decodeDetailCursor(req.query.cursor);
+    const outputOffset =
+      typeof cursor?.outputOffset === 'number' && cursor.outputOffset >= 0
+        ? Math.floor(cursor.outputOffset)
+        : null;
+    const cfg = getAutomationConfig(robot);
+    const overrides = cfg.columnOverrides || {};
+
+    if (outputOffset !== null) {
+      const outputRun: any = await Run.findOne({ runId: run.runId }).select('serializableOutput').lean();
+      const fallback = pageLegacyOutputRows(outputRun?.serializableOutput, cfg, outputOffset, limit);
+      return res.json({
+        rows: fallback.rows.map((row) => ({
+          id: row.id,
+          source: row.source,
+          createdAt: null,
+          data: applyReadPipelineToExtractedData(
+            row.data,
+            new Date(),
+            overrides,
+            cfg.rowContext
+          ),
+        })),
+        nextCursor:
+          fallback.nextOffset !== null
+            ? encodeDetailCursor({ outputOffset: fallback.nextOffset })
+            : null,
+      });
+    }
+
+    const createdAt = cursor?.createdAt ? new Date(cursor.createdAt) : null;
+    const after =
+      createdAt && !Number.isNaN(createdAt.getTime()) && typeof cursor?.id === 'string'
+        ? {
+            $or: [
+              { createdAt: { $gt: createdAt } },
+              { createdAt, _id: { $gt: cursor.id } },
+            ],
+          }
+        : {};
+    const storedRows = await ExtractedData.find({ runId: run.runId, ...after })
+      .select('source data createdAt')
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(limit + 1)
+      .lean();
+    if (!cursor && storedRows.length === 0) {
+      const outputRun: any = await Run.findOne({ runId: run.runId }).select('serializableOutput').lean();
+      const fallback = pageLegacyOutputRows(outputRun?.serializableOutput, cfg, 0, limit);
+      return res.json({
+        rows: fallback.rows.map((row) => ({
+          id: row.id,
+          source: row.source,
+          createdAt: null,
+          data: applyReadPipelineToExtractedData(
+            row.data,
+            new Date(),
+            overrides,
+            cfg.rowContext
+          ),
+        })),
+        nextCursor:
+          fallback.nextOffset !== null
+            ? encodeDetailCursor({ outputOffset: fallback.nextOffset })
+            : null,
+      });
+    }
+    const hasMore = storedRows.length > limit;
+    const pageRows = hasMore ? storedRows.slice(0, limit) : storedRows;
+    const rows = pageRows.map((row: any) => ({
+      id: row._id?.toString?.() || row.id,
+      source: row.source,
+      createdAt: row.createdAt,
+      data: applyReadPipelineToExtractedData(
+        row.data,
+        row.createdAt ? new Date(row.createdAt) : new Date(),
+        overrides,
+        cfg.rowContext
+      ),
+    }));
+    const last = pageRows[pageRows.length - 1];
+    return res.json({
+      rows,
+      nextCursor:
+        hasMore && last
+          ? encodeDetailCursor({ id: last._id?.toString?.() || last.id, createdAt: last.createdAt })
+          : null,
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch run rows ${req.params.id}: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch run rows' });
   }
 });
 
@@ -1425,7 +2091,8 @@ router.patch('/runs/:id/failure-reason', async (req: any, res: any) => {
 
     if (failureReason === null || failureReason === '') {
       run.failureReason = null;
-      run.failureReasonSource = null;
+      run.failureReasonSource = 'override';
+      run.normalizedFailureReason = null;
     } else {
       const reason = String(failureReason || '').trim();
       if (!FAILURE_REASONS.has(reason)) {
@@ -1435,6 +2102,7 @@ router.patch('/runs/:id/failure-reason', async (req: any, res: any) => {
       }
       run.failureReason = reason;
       run.failureReasonSource = confirmed === true ? 'confirmed' : 'override';
+      run.normalizedFailureReason = reason;
     }
 
     await run.save();
@@ -1444,6 +2112,7 @@ router.patch('/runs/:id/failure-reason', async (req: any, res: any) => {
       runId: run.runId,
       failureReason: run.failureReason,
       failureReasonSource: run.failureReasonSource,
+      normalizedFailureReason: run.normalizedFailureReason,
     });
   } catch (error: any) {
     logger.log('error', `Failed to update failure reason for ${req.params.id}: ${error.message}`);
@@ -1583,135 +2252,49 @@ router.delete('/automations/:id', async (req: any, res: any) => {
 
 router.get('/runs', async (req: any, res: any) => {
   try {
-    const { page, limit, skip } = parseListPagination(req);
-    const robots = await Robot.find(ownerIdFilter(req.user.id))
-      .select(
-        'recording_meta.id recording_meta.name recording_meta.url recording_meta.companyName recording_meta.scoutId recording_meta.saasConfig'
-      )
-      .lean();
-
-    const qFilter = req.query.q != null ? String(req.query.q).trim().toLowerCase() : '';
-    let filteredRobots = robots;
-    if (qFilter) {
-      filteredRobots = robots.filter((robot: any) => {
-        const meta = robot.recording_meta || {};
-        const name = String(meta.name || '').toLowerCase();
-        const company = getCompanyName(robot).toLowerCase();
-        const scoutId = String(meta.scoutId || '').toLowerCase();
-        return name.includes(qFilter) || company.includes(qFilter) || scoutId.includes(qFilter);
+    const query = await resolveSaasRunListQuery(req);
+    if (query.empty) {
+      return res.json({
+        runs: [],
+        pagination: { page: query.page, limit: query.limit, total: 0, totalPages: 1 },
+        countsByReason: Object.fromEntries(FAILURE_REASON_CODES.map((c) => [c, 0])),
       });
     }
 
-    const allowedRobotIds = new Set(filteredRobots.map((robot: any) => robot.recording_meta.id));
-    const robotMetaIdFilter = req.query.robotMetaId != null ? String(req.query.robotMetaId).trim() : '';
+    const countsMatch = { ...query.match };
+    const failureReasonStages = buildFailureReasonAggregationStages(query.failureReasons);
 
-    if (robotMetaIdFilter) {
-      const ownsRobot = robots.some((r: any) => r.recording_meta?.id === robotMetaIdFilter);
-      if (!ownsRobot) {
-        return res.status(404).json({ error: 'Automation not found' });
-      }
-      if (!allowedRobotIds.has(robotMetaIdFilter)) {
-        return res.json({
-          runs: [],
-          pagination: { page, limit, total: 0, totalPages: 1 },
-        });
-      }
+    const pipeline = buildRunListPaginationPipeline({
+      match: query.match,
+      skip: query.skip,
+      limit: query.limit,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+      minDurationMs: query.minDurationMs,
+      maxDurationMs: query.maxDurationMs,
+      failureReasonPageStages: failureReasonStages.page,
+    });
+
+    const countsPipeline = buildRunFailureCountsPipeline({
+      match: countsMatch,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+      minDurationMs: query.minDurationMs,
+      maxDurationMs: query.maxDurationMs,
+      failureReasonCountStages: failureReasonStages.counts,
+    });
+
+    const indexHint = resolveRunListIndexHint(query.match);
+    const runListAgg = Run.aggregate(pipeline);
+    const countsAggQuery = Run.aggregate(countsPipeline);
+    if (indexHint) {
+      runListAgg.hint(indexHint);
+      countsAggQuery.hint(indexHint);
     }
-
-    const match: any =
-      robotMetaIdFilter
-        ? { robotMetaId: robotMetaIdFilter }
-        : { robotMetaId: { $in: Array.from(allowedRobotIds) } };
-
-    const statusRaw = req.query.status != null ? String(req.query.status).trim() : '';
-    if (statusRaw) {
-      const statuses = statusRaw
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (statuses.length === 1) {
-        match.status = statuses[0];
-      } else if (statuses.length > 1) {
-        match.status = { $in: statuses };
-      }
-    }
-
-    const anomalyRaw = req.query.anomaly != null ? String(req.query.anomaly).trim() : '';
-    if (anomalyRaw) {
-      match.anomaly = anomalyRaw;
-    }
-
-    const failureReasonRaw =
-      req.query.failureReason != null ? String(req.query.failureReason).trim() : '';
-    if (failureReasonRaw) {
-      const reasons = failureReasonRaw
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => isAllowedFailureReason(s));
-      if (reasons.length === 1) {
-        match.failureReason = reasons[0];
-      } else if (reasons.length > 1) {
-        match.failureReason = { $in: reasons };
-      }
-    }
-
-    // Counts by reason use the same status/robot/q filters, but ignore failureReason
-    // so summary chips stay useful while a reason filter is active.
-    const countsMatch: any = { ...match };
-    delete countsMatch.failureReason;
-
-    const pipeline: any[] = [
-      { $match: match },
-      {
-        $project: {
-          serializableOutput: 0,
-          binaryOutput: 0,
-          log: 0,
-        },
-      },
-      {
-        $addFields: {
-          _sa: {
-            $convert: { input: { $ifNull: ['$startedAt', ''] }, to: 'date', onError: null, onNull: null },
-          },
-          _fa: {
-            $convert: { input: { $ifNull: ['$finishedAt', ''] }, to: 'date', onError: null, onNull: null },
-          },
-        },
-      },
-      {
-        $addFields: {
-          _sortTs: {
-            $max: [{ $ifNull: ['$_sa', new Date(0)] }, { $ifNull: ['$_fa', new Date(0)] }],
-          },
-        },
-      },
-      { $sort: { _sortTs: -1, _id: -1 } },
-      {
-        $facet: {
-          pageRuns: [{ $skip: skip }, { $limit: limit }],
-          totals: [{ $count: 'total' }],
-        },
-      },
-    ];
-
-    const countsPipeline: any[] = [
-      { $match: countsMatch },
-      {
-        $group: {
-          _id: { $ifNull: ['$failureReason', 'unknown'] },
-          count: { $sum: 1 },
-        },
-      },
-    ];
-
-    const [agg, countsAgg] = await Promise.all([
-      Run.aggregate(pipeline),
-      Run.aggregate(countsPipeline),
-    ]);
+    const [agg, countsAgg] = await Promise.all([runListAgg, countsAggQuery]);
     const bucket = agg[0] || { pageRuns: [], totals: [] };
     const total = bucket.totals[0]?.total ?? 0;
-    const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+    const totalPages = total === 0 ? 1 : Math.ceil(total / query.limit);
 
     const countsByReason: Record<string, number> = {};
     for (const code of FAILURE_REASON_CODES) {
@@ -1722,29 +2305,35 @@ router.get('/runs', async (req: any, res: any) => {
       countsByReason[key] = (countsByReason[key] || 0) + (row.count || 0);
     }
 
-    const pageRunsRaw = bucket.pageRuns || [];
-    const pageRuns = pageRunsRaw.map((run: any) => {
-      const copy = { ...run };
-      delete copy._sa;
-      delete copy._fa;
-      delete copy._sortTs;
-      return copy;
-    });
-
-    const countMap = await batchExtractedRowCounts(pageRuns.map((r: any) => r.runId).filter(Boolean));
-    const robotById = new Map(robots.map((r: any) => [r.recording_meta.id, r]));
+    const pageRuns = bucket.pageRuns || [];
+    const pageMetaIds = [...new Set(pageRuns.map((r: any) => r.robotMetaId).filter(Boolean))];
+    const pageRobots = pageMetaIds.length
+      ? await Robot.find({
+          ...ownerIdFilter(req.user.id),
+          'recording_meta.id': { $in: pageMetaIds },
+        })
+          .select(
+            'recording_meta.id recording_meta.name recording_meta.url recording_meta.companyName recording_meta.scoutId recording_meta.saasConfig'
+          )
+          .lean()
+      : [];
+    const robotById = new Map(pageRobots.map((r: any) => [r.recording_meta.id, r]));
 
     const hydratedRuns = pageRuns.map((run: any) => {
       const robot = robotById.get(run.robotMetaId);
-      return enrichRunForList(run, robot, countMap.get(run.runId) || 0);
+      const extractedCount = typeof run.rowsExtracted === 'number' ? run.rowsExtracted : 0;
+      return enrichRunForList(run, robot, extractedCount);
     });
 
     return res.json({
       runs: hydratedRuns,
-      pagination: { page, limit, total, totalPages },
+      pagination: { page: query.page, limit: query.limit, total, totalPages },
       countsByReason,
     });
   } catch (error: any) {
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ error: error.message || 'Automation not found' });
+    }
     logger.log('error', `Failed to fetch runs for SaaS API: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch runs' });
   }

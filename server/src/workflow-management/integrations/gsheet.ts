@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import logger from "../../logger";
 import Run from "../../models/Run";
 import Robot from "../../models/Robot";
+import { neutralizeSpreadsheetCell } from "../../utils/spreadsheet";
 
 interface GoogleSheetUpdateTask {
   robotId: string;
@@ -331,7 +332,8 @@ export async function writeDataToSheet(
     }
 
     const expectedHeaders = Object.keys(data[0]);
-    const rows = data.map(item => Object.values(item));
+    const safeHeaders = expectedHeaders.map(neutralizeSpreadsheetCell);
+    const rows = data.map(item => Object.values(item).map(neutralizeSpreadsheetCell));
 
     const existingHeaders = 
       checkResponse.data.values && 
@@ -343,13 +345,13 @@ export async function writeDataToSheet(
     
     const headersMatch = 
       !isSheetEmpty &&
-      existingHeaders.length === expectedHeaders.length && 
-      expectedHeaders.every((header, index) => existingHeaders[index] === header);
+      existingHeaders.length === safeHeaders.length &&
+      safeHeaders.every((header, index) => existingHeaders[index] === String(header));
 
     let resource;
     
     if (isSheetEmpty || !headersMatch) {
-      resource = { values: [expectedHeaders, ...rows] };
+      resource = { values: [safeHeaders, ...rows] };
       console.log(`Including headers in the append operation for sheet ${sheetName}.`);
     } else {
       resource = { values: rows };
@@ -361,7 +363,7 @@ export async function writeDataToSheet(
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${sheetName}!A1`,
-      valueInputOption: 'USER_ENTERED',
+      valueInputOption: 'RAW',
       requestBody: resource,
     });
 

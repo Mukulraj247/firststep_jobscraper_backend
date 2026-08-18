@@ -17,9 +17,22 @@ import {
   parseOracleVanityFusionHost,
   looksLikeOracleVanityHashBoard,
   resolveOracleHashVanityFusionHost,
+  assertSafeFindlyApiBase,
 } from './atsAdapters';
 import fs from 'fs';
 import path from 'path';
+
+describe('Findly API base validation', () => {
+  it('rejects an HTML-derived internal API base', () => {
+    expect(() => assertSafeFindlyApiBase('http://169.254.169.254/latest/')).toThrow(/Findly/i);
+  });
+
+  it('allows the known Findly API base', () => {
+    expect(assertSafeFindlyApiBase('https://jobsapi-internal.m-cloud.io/api/')).toContain(
+      'm-cloud.io'
+    );
+  });
+});
 
 describe('detectAts', () => {
   it('detects Greenhouse board URLs', () => {

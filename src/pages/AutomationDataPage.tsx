@@ -39,6 +39,7 @@ import {
   updateAutomationColumns,
 } from '../api/automation';
 import { useGlobalInfoStore } from '../context/globalInfo';
+import { escapeCsvSpreadsheetCell } from '../utils/spreadsheet';
 
 const DATA_COLUMN_LABELS: Record<string, string> = {
   sectorIndustry: 'Sector / industry',
@@ -288,10 +289,10 @@ export const AutomationDataPage = () => {
   const exportCsv = () => {
     const csvColumns = ['runId', 'source', 'createdAt', ...columns];
     const content = [
-      csvColumns.join(','),
+      csvColumns.map(escapeCsvSpreadsheetCell).join(','),
       ...flatRows.map((row) =>
         csvColumns
-          .map((column) => `"${String(row[column] ?? '').replace(/"/g, '""')}"`)
+          .map((column) => escapeCsvSpreadsheetCell(row[column] ?? ''))
           .join(',')
       ),
     ].join('\n');

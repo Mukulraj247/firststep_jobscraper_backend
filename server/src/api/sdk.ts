@@ -624,6 +624,7 @@ router.get("/sdk/robots/:id/runs", requireAPIKey, async (req: AuthenticatedReque
         const robotId = req.params.id;
 
         const robot = await Robot.findOne({
+            ...ownerIdFilter(req.user?.id),
             'recording_meta.id': robotId
         });
 
@@ -659,6 +660,7 @@ router.get("/sdk/robots/:id/runs/:runId", requireAPIKey, async (req: Authenticat
         const runId = req.params.runId;
 
         const robot = await Robot.findOne({
+            ...ownerIdFilter(req.user?.id),
             'recording_meta.id': robotId
         });
 
@@ -701,6 +703,7 @@ router.post("/sdk/robots/:id/runs/:runId/abort", requireAPIKey, async (req: Auth
         const runId = req.params.runId;
 
         const robot = await Robot.findOne({
+            ...ownerIdFilter(req.user?.id),
             'recording_meta.id': robotId
         });
 

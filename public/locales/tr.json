@@ -110,7 +110,8 @@
     "proxy": "Proxy",
     "apikey": "API Anahtarı",
     "feedback": "Maxun Cloud’a Katıl",
-    "apidocs": "Web Siteyi API’ye Dönüştür"
+    "apidocs": "Web Siteyi API’ye Dönüştür",
+    "collapse": "Daralt"
   },
   "jobboard": {
     "heading": "Job board",
@@ -157,10 +158,60 @@
     "settings": "Ayarlar",
     "search": "Çalıştırma Ara...",
     "sort_tooltip": "Sıralamak için tıkla",
+    "retry": "Yeniden dene",
+    "rows_per_page": "Sayfa başına çalıştırma",
+    "automations_per_page": "Sayfa başına otomasyon",
+    "automation_count": "{{count}} otomasyon",
+    "load_error": "Çalıştırmalar yüklenemedi. Lütfen tekrar deneyin.",
     "placeholder": {
       "title": "Çalıştırma Bulunamadı",
       "body": "Tüm robot çalıştırmalarınız burada görünecektir. Bir robot aktif olduğunda, çalıştırmaları buraya kaydedilecektir.",
-      "search": "Aramanızla eşleşen çalıştırma yok"
+      "search": "Aramanızla eşleşen çalıştırma yok",
+      "filtered": "Seçilen filtrelerle eşleşen çalıştırma yok. Tüm otomasyonları görmek için filtreleri temizleyin."
+    },
+    "filters": {
+      "search_label": "Ara",
+      "date": "Tarih",
+      "status_label": "Durum",
+      "jobs_label": "Eklenen işler",
+      "duration_label": "Süre",
+      "clear_all": "Tümünü temizle",
+      "showing_range": "{{from}}–{{to}} / {{total}}",
+      "pill_search": "Arama: {{q}}",
+      "pill_date": "Tarih: {{date}}",
+      "pill_status": "Durum: {{status}}",
+      "pill_jobs": "İşler: {{jobs}}",
+      "pill_duration": "Süre: {{duration}}",
+      "status": {
+        "any": "Tümü",
+        "running": "Çalışıyor",
+        "queued": "Kuyrukta / bekliyor",
+        "completed": "Tamamlandı",
+        "failed": "Başarısız",
+        "aborted": "İptal edildi",
+        "scheduled": "Zamanlanmış",
+        "dead": "Ölü"
+      },
+      "jobs": {
+        "any": "Tümü",
+        "exactly0": "Tam olarak 0",
+        "moreThan2": "2'den fazla",
+        "moreThan3": "3'ten fazla",
+        "moreThan4": "4'ten fazla"
+      },
+      "duration": {
+        "any": "Tümü",
+        "lt5": "< 5 dk",
+        "lt30": "< 30 dk",
+        "gt30": "> 30 dk",
+        "gt60": "> 1 saat"
+      }
+    },
+    "group": {
+      "untitled": "Otomasyon",
+      "last_run": "Son: {{time}}",
+      "jobs": "{{count}} iş",
+      "run_count": "{{count}} çalıştırma"
     },
     "notifications": {
       "no_runs": "Çalıştırma bulunamadı. Lütfen tekrar deneyin.",
@@ -647,6 +698,7 @@
     },
     "loading": "Veriler yükleniyor...",
     "empty_output": "Çıktı verisi yok",
+    "empty_log": "Bu çalıştırma için henüz günlük yok.",
     "captured_data": {
       "title": "Yakalanan Veriler",
       "download_csv": "CSV İndir",

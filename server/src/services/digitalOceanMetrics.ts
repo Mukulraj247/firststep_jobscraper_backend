@@ -48,9 +48,9 @@ export type DropletComputeSnapshot = {
     diskTotalBytes: number | null;
     bandwidthInboundMbps: MetricSeriesSummary;
     bandwidthOutboundMbps: MetricSeriesSummary;
-    /** DO disk_read values are megabytes/sec (MBps); field name kept for API stability. */
+    /** Reserved: DO Monitoring Metrics API no longer publishes disk_read (alert type only). */
     diskReadMbps: MetricSeriesSummary;
-    /** DO disk_write values are megabytes/sec (MBps); field name kept for API stability. */
+    /** Reserved: DO Monitoring Metrics API no longer publishes disk_write (alert type only). */
     diskWriteMbps: MetricSeriesSummary;
     load1: MetricSeriesSummary;
     empty: boolean;
@@ -291,7 +291,9 @@ async function fetchMetricSafe(
   } catch (error: any) {
     const status = error?.response?.status;
     const msg = error?.response?.data?.message || error?.message;
-    logger.log('warn', `DO metric ${path} failed (${status || '?'}): ${msg}`);
+    // 404 = path gone / not published for this account; empty series is fine.
+    const level = status === 404 ? 'debug' : 'warn';
+    logger.log(level, `DO metric ${path} failed (${status || '?'}): ${msg}`);
     return [];
   }
 }
@@ -419,6 +421,10 @@ async function fetchDropletMetrics(
   const start = end - WINDOW_SECONDS[window];
   const common = { host_id: hostId, start, end };
 
+  // Disk I/O: DO still supports alert types `v1/insights/droplet/disk_read|disk_write`,
+  // but the Monitoring Metrics API no longer exposes `/metrics/droplet/disk_read|disk_write`
+  // (official OpenAPI + godo client omit them; live calls return 404). Keep empty series
+  // for API stability; do not call those paths.
   const [
     cpuSeries,
     memAvail,
@@ -427,8 +433,6 @@ async function fetchDropletMetrics(
     fsSize,
     bwIn,
     bwOut,
-    diskRead,
-    diskWrite,
     load1,
   ] = await Promise.all([
     fetchMetricSafe(client, '/monitoring/metrics/droplet/cpu', common),
@@ -446,8 +450,6 @@ async function fetchDropletMetrics(
       interface: 'public',
       direction: 'outbound',
     }),
-    fetchMetricSafe(client, '/monitoring/metrics/droplet/disk_read', common),
-    fetchMetricSafe(client, '/monitoring/metrics/droplet/disk_write', common),
     fetchMetricSafe(client, '/monitoring/metrics/droplet/load_1', common),
   ]);
 
@@ -463,10 +465,8 @@ async function fetchDropletMetrics(
   // DO bandwidth API values are already Mbps (not bits/s). Dividing by 1e6 made charts show ~0.
   const inPts = flattenPoints(bwIn);
   const outPts = flattenPoints(bwOut);
-  // DO disk_read / disk_write Insights/alerts are in MB/s (megabytes per second).
-  const readPts = flattenPoints(diskRead);
-  const writePts = flattenPoints(diskWrite);
   const loadPts = flattenPoints(load1);
+  const blankIo: Array<{ t: number; v: number }> = [];
 
   const empty =
     !cpuPoints.length &&
@@ -496,13 +496,13 @@ async function fetchDropletMetrics(
     diskTotalBytes: diskTotalLatest,
     bandwidthInboundMbps: summarize(inPts),
     bandwidthOutboundMbps: summarize(outPts),
-    diskReadMbps: summarize(readPts),
-    diskWriteMbps: summarize(writePts),
+    diskReadMbps: summarize(blankIo),
+    diskWriteMbps: summarize(blankIo),
     load1: summarize(loadPts),
     empty,
     note: empty
       ? 'No monitoring samples yet. Install the DigitalOcean metrics agent on the Droplet (`curl -sSL https://repos.insights.digitalocean.com/install.sh | bash`), wait 2–5 minutes, then Refresh DO.'
-      : null,
+      : 'Disk I/O charts are unavailable: DigitalOcean no longer exposes disk_read/disk_write via the Monitoring Metrics API (alert policies only). CPU, memory, disk usage, bandwidth, and load still work.',
   };
 }
 

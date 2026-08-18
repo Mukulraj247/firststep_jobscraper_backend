@@ -1,72 +1,27 @@
 import * as React from 'react';
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import Paper from '@mui/material/Paper';
-import Table from '@mui/material/Table';
-import TableBody from '@mui/material/TableBody';
-import TableCell from '@mui/material/TableCell';
-import TableContainer from '@mui/material/TableContainer';
-import TableHead from '@mui/material/TableHead';
-import TablePagination from '@mui/material/TablePagination';
-import TableRow from '@mui/material/TableRow';
-import { Accordion, AccordionSummary, AccordionDetails, Typography, Box, TextField, Tooltip, CircularProgress, Alert, Button } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import SearchIcon from '@mui/icons-material/Search';
+import {
+  Alert,
+  Box,
+  Button,
+  Paper,
+  Skeleton,
+  Stack,
+  TablePagination,
+  Typography,
+} from '@mui/material';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useGlobalInfoStore, useCachedRuns, useCacheInvalidation } from "../../context/globalInfo";
-import { RunSettings } from "./RunSettings";
-import { CollapsibleRow } from "./ColapsibleRow";
-import { ArrowDownward, ArrowUpward, UnfoldMore } from '@mui/icons-material';
-import { io, Socket } from 'socket.io-client';
-import { apiUrl } from '../../apiConfig';
+import { useCacheInvalidation, useCachedRunGroups, useGlobalInfoStore } from '../../context/globalInfo';
+import type { SaasRunGroup } from '../../api/automation';
+import { durationFilterParamsFromValue, jobsFilterParamsFromValue } from './runDisplay';
+import { hasActiveRunFilters, RunsFilters } from './RunsFilters';
+import { RunGroupAccordion } from './RunGroupAccordion';
+import { subscribeRunBrowserSocket } from './useRunBrowserSocket';
+import { columns, type Data } from './runTypes';
 
-export const columns: readonly Column[] = [
-  { id: 'runStatus', label: 'Status', minWidth: 80 },
-  { id: 'name', label: 'Name', minWidth: 80 },
-  { id: 'startedAt', label: 'Started At', minWidth: 80 },
-  { id: 'finishedAt', label: 'Finished At', minWidth: 80 },
-  { id: 'duration', label: 'Duration', minWidth: 80 },
-  { id: 'settings', label: 'Settings', minWidth: 80 },
-  { id: 'delete', label: 'Delete', minWidth: 80 },
-];
-
-type SortDirection = 'asc' | 'desc' | 'none';
-
-interface AccordionSortConfig {
-  [robotMetaId: string]: {
-    field: keyof Data | null;
-    direction: SortDirection;
-  };
-}
-
-interface Column {
-  id: 'runStatus' | 'name' | 'startedAt' | 'finishedAt' | 'duration' | 'delete' | 'settings';
-  label: string;
-  minWidth?: number;
-  align?: 'right';
-  format?: (value: string) => string;
-}
-
-export interface Data {
-  id: number;
-  status: string;
-  name: string;
-  startedAt: string;
-  finishedAt: string;
-  runByUserId?: string;
-  runByScheduleId?: string;
-  browserId: string;
-  runByAPI?: boolean;
-  runBySDK?: boolean;
-  log: string;
-  runId: string;
-  robotId: string;
-  robotMetaId: string;
-  interpreterSettings: RunSettings;
-  serializableOutput: any;
-  binaryOutput: any;
-  duration?: number | null;
-}
+export { columns };
+export type { Data };
 
 interface RunsTableProps {
   currentInterpretationLog: string;
@@ -75,30 +30,21 @@ interface RunsTableProps {
   runningRecordingName: string;
 }
 
-interface PaginationState {
-  [robotMetaId: string]: {
-    page: number;
-    rowsPerPage: number;
-  };
-}
-
 export const RunsTable: React.FC<RunsTableProps> = ({
   currentInterpretationLog,
   abortRunHandler,
   runId,
-  runningRecordingName
+  runningRecordingName,
 }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
 
   const getUrlParams = () => {
-    // Normalize accidental double slashes from bad navigations (`/runs//uuid`).
     const path = location.pathname.replace(/\/{2,}/g, '/');
     const match = path.match(/\/runs\/([^\/]+)(?:\/run\/([^\/]+))?/);
     const robotMetaId = match?.[1]?.trim() || null;
     const urlRunId = match?.[2]?.trim() || null;
-    // Ignore empty / placeholder segments
     return {
       robotMetaId: robotMetaId && robotMetaId !== 'undefined' ? robotMetaId : null,
       urlRunId: urlRunId && urlRunId !== 'undefined' ? urlRunId : null,
@@ -107,422 +53,239 @@ export const RunsTable: React.FC<RunsTableProps> = ({
 
   const { robotMetaId: urlRobotMetaId, urlRunId } = getUrlParams();
 
-  const [listPage, setListPage] = useState(0); // 0-based for MUI TablePagination
-  const [rowsPerPage, setRowsPerPage] = useState(25);
-  const [accordionSortConfigs, setAccordionSortConfigs] = useState<AccordionSortConfig>({});
+  const [listPage, setListPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [jobsAddedFilter, setJobsAddedFilter] = useState('');
+  const [durationFilter, setDurationFilter] = useState('');
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [expandedAccordions, setExpandedAccordions] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchDebounced(searchInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setListPage(0);
+  }, [searchDebounced, dateFilter, statusFilter, jobsAddedFilter, durationFilter]);
+
+  const jobsFilterParams = useMemo(
+    () => jobsFilterParamsFromValue(jobsAddedFilter),
+    [jobsAddedFilter],
+  );
+  const durationFilterParams = useMemo(
+    () => durationFilterParamsFromValue(durationFilter),
+    [durationFilter],
+  );
+
+  const filterParams = useMemo(() => ({
+    q: searchDebounced || undefined,
+    date: dateFilter || undefined,
+    status: statusFilter || undefined,
+    ...jobsFilterParams,
+    ...durationFilterParams,
+  }), [searchDebounced, dateFilter, statusFilter, jobsFilterParams, durationFilterParams]);
 
   const {
-    data: runsPage,
+    data: groupsPage,
     isLoading,
     isFetching,
     error,
     refetch,
-  } = useCachedRuns({
+  } = useCachedRunGroups({
     page: listPage + 1,
     limit: rowsPerPage,
-    robotMetaId: urlRobotMetaId,
+    ...filterParams,
   });
-  const rows = runsPage?.runs ?? [];
-  const serverPagination = runsPage?.pagination;
 
-  const handleSort = useCallback((columnId: keyof Data, robotMetaId: string) => {
-    setAccordionSortConfigs(prevConfigs => {
-      const currentConfig = prevConfigs[robotMetaId] || { field: null, direction: 'none' };
-      const newDirection: SortDirection =
-        currentConfig.field !== columnId ? 'asc' :
-        currentConfig.direction === 'none' ? 'asc' :
-        currentConfig.direction === 'asc' ? 'desc' : 'none';
+  const { data: pinnedPage } = useCachedRunGroups({
+    page: 1,
+    limit: 1,
+    robotMetaId: urlRobotMetaId,
+    ...filterParams,
+    enabled: Boolean(urlRobotMetaId),
+  });
 
-      return {
-        ...prevConfigs,
-        [robotMetaId]: {
-          field: newDirection === 'none' ? null : columnId,
-          direction: newDirection,
-        }
-      };
-    });
-  }, []);
+  const groups = groupsPage?.groups ?? [];
+  const serverPagination = groupsPage?.pagination;
+  const totalGroups = serverPagination?.total ?? groups.length;
 
-  const translatedColumns = useMemo(() =>
-    columns.map(column => ({
-      ...column,
-      label: t(`runstable.${column.id}`, column.label)
-    })),
-    [t]
-  );
+  const displayGroups = useMemo(() => {
+    const pinned = pinnedPage?.groups?.[0];
+    if (!pinned || !urlRobotMetaId) return groups;
+    if (groups.some((group) => group.robotMetaId === pinned.robotMetaId)) return groups;
+    return [pinned, ...groups];
+  }, [groups, pinnedPage, urlRobotMetaId]);
 
   const { notify, rerenderRuns, setRerenderRuns } = useGlobalInfoStore();
   const { invalidateRuns } = useCacheInvalidation();
-  
-  const activeSocketsRef = useRef<Map<string, Socket>>(new Map());
-
-  const [searchTerm, setSearchTerm] = useState('');
-  const [paginationStates, setPaginationStates] = useState<PaginationState>({});
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [expandedAccordions, setExpandedAccordions] = useState<Set<string>>(new Set());
 
   const handleAccordionChange = useCallback((robotMetaId: string, isExpanded: boolean) => {
     if (!robotMetaId) return;
-    setExpandedAccordions(prev => {
-      const newSet = new Set(prev);
-      if (isExpanded) {
-        newSet.add(robotMetaId);
-      } else {
-        newSet.delete(robotMetaId);
-      }
-      return newSet;
+    setExpandedAccordions((prev) => {
+      const next = new Set(prev);
+      if (isExpanded) next.add(robotMetaId);
+      else next.delete(robotMetaId);
+      return next;
     });
-    
-    navigate(isExpanded ? `/runs/${robotMetaId}` : '/runs');
-  }, [navigate]);
+    if (isExpanded) {
+      if (urlRunId) {
+        navigate(`/runs/${robotMetaId}/run/${urlRunId}`);
+      } else {
+        navigate(`/runs/${robotMetaId}`);
+      }
+    } else if (urlRobotMetaId === robotMetaId) {
+      navigate('/runs');
+    }
+  }, [navigate, urlRobotMetaId, urlRunId]);
 
-  const handleRowExpand = useCallback((runId: string, robotMetaId: string, shouldExpand: boolean) => {
-    if (!runId || !robotMetaId) return;
-    setExpandedRows(prev => {
-      const newSet = new Set(prev);
-      if (shouldExpand) {
-        newSet.add(runId);
-      } else {
-        newSet.delete(runId);
-      }
-      return newSet;
+  const handleRowExpand = useCallback((rowRunId: string, robotMetaId: string, shouldExpand: boolean) => {
+    if (!rowRunId || !robotMetaId) return;
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (shouldExpand) next.add(rowRunId);
+      else next.delete(rowRunId);
+      return next;
     });
-    
     navigate(
-      shouldExpand 
-        ? `/runs/${robotMetaId}/run/${runId}`
-        : `/runs/${robotMetaId}`
+      shouldExpand
+        ? `/runs/${robotMetaId}/run/${rowRunId}`
+        : `/runs/${robotMetaId}`,
     );
   }, [navigate]);
 
-  // Sync expandedRows and expandedAccordions with URL params
   useEffect(() => {
     if (urlRunId) {
-      setExpandedRows(prev => {
-        const newSet = new Set(prev);
-        newSet.add(urlRunId);
-        return newSet;
+      setExpandedRows((prev) => {
+        const next = new Set(prev);
+        next.add(urlRunId);
+        return next;
       });
     }
-    
     if (urlRobotMetaId) {
-      setExpandedAccordions(prev => {
-        const newSet = new Set(prev);
-        newSet.add(urlRobotMetaId);
-        return newSet;
+      setExpandedAccordions((prev) => {
+        const next = new Set(prev);
+        next.add(urlRobotMetaId);
+        return next;
       });
     }
   }, [urlRunId, urlRobotMetaId]);
 
-  // Auto-expand currently running robot (but allow manual collapse)
   useEffect(() => {
-    if (runId && runningRecordingName) {
-      const currentRunningRow = rows.find(row => 
-        row.runId === runId && row.name === runningRecordingName
-      );
-      
-      if (currentRunningRow) {
-        setExpandedRows(prev => {
-          const newSet = new Set(prev);
-          newSet.add(currentRunningRow.runId);
-          return newSet;
-        });
-      }
-    }
-  }, [runId, runningRecordingName, rows]);
-
-  const handleAccordionPageChange = useCallback((_event: unknown, newPage: number) => {
-    setListPage(newPage);
-  }, []);
-  
-  const handleAccordionsPerPageChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    setRowsPerPage(+event.target.value);
-    setListPage(0);
-  }, []);
-
-  // Reset page when deep-link robot changes
-  useEffect(() => {
-    setListPage(0);
-  }, [urlRobotMetaId]);
-
-  const handleChangePage = useCallback((robotMetaId: string, newPage: number) => {
-    setPaginationStates(prev => ({
-      ...prev,
-      [robotMetaId]: {
-        ...prev[robotMetaId],
-        page: newPage
-      }
-    }));
-  }, []);
-
-  const handleChangeRowsPerPage = useCallback((robotMetaId: string, newRowsPerPage: number) => {
-    setPaginationStates(prev => ({
-      ...prev,
-      [robotMetaId]: {
-        page: 0,
-        rowsPerPage: newRowsPerPage
-      }
-    }));
-  }, []);
-
-  const getPaginationState = useCallback((robotMetaId: string) => {
-    const defaultState = { page: 0, rowsPerPage: 10 };
-    
-    if (!paginationStates[robotMetaId]) {
-      setTimeout(() => {
-        setPaginationStates(prev => ({
-          ...prev,
-          [robotMetaId]: defaultState
-        }));
-      }, 0);
-      return defaultState;
-    }
-    return paginationStates[robotMetaId];
-  }, [paginationStates]);
-
-  const debouncedSearch = useCallback((fn: Function, delay: number) => {
-    let timeoutId: NodeJS.Timeout;
-    return (...args: any[]) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => fn(...args), delay);
-    };
-  }, []);
-
-  const handleSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const debouncedSetSearch = debouncedSearch((value: string) => {
-      setSearchTerm(value);
-      setListPage(0);
-      setPaginationStates(prev => {
-        const reset = Object.keys(prev).reduce((acc, robotId) => ({
-          ...acc,
-          [robotId]: { ...prev[robotId], page: 0 }
-        }), {});
-        return reset;
+    if (!runId) return;
+    const matching = displayGroups.find((group) => group.latestRun?.runId === runId);
+    if (matching?.robotMetaId) {
+      setExpandedAccordions((prev) => {
+        const next = new Set(prev);
+        next.add(matching.robotMetaId);
+        return next;
       });
-    }, 300);
-    debouncedSetSearch(event.target.value);
-  }, [debouncedSearch]);
+      setExpandedRows((prev) => {
+        const next = new Set(prev);
+        next.add(runId);
+        return next;
+      });
+    }
+  }, [runId, displayGroups]);
 
-
-  // Handle rerender requests using cache invalidation
   useEffect(() => {
     if (rerenderRuns) {
-      // Invalidate cache to force refetch
       refetch();
       setRerenderRuns(false);
     }
   }, [rerenderRuns, refetch, setRerenderRuns]);
 
   useEffect(() => {
-    if (!rows || rows.length === 0) return;
+    const activeIds = displayGroups
+      .map((group) => group.latestRun)
+      .filter((run) => run?.status === 'running' && run?.browserId)
+      .slice(0, 3)
+      .map((run) => String(run.browserId));
 
-    const activeRuns = rows.filter((row: Data) =>
-      row.status === 'running' && row.browserId && row.browserId.trim() !== ''
+    const unsubscribers = activeIds.map((browserId) =>
+      subscribeRunBrowserSocket(browserId, 'run-completed', (data: any) => {
+        invalidateRuns();
+        setRerenderRuns(true);
+        const name = data.robotName || runningRecordingName;
+        if (data.status === 'success') {
+          notify('success', t('main_page.notifications.interpretation_success', { name }));
+        } else if (data.status === 'anomaly') {
+          notify('warning', `${name}: run finished with anomaly (${data.anomaly || 'row_drop'})`);
+        } else {
+          notify('error', t('main_page.notifications.interpretation_failed', { name }));
+        }
+      }),
     );
 
-    const MAX_LIVE_SOCKETS = 3;
-    const capped = activeRuns.slice(0, MAX_LIVE_SOCKETS);
-
-    capped.forEach((run: Data) => {
-      const { browserId, name } = run;
-      if (activeSocketsRef.current.has(browserId)) return;
-
-      try {
-        const socket = io(`${apiUrl}/${browserId}`, {
-          transports: ['websocket', 'polling'],
-          rejectUnauthorized: false,
-        });
-
-        socket.on('run-completed', (data: any) => {
-          invalidateRuns();
-          setRerenderRuns(true);
-          if (data.status === 'success') {
-            notify('success', t('main_page.notifications.interpretation_success', { name: data.robotName || name }));
-          } else if (data.status === 'anomaly') {
-            notify('warning', `${data.robotName || name}: run finished with anomaly (${data.anomaly || 'row_drop'})`);
-          } else {
-            notify('error', t('main_page.notifications.interpretation_failed', { name: data.robotName || name }));
-          }
-          socket.disconnect();
-          activeSocketsRef.current.delete(browserId);
-        });
-
-        socket.on('disconnect', () => {
-          activeSocketsRef.current.delete(browserId);
-        });
-
-        activeSocketsRef.current.set(browserId, socket);
-      } catch (error) {
-        console.error(`[RunsTable] Error connecting to browser ${browserId}:`, error);
-      }
-    });
-
-    const activeBrowserIds = new Set(capped.map((run: Data) => run.browserId));
-    activeSocketsRef.current.forEach((socket, browserId) => {
-      if (!activeBrowserIds.has(browserId)) {
-        socket.disconnect();
-        activeSocketsRef.current.delete(browserId);
-      }
-    });
-  }, [rows, notify, t, invalidateRuns, setRerenderRuns]);
-
-  useEffect(() => {
     return () => {
-      console.log('[RunsTable] Cleaning up all socket connections');
-      activeSocketsRef.current.forEach((socket) => {
-        socket.disconnect();
-      });
-      activeSocketsRef.current.clear();
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, []);
+  }, [displayGroups, invalidateRuns, notify, runningRecordingName, setRerenderRuns, t]);
 
   const handleDelete = useCallback(() => {
     notify('success', t('runstable.notifications.delete_success'));
+    invalidateRuns();
     refetch();
-  }, [notify, t, refetch]);
+  }, [notify, t, invalidateRuns, refetch]);
 
-  // Filter rows based on search term (within the current server page)
-  const filteredRows = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((row) =>
-      String(row.name || '').toLowerCase().includes(term)
-    );
-  }, [rows, searchTerm]);
-
-  const parseDateString = (dateStr: string): Date => {
-    try {
-      if (dateStr.includes('PM') || dateStr.includes('AM')) {
-        return new Date(dateStr);
-      }
-      
-      return new Date(dateStr.replace(/(\d+)\/(\d+)\//, '$2/$1/'))
-    } catch {
-      return new Date(0);
-    }
+  const clearAllFilters = () => {
+    setSearchInput('');
+    setSearchDebounced('');
+    setDateFilter('');
+    setStatusFilter('');
+    setJobsAddedFilter('');
+    setDurationFilter('');
+    setListPage(0);
   };
 
-  const groupedRows = useMemo(() => {
-    const groupedData = filteredRows.reduce((acc, row) => {
-      if (!acc[row.robotMetaId]) {
-        acc[row.robotMetaId] = [];
-      }
-      acc[row.robotMetaId].push(row);
-      return acc;
-    }, {} as Record<string, Data[]>);
-  
-    Object.keys(groupedData).forEach(robotId => {
-      groupedData[robotId].sort((a: any, b: any) => 
-        parseDateString(b.startedAt).getTime() - parseDateString(a.startedAt).getTime()
-      );
-    });
-  
-    const robotEntries = Object.entries(groupedData).map(([robotId, runs]) => ({
-      robotId,
-      runs: runs as Data[],
-      latestRunDate: parseDateString((runs as Data[])[0].startedAt).getTime()
-    }));
-  
-    robotEntries.sort((a, b) => b.latestRunDate - a.latestRunDate);
-  
-    return robotEntries.reduce((acc, { robotId, runs }) => {
-      acc[robotId] = runs;
-      return acc;
-    }, {} as Record<string, Data[]>);
-  }, [filteredRows]);
-
-  const renderTableRows = useCallback((data: Data[], robotMetaId: string) => {
-    const { page, rowsPerPage } = getPaginationState(robotMetaId);
-    const start = page * rowsPerPage;
-    const end = start + rowsPerPage;
-
-    let sortedData = [...data];
-    const sortConfig = accordionSortConfigs[robotMetaId];
-    
-    if (sortConfig?.field === 'startedAt' || sortConfig?.field === 'finishedAt') {
-      if (sortConfig.direction !== 'none') {
-        sortedData.sort((a, b) => {
-          const dateA = parseDateString(a[sortConfig.field!]);
-          const dateB = parseDateString(b[sortConfig.field!]);
-          
-          return sortConfig.direction === 'asc' 
-            ? dateA.getTime() - dateB.getTime() 
-            : dateB.getTime() - dateA.getTime();
-        });
-      }
-    }
-    
-    return sortedData
-      .slice(start, end)
-      .map((row) => (
-        <CollapsibleRow
-          key={`row-${row.id}`}
-          row={row}
-          handleDelete={handleDelete}
-          isOpen={expandedRows.has(row.runId)}
-          onToggleExpanded={(shouldExpand) => handleRowExpand(row.runId, row.robotMetaId, shouldExpand)}
-          currentLog={currentInterpretationLog}
-          abortRunHandler={abortRunHandler}
-          runningRecordingName={runningRecordingName}
-          urlRunId={urlRunId}
-        />
-      ));
-  }, [paginationStates, runId, runningRecordingName, currentInterpretationLog, abortRunHandler, handleDelete, accordionSortConfigs]);
-
-  const renderSortIcon = useCallback((column: Column, robotMetaId: string) => {
-    const sortConfig = accordionSortConfigs[robotMetaId];
-    if (column.id !== 'startedAt' && column.id !== 'finishedAt') return null;
-
-    if (sortConfig?.field !== column.id) {
-      return (
-        <UnfoldMore 
-          fontSize="small" 
-          sx={{ 
-            opacity: 0.3,
-            transition: 'opacity 0.2s',
-            '.MuiTableCell-root:hover &': {
-              opacity: 1
-            }
-          }} 
-        />
-      );
-    }
-
-    return sortConfig.direction === 'asc' 
-      ? <ArrowUpward fontSize="small" />
-      : sortConfig.direction === 'desc'
-        ? <ArrowDownward fontSize="small" />
-        : <UnfoldMore fontSize="small" />;
-  }, [accordionSortConfigs]);
+  const filtersValue = {
+    searchInput,
+    date: dateFilter,
+    status: statusFilter,
+    jobsAdded: jobsAddedFilter,
+    duration: durationFilter,
+  };
+  const filtersActive = hasActiveRunFilters(filtersValue);
+  const from = totalGroups === 0 ? 0 : listPage * rowsPerPage + 1;
+  const to = Math.min(totalGroups, (listPage + 1) * rowsPerPage);
 
   return (
     <React.Fragment>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+      <Stack direction="row" alignItems="baseline" spacing={1.5} mb={2}>
         <Typography variant="h6" component="h2">
           {t('runstable.runs', 'Runs')}
-          {serverPagination?.total != null ? (
-            <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1.5 }}>
-              ({serverPagination.total})
-            </Typography>
-          ) : null}
         </Typography>
-        <TextField
-          size="small"
-          placeholder={t('runstable.search', 'Search runs...')}
-          onChange={handleSearchChange}
-          InputProps={{
-            startAdornment: <SearchIcon sx={{ color: 'action.active', mr: 1 }} />
-          }}
-          sx={{ width: '250px' }}
-        />
-      </Box>
+        {serverPagination?.total != null ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            {t('runstable.automation_count', { count: serverPagination.total })}
+          </Typography>
+        ) : null}
+      </Stack>
+
+      <RunsFilters
+        value={filtersValue}
+        resultCount={totalGroups}
+        resultFrom={from}
+        resultTo={to}
+        isFetching={isFetching && !isLoading}
+        onSearchChange={setSearchInput}
+        onDateChange={(value) => { setDateFilter(value); setListPage(0); }}
+        onStatusChange={(value) => { setStatusFilter(value); setListPage(0); }}
+        onJobsAddedChange={(value) => { setJobsAddedFilter(value); setListPage(0); }}
+        onDurationChange={(value) => { setDurationFilter(value); setListPage(0); }}
+        onClearAll={clearAllFilters}
+      />
 
       {error ? (
         <Alert
           severity="error"
           action={
             <Button color="inherit" size="small" onClick={() => refetch()}>
-              Retry
+              {t('runstable.retry', 'Retry')}
             </Button>
           }
           sx={{ mb: 2 }}
@@ -531,150 +294,62 @@ export const RunsTable: React.FC<RunsTableProps> = ({
         </Alert>
       ) : null}
 
-      {isLoading && !runsPage ? (
-        <Box
-          display="flex"
-          justifyContent="center"
-          alignItems="center"
-          sx={{
-            minHeight: '60vh',
-            width: '100%'
-          }}
-        >
-          <CircularProgress size={60} />
-        </Box>
-      ) : Object.keys(groupedRows).length === 0 ? (
+      {isLoading && !groupsPage ? (
+        <Stack spacing={1.25}>
+          {Array.from({ length: 8 }).map((_, index) => (
+            <Skeleton key={index} variant="rounded" height={64} />
+          ))}
+        </Stack>
+      ) : displayGroups.length === 0 ? (
         <Box
           display="flex"
           flexDirection="column"
           alignItems="center"
           justifyContent="center"
-          sx={{
-            minHeight: 300,
-            textAlign: 'center',
-            color: 'text.secondary'
-          }}
+          sx={{ minHeight: 300, textAlign: 'center', color: 'text.secondary' }}
         >
           <Typography variant="h6" gutterBottom>
-            {searchTerm ? t('runstable.placeholder.search') : t('runstable.placeholder.title')}
+            {filtersActive ? t('runstable.placeholder.search') : t('runstable.placeholder.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {searchTerm
-              ? t('recordingtable.search_criteria')
-              : t('runstable.placeholder.body')
-            }
+            {filtersActive
+              ? t('runstable.placeholder.filtered')
+              : t('runstable.placeholder.body')}
           </Typography>
         </Box>
       ) : (
         <>
-          {isFetching && !isLoading ? (
-            <Box display="flex" justifyContent="flex-end" mb={1}>
-              <CircularProgress size={18} />
-            </Box>
-          ) : null}
-          <TableContainer component={Paper} sx={{ width: '100%', overflow: 'hidden' }}>
-            {Object.entries(groupedRows).map(([robotMetaId, data]) => (
-                <Accordion
-                  key={robotMetaId}
-                  expanded={
-                    urlRobotMetaId
-                      ? expandedAccordions.has(robotMetaId) || robotMetaId === urlRobotMetaId
-                      : expandedAccordions.has(robotMetaId)
-                  }
-                  onChange={(_event, isExpanded) => handleAccordionChange(robotMetaId, isExpanded)}
-                  TransitionProps={{ unmountOnExit: true }}
-                >
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography variant="h6">
-                      {(data[0]?.name || data[data.length - 1]?.name || 'Automation')}
-                      <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-                        ({data.length} on this page)
-                      </Typography>
-                    </Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Table stickyHeader aria-label="sticky table">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell />
-                          {translatedColumns.map((column) => (
-                            <TableCell
-                              key={column.id}
-                              align={column.align}
-                              style={{
-                                minWidth: column.minWidth,
-                                cursor: column.id === 'startedAt' || column.id === 'finishedAt' ? 'pointer' : 'default'
-                              }}
-                              onClick={() => {
-                                if (column.id === 'startedAt' || column.id === 'finishedAt') {
-                                  handleSort(column.id, robotMetaId);
-                                }
-                              }}
-                            >
-                              <Tooltip
-                                title={
-                                  (column.id === 'startedAt' || column.id === 'finishedAt')
-                                    ? t('runstable.sort_tooltip')
-                                    : ''
-                                }
-                              >
-                                <Box sx={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 1,
-                                  '&:hover': {
-                                    '& .sort-icon': {
-                                      opacity: 1
-                                    }
-                                  }
-                                }}>
-                                  {column.label}
-                                  <Box className="sort-icon" sx={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    opacity: accordionSortConfigs[robotMetaId]?.field === column.id ? 1 : 0.3,
-                                    transition: 'opacity 0.2s'
-                                  }}>
-                                    {renderSortIcon(column, robotMetaId)}
-                                  </Box>
-                                </Box>
-                              </Tooltip>
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {renderTableRows(data, robotMetaId)}
-                      </TableBody>
-                    </Table>
-
-                    <TablePagination
-                      component="div"
-                      count={data.length}
-                      rowsPerPage={getPaginationState(robotMetaId).rowsPerPage}
-                      page={getPaginationState(robotMetaId).page}
-                      onPageChange={(_, newPage) =>
-                        handleChangePage(robotMetaId, newPage)
-                      }
-                      onRowsPerPageChange={(e) =>
-                        handleChangeRowsPerPage(robotMetaId, parseInt(e.target.value, 10))
-                      }
-                      rowsPerPageOptions={[5, 10, 25]}
-                    />
-                  </AccordionDetails>
-                </Accordion>
-              ))}
-          </TableContainer>
+          <Paper variant="outlined" sx={{ width: '100%', overflow: 'hidden' }}>
+            {displayGroups.map((group: SaasRunGroup) => (
+              <RunGroupAccordion
+                key={group.robotMetaId}
+                group={group}
+                expanded={expandedAccordions.has(group.robotMetaId)}
+                onToggle={(isExpanded) => handleAccordionChange(group.robotMetaId, isExpanded)}
+                filterParams={filterParams}
+                expandedRows={expandedRows}
+                onRowExpand={handleRowExpand}
+                currentInterpretationLog={currentInterpretationLog}
+                abortRunHandler={abortRunHandler}
+                runningRecordingName={runningRecordingName}
+                urlRunId={urlRunId}
+                onDelete={handleDelete}
+              />
+            ))}
+          </Paper>
 
           <TablePagination
             component="div"
-            count={serverPagination?.total ?? filteredRows.length}
+            count={totalGroups}
             page={listPage}
             rowsPerPage={rowsPerPage}
-            onPageChange={handleAccordionPageChange}
-            onRowsPerPageChange={handleAccordionsPerPageChange}
-            rowsPerPageOptions={[10, 25, 50, 100]}
-            labelRowsPerPage={t('runstable.rows_per_page', 'Runs per page')}
+            onPageChange={(_event, newPage) => setListPage(newPage)}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(+event.target.value);
+              setListPage(0);
+            }}
+            rowsPerPageOptions={[10, 20, 50, 100]}
+            labelRowsPerPage={t('runstable.automations_per_page')}
           />
         </>
       )}
