@@ -3,57 +3,47 @@ import {
   Box,
   Button,
   CircularProgress,
-  InputAdornment,
   Paper,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import SearchIcon from '@mui/icons-material/Search';
-import { useTranslation } from 'react-i18next';
+import DownloadIcon from '@mui/icons-material/Download';
+import TuneIcon from '@mui/icons-material/Tune';
 import { OpsHeroBackdrop } from '../../components/dashboard/ops/OpsHeroBackdrop';
 import {
   FIRSTSTEP,
   fadeUpSx,
-  heroGlassFormControlSx,
   heroGlassGhostButtonSx,
   heroGlassOverlineSx,
   heroGlassPanelSx,
   heroGlassPillSx,
   heroGlassPillTextSx,
-  heroGlassPrimaryButtonSx,
   heroGlassSubtitleSx,
   heroGlassTitleSx,
 } from '../../components/dashboard/ops/dashboardTokens';
-import { freshnessPillLabel } from './scrapersPageBehavior';
 
 export function ScrapersHero({
-  totalCount,
-  dataUpdatedAt,
-  nowMs,
-  searchTerm,
+  scheduledCount,
   isRefreshing,
   isLoading,
-  hasBackgroundUpdates,
-  onSearchChange,
+  isReconfiguring = false,
   onRefresh,
-  onCreate,
+  onDownloadSchedules,
+  onReconfigure,
+  canDownloadSchedules = false,
 }: {
-  totalCount: number;
-  dataUpdatedAt: number | null;
-  nowMs: number;
-  searchTerm: string;
+  scheduledCount: number;
   isRefreshing: boolean;
   isLoading: boolean;
-  hasBackgroundUpdates: boolean;
-  onSearchChange: (value: string) => void;
+  isReconfiguring?: boolean;
   onRefresh: () => void;
-  onCreate: () => void;
+  onDownloadSchedules: () => void;
+  onReconfigure: () => void;
+  canDownloadSchedules?: boolean;
 }) {
-  const { t } = useTranslation();
-  const refreshBusy = isLoading || isRefreshing;
+  const refreshBusy = isLoading || isRefreshing || isReconfiguring;
+  const noun = scheduledCount === 1 ? 'scheduled fire' : 'scheduled fires';
 
   return (
     <Paper
@@ -75,11 +65,11 @@ export function ScrapersHero({
       >
         <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography variant="overline" sx={heroGlassOverlineSx}>
-            {t('recordingtable.hero_overline', { defaultValue: 'Scraper operations' })}
+            Scrapers
           </Typography>
-          <Typography sx={heroGlassTitleSx('lg')}>{t('recordingtable.heading')}</Typography>
-          <Typography variant="body2" sx={{ ...heroGlassSubtitleSx, maxWidth: 520 }}>
-            {t('recordingtable.heading_subtitle')}
+          <Typography sx={heroGlassTitleSx('lg')}>24-hour schedule</Typography>
+          <Typography variant="body2" sx={{ ...heroGlassSubtitleSx, maxWidth: 560 }}>
+            Scheduled fires by hour in IST. Pick a day, then click an hour for the minute-by-minute list.
           </Typography>
 
           <Stack direction="row" alignItems="center" spacing={1} sx={heroGlassPillSx}>
@@ -89,65 +79,47 @@ export function ScrapersHero({
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                bgcolor: hasBackgroundUpdates ? FIRSTSTEP.warning : FIRSTSTEP.teal,
-                boxShadow: hasBackgroundUpdates
-                  ? '0 0 0 4px rgba(245, 158, 11, 0.18)'
-                  : '0 0 0 4px rgba(79, 179, 169, 0.18)',
+                bgcolor: FIRSTSTEP.teal,
+                boxShadow: '0 0 0 4px rgba(79, 179, 169, 0.18)',
               }}
             />
             <Typography variant="body2" sx={heroGlassPillTextSx}>
-              {hasBackgroundUpdates
-                ? `${freshnessPillLabel(totalCount, dataUpdatedAt, nowMs)} · updates available`
-                : freshnessPillLabel(totalCount, dataUpdatedAt, nowMs)}
+              {isLoading ? 'Loading schedule' : `${scheduledCount} ${noun}`}
             </Typography>
           </Stack>
         </Box>
 
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={1.25}
-          alignItems={{ xs: 'stretch', sm: 'center' }}
-          flexWrap="wrap"
-          useFlexGap
-          sx={{ width: { xs: '100%', md: 'auto' } }}
-        >
-          <TextField
-            size="small"
-            placeholder={t('recordingtable.search')}
-            value={searchTerm}
-            onChange={(event) => onSearchChange(event.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon sx={{ color: FIRSTSTEP.tealDark, fontSize: 20 }} />
-                </InputAdornment>
-              ),
-            }}
-            sx={[
-              heroGlassFormControlSx(40),
-              { width: { xs: '100%', sm: 240 }, flex: { sm: '1 1 220px' } },
-            ]}
-          />
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Button
+            variant="outlined"
+            startIcon={<DownloadIcon />}
+            onClick={onDownloadSchedules}
+            disabled={!canDownloadSchedules || refreshBusy}
+            sx={heroGlassGhostButtonSx}
+          >
+            Download scraper schedules
+          </Button>
           <Button
             variant="outlined"
             startIcon={
-              refreshBusy ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />
+              isReconfiguring ? <CircularProgress size={16} color="inherit" /> : <TuneIcon />
+            }
+            onClick={onReconfigure}
+            disabled={refreshBusy}
+            sx={heroGlassGhostButtonSx}
+          >
+            {isReconfiguring ? 'Reconfiguring…' : 'Reconfigure'}
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={
+              isRefreshing ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />
             }
             onClick={onRefresh}
             disabled={refreshBusy}
             sx={heroGlassGhostButtonSx}
           >
-            {isRefreshing
-              ? t('recordingtable.refreshing', { defaultValue: 'Refreshing…' })
-              : t('recordingtable.refresh', { defaultValue: 'Refresh' })}
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={onCreate}
-            sx={heroGlassPrimaryButtonSx}
-          >
-            {t('recordingtable.new')}
+            {isRefreshing ? 'Refreshing…' : 'Refresh'}
           </Button>
         </Stack>
       </Stack>

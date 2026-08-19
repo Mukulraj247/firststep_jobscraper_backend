@@ -66,7 +66,11 @@ import {
   visibleTagsForCell,
   SEE_ALL_TAGS_LABEL,
   TAGS_CELL_VISIBLE_COUNT,
+  automationsPageRootOverflow,
   automationsTableScrollSx,
+  configShowsRawListExtractionEditor,
+  configStartUrlLocked,
+  overflowMenuActions,
   workspaceAriaBusy,
   workspaceNoLiftHover,
 } from './automationsPageBehavior';
@@ -504,14 +508,36 @@ describe('task 9 visual contracts', () => {
     expect(shouldShowSeeAllTagsChip(['role:Engineer'])).toBe(false);
     expect(shouldShowSeeAllTagsChip(['role:Engineer', 'industry:tech'])).toBe(true);
     expect(seeAllTagsAriaLabel('Acme Scout')).toBe('See all tags for Acme Scout');
+    expect(automationsPageRootOverflow()).toBe('visible');
     expect(automationsTableScrollSx().flex).toBe('none');
     expect(automationsTableScrollSx().overflowY).toBe('visible');
     expect(automationsTableScrollSx().overflowX).toBe('auto');
     expect(automationsTableScrollSx().scrollbarWidth).toBe('none');
+    expect(automationsTableScrollSx().maxHeight).toBeUndefined();
     expect(groupTagsForDisplay(['role:Engineer', 'industry:tech', 'unknown'])).toEqual([
       { label: 'Job Title / Role', tags: ['role:Engineer'] },
       { label: 'Industry', tags: ['industry:tech'] },
       { label: 'Other', tags: ['unknown'] },
     ]);
+  });
+});
+
+describe('automations configure and overflow', () => {
+  it('keeps configure and view data in-place and omits copy target URL from overflow', () => {
+    expect([...overflowMenuActions]).toEqual([
+      'schedule',
+      'view-data',
+      'run-history',
+      'configure',
+      'last-run',
+      'copy-scout-id',
+      'delete',
+    ]);
+    expect(overflowMenuActions).not.toContain('copy-target-url');
+  });
+
+  it('locks start URL and hides raw list-extraction editors so recorded selectors cannot break', () => {
+    expect(configStartUrlLocked()).toBe(true);
+    expect(configShowsRawListExtractionEditor()).toBe(false);
   });
 });

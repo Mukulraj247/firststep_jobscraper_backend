@@ -32,6 +32,7 @@ import {
   JOBS_FILTER_OPTIONS,
   resultRangeLabel,
   RUN_STATUS_FILTER_OPTIONS,
+  runsDatePickerBounds,
   type RunsFiltersValue,
 } from '../../features/runs/runsPageBehavior';
 
@@ -70,6 +71,7 @@ export function RunsFilters({
   const minHeight = controlMinHeight(isMobile);
   const filtersActive = hasActiveRunFilters(value);
   const pills = activeFilterPills(value);
+  const dateBounds = runsDatePickerBounds();
 
   const removePill = (key: string) => {
     if (key === 'q') onSearchChange('');
@@ -116,9 +118,10 @@ export function RunsFilters({
           id={FILTER_CONTROL_IDS.date}
           size="small"
           type="date"
-          label="Date"
+          label="Day (IST)"
           InputLabelProps={{ shrink: true }}
           value={value.date}
+          inputProps={{ min: dateBounds.min, max: dateBounds.max }}
           onChange={(event) => onDateChange(event.target.value)}
           sx={controlSx}
         />

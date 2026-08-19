@@ -32,6 +32,7 @@ import { useTheme } from '@mui/material/styles';
 import { formatDuration } from './runDisplay';
 import { RunStatusChip } from './RunStatusChip';
 import { useRunBrowserSocket } from './useRunBrowserSocket';
+import { formatRunJobAddedAt } from '../../features/jobs/jobBoardPageBehavior';
 
 interface RunTypeChipProps {
   runByUserId?: string;
@@ -380,13 +381,21 @@ export const CollapsibleRow = ({
             </Typography>
           ) : (
             <List dense>
-              {runJobs.map((job) => (
+              {runJobs.map((job) => {
+                const addedAt = formatRunJobAddedAt(job.createdAt);
+                return (
                 <ListItem key={job.id} alignItems="flex-start">
                   <ListItemText
                     primary={job.data?.jobTitle || t('runs_table.jobs_dialog.untitled')}
                     secondary={
                       <>
                         {job.data?.companyName || '—'}
+                        {addedAt ? (
+                          <>
+                            {' · '}
+                            {addedAt}
+                          </>
+                        ) : null}
                         {job.data?.jobUrl ? (
                           <>
                             {' · '}
@@ -399,7 +408,8 @@ export const CollapsibleRow = ({
                     }
                   />
                 </ListItem>
-              ))}
+                );
+              })}
             </List>
           )}
         </DialogContent>

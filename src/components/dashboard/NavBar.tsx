@@ -30,7 +30,14 @@ import DiscordIcon from '../icons/DiscordIcon';
 import { apiUrl } from '../../apiConfig';
 import ScoutXLogo from "../../assets/scoutx-logo.png";
 import { useThemeMode } from '../../context/theme-provider';
-import { HAMBURGER_BUTTON_ID, shouldShowHamburger, useAppShellNav } from './AppShell';
+import {
+  HAMBURGER_BUTTON_ID,
+  NAVBAR_LOGO_MAX_HEIGHT_PX,
+  NAVBAR_MIN_HEIGHT_PX,
+  navbarLogoImgStyle,
+  shouldShowHamburger,
+  useAppShellNav,
+} from './AppShell';
 
 interface NavBarProps {
   recordingName: string;
@@ -167,10 +174,9 @@ export const NavBar: React.FC<NavBarProps> = ({
         >
           <img
             src={ScoutXLogo}
-            width={200}
-            height={200}
-            style={{ borderRadius: '18px', objectFit: 'contain' }}
             alt=""
+            height={NAVBAR_LOGO_MAX_HEIGHT_PX}
+            style={navbarLogoImgStyle()}
           />
         </NavBarLogoCenter>
         {
@@ -417,12 +423,13 @@ export const NavBar: React.FC<NavBarProps> = ({
 const NavBarWrapper = styled.header<{ mode: 'light' | 'dark' }>`
   grid-area: navbar;
   position: relative;
+  overflow: hidden;
   background-color: ${({ mode }) => (mode === 'dark' ? '#080808ff' : '#ffffff')};
   padding: 6px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 56px;
+  min-height: ${NAVBAR_MIN_HEIGHT_PX}px;
   border-bottom: 1px solid ${({ mode }) => (mode === 'dark' ? '#1a1a1a' : 'rgba(2, 51, 69, 0.12)')};
 `;
 

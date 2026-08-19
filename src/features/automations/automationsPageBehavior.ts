@@ -613,6 +613,11 @@ export function seeAllTagsAriaLabel(name: string): string {
   return `See all tags for ${name}`;
 }
 
+/** Let MainPage scroll the whole automations page; do not pin the hero while the table scrolls. */
+export function automationsPageRootOverflow(): 'visible' {
+  return 'visible';
+}
+
 export function automationsTableScrollSx() {
   return {
     flex: 'none',
@@ -623,6 +628,24 @@ export function automationsTableScrollSx() {
     overflowY: 'visible',
     ...hiddenScrollbarSx,
   };
+}
+
+export const overflowMenuActions = [
+  'schedule',
+  'view-data',
+  'run-history',
+  'configure',
+  'last-run',
+  'copy-scout-id',
+  'delete',
+] as const;
+
+export function configStartUrlLocked(): boolean {
+  return true;
+}
+
+export function configShowsRawListExtractionEditor(): boolean {
+  return false;
 }
 
 export function statusMarkerColor(status: string): string {

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Paper, Stack, Typography } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
+import { formatIstClock, formatIstDateTime, formatIstYmd } from '../../../shared/opsTimezone';
 import { cardSx, fadeUpSx, FIRSTSTEP, tint } from './dashboardTokens';
 
 /** SVG coordinate space — wider plot for readable x-axis labels. */
@@ -40,20 +41,16 @@ const compactXLabel = (
   rangeEnd: number,
   useShortLabels: boolean,
 ) => {
-  const date = new Date(timestamp);
-  const sameDay = new Date(rangeStart).toDateString() === new Date(rangeEnd).toDateString();
+  const sameDay = formatIstYmd(rangeStart) === formatIstYmd(rangeEnd);
 
-  if (useShortLabels || spanMs < 10 * 60 * 1000) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-  if (sameDay) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (useShortLabels || spanMs < 10 * 60 * 1000 || sameDay) {
+    return formatIstClock(timestamp);
   }
   const isEdge = tickIndex === 0 || tickIndex === totalTicks - 1;
   if (isEdge) {
-    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return formatIstDateTime(timestamp);
   }
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatIstClock(timestamp);
 };
 
 const buildXAxisTicks = (
@@ -116,11 +113,10 @@ const defaultFormatYTick = (value: number) => {
 };
 
 const defaultFormatXTick = (timestamp: number, spanMs: number) => {
-  const date = new Date(timestamp);
   if (spanMs >= 20 * 60 * 60 * 1000) {
-    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return formatIstDateTime(timestamp);
   }
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatIstClock(timestamp);
 };
 
 const computeYMax = (values: number[], fixedMax?: number) => {

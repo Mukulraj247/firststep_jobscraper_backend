@@ -4,7 +4,6 @@ import { RunSettings } from "../components/run/RunSettings";
 import { ScheduleSettings } from "../components/robot/pages/ScheduleSettingsPage";
 import { CreateRunResponse, ScheduleRunResponse } from "../pages/MainPage";
 import { apiUrl } from "../apiConfig";
-import { RecordingsSummary, RobotListResponse } from "../types/robotList";
 
 interface CredentialInfo {
   value: string;
@@ -14,35 +13,6 @@ interface CredentialInfo {
 interface Credentials {
   [key: string]: CredentialInfo;
 }
-
-export const getStoredRecordings = async (opts?: {
-  page?: number;
-  limit?: number;
-  q?: string;
-}): Promise<RobotListResponse> => {
-  const response = await axios.get(`${apiUrl}/storage/recordings`, {
-    params: {
-      page: opts?.page ?? 1,
-      limit: opts?.limit ?? 10,
-      q: opts?.q || undefined,
-    },
-    withCredentials: true,
-  });
-  if (response.status === 200 && response.data?.robots) {
-    return response.data as RobotListResponse;
-  }
-  throw new Error("Couldn't retrieve stored recordings");
-};
-
-export const getRecordingsSummary = async (): Promise<RecordingsSummary> => {
-  const response = await axios.get(`${apiUrl}/storage/recordings/summary`, {
-    withCredentials: true,
-  });
-  if (response.status === 200 && response.data) {
-    return response.data as RecordingsSummary;
-  }
-  throw new Error("Couldn't retrieve recordings summary");
-};
 
 export const createScrapeRobot = async (
   url: string,

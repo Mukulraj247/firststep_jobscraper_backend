@@ -100,12 +100,13 @@ const Register = () => {
         <img
           src={ScoutXLogo}
           alt="Scout-X Scrapper"
-          height={56}
-          width={56}
+          height={48}
           style={{
             marginBottom: 20,
-            borderRadius: "12px",
-            objectFit: "contain",
+            width: 'auto',
+            maxHeight: 48,
+            objectFit: 'contain',
+            display: 'block',
           }}
         />
         <Typography variant="h4" gutterBottom>

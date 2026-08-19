@@ -119,6 +119,13 @@ describe('pickPostedDateFromRow', () => {
     const d = pickPostedDateFromRow({ datePosted: '2025-01-02' }, new Date('2026-02-05T12:00:00.000Z'));
     expect(d.toISOString().slice(0, 10)).toBe('2025-01-02');
   });
+
+  it('falls back to createdAt when posted date is in the future', () => {
+    const created = new Date('2026-08-10T08:00:00.000Z');
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const d = pickPostedDateFromRow({ date: '2026-12-01T00:00:00.000Z' }, created, now.getTime());
+    expect(d.toISOString()).toBe(created.toISOString());
+  });
 });
 
 describe('jobIdGenerator helpers', () => {

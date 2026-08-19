@@ -30,6 +30,10 @@ import { useGlobalInfoStore } from '../context/globalInfo';
 import { SCHEDULE_OPTIONS } from '../constants/scheduleOptions';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
 import { TagPicker } from '../components/automation/TagPicker';
+import {
+  configShowsRawListExtractionEditor,
+  configStartUrlLocked,
+} from '../features/automations/automationsPageBehavior';
 
 const DB_TARGET_COL_MAX = 100;
 const DB_TARGET_NAME_MAX = 120;
@@ -112,10 +116,25 @@ function SectionPaper({ title, children, action }: { title: string; children: Re
   );
 }
 
-export const AutomationConfigPage = () => {
-  const { id = '' } = useParams();
+export type AutomationConfigPageProps = {
+  automationId?: string;
+  onClose?: () => void;
+  embedded?: boolean;
+};
+
+export const AutomationConfigPage = ({
+  automationId,
+  onClose,
+  embedded = false,
+}: AutomationConfigPageProps = {}) => {
+  const { id: routeId = '' } = useParams();
+  const id = automationId || routeId;
   const navigate = useNavigate();
   const { notify } = useGlobalInfoStore();
+  const close = () => {
+    if (onClose) onClose();
+    else navigate('/automations');
+  };
   const [name, setName] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -472,12 +491,12 @@ export const AutomationConfigPage = () => {
         name,
         companyName: companyName.trim(),
         tags,
-        startUrl: normalizeStartUrl(startUrl),
+        ...(configStartUrlLocked() ? {} : { startUrl: normalizeStartUrl(startUrl) }),
         ...(webhook.trim() ? { webhookUrl: webhook } : {}),
         config: configPayload,
       });
       notify('success', 'Automation configuration saved');
-      navigate('/dashboard');
+      close();
     } catch (error: any) {
       notify('error', error?.response?.data?.error || 'Failed to save automation config');
     } finally {
@@ -497,7 +516,7 @@ export const AutomationConfigPage = () => {
         py: 0.5,
       }}
     >
-      <Button variant="outlined" onClick={() => navigate('/dashboard')}>
+      <Button variant="outlined" onClick={close}>
         Cancel
       </Button>
       <Button variant="contained" onClick={handleSave} disabled={saving || !loaded}>
@@ -507,7 +526,12 @@ export const AutomationConfigPage = () => {
   );
 
   return (
-    <Box sx={{ p: { xs: 2, md: 4 }, pb: 6 }}>
+    <Box sx={{
+      p: embedded ? 2 : { xs: 2, md: 4 },
+      pb: embedded ? 2 : 6,
+      maxHeight: embedded ? '80vh' : undefined,
+      overflow: embedded ? 'auto' : undefined,
+    }}>
       <Box sx={{ maxWidth: PAGE_MAX_WIDTH, mx: 'auto' }}>
         <Stack
           direction={{ xs: 'column', md: 'row' }}
@@ -552,8 +576,12 @@ export const AutomationConfigPage = () => {
               label="Start URL"
               fullWidth
               value={startUrl}
-              onChange={(event) => setStartUrl(event.target.value)}
-              onBlur={() => setStartUrl((current) => normalizeStartUrl(current) || current)}
+              InputProps={{ readOnly: configStartUrlLocked() }}
+              helperText={
+                configStartUrlLocked()
+                  ? 'Start URL cannot be changed here — it would break the recorded selectors.'
+                  : undefined
+              }
             />
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} flexWrap="wrap" useFlexGap>
               <Chip size="small" label={`ID: ${id}`} variant="outlined" />
@@ -571,14 +599,16 @@ export const AutomationConfigPage = () => {
                 />
               ) : null}
             </Stack>
+            {!embedded ? (
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <Link component={RouterLink} to={`/automation/${id}/data`} underline="hover">
                 Extracted data
               </Link>
-              <Link component={RouterLink} to="/dashboard" underline="hover">
-                Dashboard / runs
+              <Link component={RouterLink} to="/automations" underline="hover">
+                Automations
               </Link>
             </Stack>
+            ) : null}
           </SectionPaper>
 
           <SectionPaper
@@ -1141,6 +1171,7 @@ export const AutomationConfigPage = () => {
                   label="Pause run when CAPTCHA is detected"
                 />
 
+                {configShowsRawListExtractionEditor() ? (
                 <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider' }}>
                   <AccordionSummary expandIcon={<ExpandMore />}>
                     <Typography fontWeight={600}>Edit raw list extraction</Typography>
@@ -1298,12 +1329,13 @@ export const AutomationConfigPage = () => {
                     </Stack>
                   </AccordionDetails>
                 </Accordion>
+                ) : null}
               </Stack>
             </AccordionDetails>
           </Accordion>
 
           <Stack direction="row" justifyContent="flex-end" spacing={1} pt={1}>
-            <Button variant="outlined" onClick={() => navigate('/dashboard')}>
+            <Button variant="outlined" onClick={close}>
               Cancel
             </Button>
             <Button variant="contained" onClick={handleSave} disabled={saving || !loaded}>

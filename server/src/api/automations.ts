@@ -7,6 +7,7 @@ import ExtractedData from '../models/ExtractedData';
 import logger from '../logger';
 import moment from 'moment-timezone';
 import { syncAutomationSchedule, resolveEffectiveScheduleState, readRobotScheduleTimestamps, repackAllAutomationSchedules } from '../services/automationScheduler';
+import { reconfigureDailySchedulesForOwner } from '../services/scheduleReconfigure';
 import {
   applyColumnOverrides,
   applyReadPipelineToExtractedData,
@@ -39,7 +40,10 @@ import {
   FAILURE_REASON_CODES,
   isAllowedFailureReason,
 } from '../utils/failureReason';
-import { buildOpsMetrics, parseOpsMetricsWindow } from '../services/opsMetrics';
+import { buildOpsMetrics, doWindowForOps, parseOpsMetricsDate, parseOpsMetricsWindow } from '../services/opsMetrics';
+import { getDigitalOceanDashboardCached } from '../services/digitalOceanMetrics';
+import { computeScheduleHeatmap } from '../services/scheduleHeatmap';
+import { formatIstYmd, isIstDateOnDayStrip } from '../../../src/shared/opsTimezone';
 import {
   accountRobotSummaryCache,
   buildLatestRunPerRobotPipeline,
@@ -52,6 +56,7 @@ import {
   filteredDashboardRunTotalsCache,
   resolveRunListIndexHint,
   ROBOT_DASHBOARD_LIST_SELECT,
+  parseRunListDateQuery,
 } from '../services/dashboardQueries';
 import {
   assertSafeOutboundUrl,
@@ -365,27 +370,11 @@ async function resolveSaasRunListQuery(req: any): Promise<SaasRunListQuery> {
   const minDurationMs = parseOptionalNonNegativeNumber(req.query.minDurationMs);
   const maxDurationMs = parseOptionalNonNegativeNumber(req.query.maxDurationMs);
 
-  const dateRaw = req.query.date != null ? String(req.query.date).trim() : '';
-  const fromRaw = req.query.from != null ? String(req.query.from).trim() : '';
-  const toRaw = req.query.to != null ? String(req.query.to).trim() : '';
-  let fromDate: Date | null = null;
-  let toDate: Date | null = null;
-  if (dateRaw) {
-    const day = new Date(`${dateRaw}T00:00:00.000Z`);
-    if (!Number.isNaN(day.getTime())) {
-      fromDate = day;
-      toDate = new Date(day.getTime() + 24 * 60 * 60 * 1000);
-    }
-  } else {
-    if (fromRaw) {
-      const d = new Date(fromRaw);
-      if (!Number.isNaN(d.getTime())) fromDate = d;
-    }
-    if (toRaw) {
-      const d = new Date(toRaw);
-      if (!Number.isNaN(d.getTime())) toDate = d;
-    }
-  }
+  const { fromDate, toDate } = parseRunListDateQuery({
+    date: req.query.date,
+    from: req.query.from,
+    to: req.query.to,
+  });
 
   const ownedMetaIds = robotMetaIdFilter
     ? [robotMetaIdFilter]
@@ -586,11 +575,42 @@ router.use(requireSignInOrApiKey);
 router.get('/dashboard/metrics', async (req: any, res: any) => {
   try {
     const window = parseOpsMetricsWindow(req.query.window);
-    const metrics = await buildOpsMetrics({ userId: req.user.id, window });
+    const date = parseOpsMetricsDate(req.query.date);
+    const fresh = req.query.fresh === '1' || req.query.fresh === 'true';
+    const metrics = await buildOpsMetrics({ userId: req.user.id, window, date, fresh });
     return res.json(metrics);
   } catch (error: any) {
     logger.log('error', `Failed to fetch ops dashboard metrics: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch dashboard metrics' });
+  }
+});
+
+router.get('/dashboard/digital-ocean', async (req: any, res: any) => {
+  try {
+    const window = parseOpsMetricsWindow(req.query.window);
+    const date = parseOpsMetricsDate(req.query.date);
+    const fresh = req.query.fresh === '1' || req.query.fresh === 'true';
+    const doWindow = doWindowForOps(window, Boolean(date));
+    const dashboard = await getDigitalOceanDashboardCached(doWindow, { fresh });
+    return res.json(dashboard);
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch DigitalOcean dashboard metrics: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch DigitalOcean metrics' });
+  }
+});
+
+router.get('/dashboard/schedule-heatmap', async (req: any, res: any) => {
+  try {
+    const requested = parseOpsMetricsDate(req.query.date);
+    const date = requested || formatIstYmd(Date.now());
+    if (!isIstDateOnDayStrip(date, Date.now())) {
+      return res.status(400).json({ error: 'Date must be within 3 days of today IST' });
+    }
+    const robots = await Robot.find(ownerIdFilter(req.user.id)).lean();
+    return res.json(computeScheduleHeatmap(robots, date));
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch schedule heatmap: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch schedule heatmap' });
   }
 });
 
@@ -887,6 +907,23 @@ router.post('/automations/schedules/repack-all', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to repack all schedules: ${error.message}`);
     return res.status(500).json({ error: 'Failed to repack all schedules' });
+  }
+});
+
+/**
+ * Evenly re-spread Every-day (24h) schedules only. Hourly and other cadences stay put.
+ */
+router.post('/automations/schedules/reconfigure-daily', async (req: any, res: any) => {
+  try {
+    const result = await reconfigureDailySchedulesForOwner(req.user.id);
+    logger.log(
+      'info',
+      `Reconfigured daily schedules for user ${req.user.id}: moved=${result.movedCount} skipped=${result.skippedCount}`
+    );
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    logger.log('error', `Failed to reconfigure daily schedules: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to reconfigure daily schedules' });
   }
 });
 

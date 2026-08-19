@@ -40,4 +40,28 @@ describe('MiniChart', () => {
     expect(screen.getByText('Waiting for data…')).toBeVisible();
     expect(screen.getByText('CPU % · Time')).toBeVisible();
   });
+
+  it('labels aligned 6h buckets as IST hours, not unrounded minutes', () => {
+    const points = [
+      { t: Date.parse('2026-08-17T16:30:00.000Z'), v: 1 },
+      { t: Date.parse('2026-08-17T17:30:00.000Z'), v: 2 },
+      { t: Date.parse('2026-08-17T18:30:00.000Z'), v: 3 },
+      { t: Date.parse('2026-08-17T19:30:00.000Z'), v: 1 },
+      { t: Date.parse('2026-08-17T20:30:00.000Z'), v: 0 },
+      { t: Date.parse('2026-08-17T21:30:00.000Z'), v: 4 },
+    ];
+    render(
+      <MiniChart
+        title="Total runs"
+        valueLabel="11"
+        points={points}
+        yAxisLabel="Run count"
+        xAxisLabel="Time bucket"
+      />,
+    );
+
+    expect(screen.getByText('22:00')).toBeVisible();
+    expect(screen.getByText('03:00')).toBeVisible();
+    expect(screen.queryByText('21:53')).not.toBeInTheDocument();
+  });
 });

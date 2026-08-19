@@ -118,26 +118,5 @@ export const Recordings = ({
     return getCurrentPageComponent();
   }
 
-  return (
-    <ScrapersPage
-      handleRunRecording={(id, name, robotParams) =>
-        handleNavigate(`/robots/${id}/run`, id, name, robotParams)
-      }
-      handleScheduleRecording={(id, name, robotParams) =>
-        handleNavigate(`/robots/${id}/schedule`, id, name, robotParams)
-      }
-      handleIntegrateRecording={(id, name, robotParams) =>
-        handleNavigate(`/robots/${id}/integrate`, id, name, robotParams)
-      }
-      handleSettingsRecording={(id, name, robotParams) =>
-        handleNavigate(`/robots/${id}/settings`, id, name, robotParams)
-      }
-      handleEditRobot={(id, name, robotParams) =>
-        handleNavigate(`/robots/${id}/edit`, id, name, robotParams)
-      }
-      handleDuplicateRobot={(id, name, robotParams) =>
-        handleNavigate(`/robots/${id}/duplicate`, id, name, robotParams)
-      }
-    />
-  );
+  return <ScrapersPage />;
 };

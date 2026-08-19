@@ -175,6 +175,8 @@ export type OpsMetricsResponse = {
   window: OpsMetricsWindow;
   windowMs: number;
   since: string;
+  until?: string;
+  date?: string | null;
   totals: {
     runs: number;
     passed: number;
@@ -223,10 +225,59 @@ export type OpsMetricsResponse = {
 };
 
 export const getDashboardMetrics = async (
-  window: OpsMetricsWindow = '1h'
+  params: { window?: OpsMetricsWindow; date?: string | null; fresh?: boolean } | OpsMetricsWindow = '1h',
+  signal?: AbortSignal,
 ): Promise<OpsMetricsResponse> => {
+  const window = typeof params === 'string' ? params : params.window || '1h';
+  const date = typeof params === 'string' ? undefined : params.date;
+  const fresh = typeof params === 'string' ? false : Boolean(params.fresh);
   const response = await axios.get(`${apiUrl}/api/dashboard/metrics`, {
-    params: { window },
+    params: {
+      window,
+      ...(date ? { date } : {}),
+      ...(fresh ? { fresh: 1 } : {}),
+    },
+    withCredentials: true,
+    signal,
+  });
+  return response.data;
+};
+
+export const getDashboardDigitalOcean = async (
+  params: { window?: OpsMetricsWindow; date?: string | null; fresh?: boolean } = {},
+  signal?: AbortSignal,
+): Promise<OpsMetricsResponse['digitalOcean']> => {
+  const response = await axios.get(`${apiUrl}/api/dashboard/digital-ocean`, {
+    params: {
+      window: params.window || '1h',
+      ...(params.date ? { date: params.date } : {}),
+      ...(params.fresh ? { fresh: 1 } : {}),
+    },
+    withCredentials: true,
+    signal,
+  });
+  return response.data;
+};
+
+export type ScheduleHeatmapFire = {
+  hour: number;
+  minute: number;
+  at: string;
+  automationId: string;
+  name: string;
+  company: string;
+};
+
+export type ScheduleHeatmapResponse = {
+  date: string;
+  timezone: string;
+  hours: Array<{ hour: number; count: number }>;
+  fires: ScheduleHeatmapFire[];
+};
+
+export const getScheduleHeatmap = async (date: string): Promise<ScheduleHeatmapResponse> => {
+  const response = await axios.get(`${apiUrl}/api/dashboard/schedule-heatmap`, {
+    params: { date },
     withCredentials: true,
   });
   return response.data;
@@ -524,6 +575,28 @@ export const repackAllAutomationSchedules = async (): Promise<{
   skippedCount: number;
 }> => {
   const response = await axios.post(`${apiUrl}/api/automations/schedules/repack-all`, {}, { withCredentials: true });
+  return response.data;
+};
+
+/** Evenly re-spread Every-day (24h) scrapers only. Hourly schedules stay put. */
+export const reconfigureDailyAutomationSchedules = async (): Promise<{
+  success: boolean;
+  movedCount: number;
+  skippedCount: number;
+  hourCounts: Array<{ hour: number; count: number }>;
+  moves: Array<{
+    automationId: string;
+    name: string;
+    company: string;
+    fromAt: string;
+    toAt: string;
+  }>;
+}> => {
+  const response = await axios.post(
+    `${apiUrl}/api/automations/schedules/reconfigure-daily`,
+    {},
+    { withCredentials: true }
+  );
   return response.data;
 };
 

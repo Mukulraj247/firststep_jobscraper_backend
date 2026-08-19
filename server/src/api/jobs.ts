@@ -4,6 +4,7 @@ import { requireSignInOrApiKey } from '../middlewares/auth';
 import JobBoardListing from '../models/JobBoardListing';
 import logger from '../logger';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
+import { applyJobBoardListFilters, addedSinceFromPreset } from '../services/jobBoardQuery';
 import {
   decodeHtmlEntities,
   pickBestDescription,
@@ -27,6 +28,7 @@ type FacetCacheEntry = {
   expiresAt: number;
   companies: string[];
   categories: string[];
+  locations: string[];
 };
 
 type CountCacheEntry = {
@@ -143,7 +145,11 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   const industry = decodeHtmlEntities(row.sectorIndustry || list.sectorIndustry || '');
   const jobId = String(row.jobId || '').trim();
   const applyUrl = row.applyUrl || jobUrl;
-  const date = row.date || list.date || row.createdAt;
+  const dateRaw = row.date || list.date;
+  const createdAt = row.createdAt || row.lastSeenAt;
+  const postedMs = dateRaw ? new Date(dateRaw).getTime() : NaN;
+  const date =
+    Number.isFinite(postedMs) && postedMs <= Date.now() ? dateRaw : createdAt;
   const logo = String(row.companyLogoUrl || '').trim();
   const descScore = descriptionQualityScore(description);
   const derived =
@@ -201,15 +207,21 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   };
 }
 
-async function getFacets(ownerId: string): Promise<{ companies: string[]; categories: string[] }> {
+async function getFacets(
+  ownerId: string,
+): Promise<{ companies: string[]; categories: string[]; locations: string[] }> {
   const cached = facetCache.get(ownerId);
   if (cached && cached.expiresAt > Date.now()) {
-    return { companies: cached.companies, categories: cached.categories };
+    return {
+      companies: cached.companies,
+      categories: cached.categories,
+      locations: cached.locations || [],
+    };
   }
 
   const match = boardMatch(ownerId);
 
-  const [companyFacets, categoryFacets] = await Promise.all([
+  const [companyFacets, categoryFacets, locationFacets] = await Promise.all([
     JobBoardListing.aggregate([
       { $match: match },
       {
@@ -246,6 +258,24 @@ async function getFacets(ownerId: string): Promise<{ companies: string[]; catego
       { $sort: { count: -1 } },
       { $limit: 40 },
     ]),
+    JobBoardListing.aggregate([
+      { $match: match },
+      {
+        $project: {
+          location: {
+            $cond: [
+              { $and: [{ $ne: ['$location', null] }, { $ne: ['$location', ''] }] },
+              '$location',
+              { $ifNull: ['$listSnapshot.location', ''] },
+            ],
+          },
+        },
+      },
+      { $group: { _id: '$location', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: 40 },
+    ]),
   ]);
 
   const companies = [
@@ -258,8 +288,17 @@ async function getFacets(ownerId: string): Promise<{ companies: string[]; catego
   const categories = categoryFacets
     .map((f: any) => decodeHtmlEntities(String(f._id || '')))
     .filter(Boolean);
-  facetCache.set(ownerId, { expiresAt: Date.now() + FACET_TTL_MS, companies, categories });
-  return { companies, categories };
+  const locations = locationFacets
+    .map((f: any) => normalizeLocation(decodeHtmlEntities(String(f._id || ''))))
+    .filter(Boolean);
+  const uniqueLocations = [...new Set(locations)];
+  facetCache.set(ownerId, {
+    expiresAt: Date.now() + FACET_TTL_MS,
+    companies,
+    categories,
+    locations: uniqueLocations,
+  });
+  return { companies, categories, locations: uniqueLocations };
 }
 
 async function getCachedCount(cacheKey: string, match: Record<string, any>): Promise<number> {
@@ -278,11 +317,15 @@ router.get('/jobs', async (req: any, res: any) => {
     const q = String(req.query.q || '').trim();
     const company = String(req.query.company || '').trim();
     const category = String(req.query.category || '').trim();
+    const location = String(req.query.location || '').trim();
+    const workMode = String(req.query.workMode || '').trim();
+    const jobType = String(req.query.jobType || '').trim();
+    const added = String(req.query.added || 'all').trim();
     const runId = String(req.query.runId || '').trim();
     const ownerId = normalizeOwnerIdForWrite(req.user.id);
 
     // When filtering by run, include listings this run touched (may still be queued/enriching).
-    const match: Record<string, any> = runId
+    let match: Record<string, any> = runId
       ? { ownerId, runIds: runId }
       : boardMatch(ownerId);
 
@@ -317,13 +360,32 @@ router.get('/jobs', async (req: any, res: any) => {
               { companyName: re },
               { location: re },
               { 'listSnapshot.jobTitle': re },
+              { 'listSnapshot.companyName': re },
             ],
           },
         ];
       }
     }
 
-    const countKey = JSON.stringify({ ownerId, company, category, q, runId, v: 9 });
+    match = applyJobBoardListFilters(match, {
+      addedSince: addedSinceFromPreset(added),
+      location,
+      workMode,
+      jobType,
+    });
+
+    const countKey = JSON.stringify({
+      ownerId,
+      company,
+      category,
+      q,
+      runId,
+      location,
+      workMode,
+      jobType,
+      added,
+      v: 10,
+    });
     const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {
       jobUrl: 1,
@@ -354,7 +416,9 @@ router.get('/jobs', async (req: any, res: any) => {
 
     let query = JobBoardListing.find(match).select(projection);
     if (useText) {
-      query = query.sort({ score: { $meta: 'textScore' }, date: -1 });
+      query = query.sort({ score: { $meta: 'textScore' }, createdAt: -1 });
+    } else if (added !== 'all') {
+      query = query.sort({ createdAt: -1 });
     } else {
       query = query.sort({ date: -1, createdAt: -1 });
     }
@@ -378,8 +442,8 @@ router.get('/jobs', async (req: any, res: any) => {
         )
         .filter(Boolean),
       filters: {
-        companies: facets.companies,
         categories: facets.categories,
+        locations: facets.locations,
       },
     });
   } catch (error: any) {

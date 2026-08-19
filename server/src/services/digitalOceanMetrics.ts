@@ -10,6 +10,7 @@
  */
 import axios, { AxiosInstance } from 'axios';
 import logger from '../logger';
+import { createDashboardSummaryCache } from './dashboardQueries';
 
 const DO_API = 'https://api.digitalocean.com/v2';
 
@@ -61,12 +62,16 @@ export type DropletComputeSnapshot = {
 export type DigitalOceanDashboard = {
   configured: boolean;
   generatedAt: string;
+  pending?: boolean;
   error?: string;
   hint?: string;
   resolvedIds?: number[];
   availableDroplets?: Array<{ id: number; name: string; status: string; publicIpv4: string | null }>;
   droplets: DropletComputeSnapshot[];
 };
+
+export const DIGITALOCEAN_API_TIMEOUT_MS = 8_000;
+export const DIGITALOCEAN_DASHBOARD_CACHE_TTL_MS = 30_000;
 
 const WINDOW_SECONDS: Record<MetricsWindow, number> = {
   '1h': 3600,
@@ -98,7 +103,7 @@ function getClient(): AxiosInstance | null {
   if (!token) return null;
   return axios.create({
     baseURL: DO_API,
-    timeout: 25_000,
+    timeout: DIGITALOCEAN_API_TIMEOUT_MS,
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -324,9 +329,13 @@ async function resolveDropletIds(
 ): Promise<{
   ids: number[];
   available: Array<{ id: number; name: string; status: string; publicIpv4: string | null }>;
+  listedById: Map<number, Record<string, unknown>>;
   hint?: string;
 }> {
   const listed = await listAccountDroplets(client);
+  const listedById = new Map<number, Record<string, unknown>>(
+    listed.map((d) => [d.id, d.raw as Record<string, unknown>])
+  );
   const available = listed.map(({ id, name, status, publicIpv4 }) => ({
     id,
     name,
@@ -347,9 +356,9 @@ async function resolveDropletIds(
           .map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`)
           .join(', ') || 'none'}. ` +
         `Or set DIGITALOCEAN_DROPLET_IDS=auto`;
-      return { ids: configured, available, hint };
+      return { ids: configured, available, listedById, hint };
     }
-    return { ids: configured, available };
+    return { ids: configured, available, listedById };
   }
 
   if (preferredIp) {
@@ -358,6 +367,7 @@ async function resolveDropletIds(
       return {
         ids: [match.id],
         available,
+        listedById,
         hint: `Auto-selected droplet ${match.name} (${match.id}) from PUBLIC_URL/BACKEND_URL IP ${preferredIp}.`,
       };
     }
@@ -367,6 +377,7 @@ async function resolveDropletIds(
     return {
       ids: [available[0].id],
       available,
+      listedById,
       hint: `Auto-selected the only droplet in this account: ${available[0].name} (${available[0].id}).`,
     };
   }
@@ -376,6 +387,7 @@ async function resolveDropletIds(
     return {
       ids: [scout[0].id],
       available,
+      listedById,
       hint: `Auto-selected droplet by name: ${scout[0].name} (${scout[0].id}).`,
     };
   }
@@ -383,6 +395,7 @@ async function resolveDropletIds(
   return {
     ids: [],
     available,
+    listedById,
     hint:
       'Set DIGITALOCEAN_DROPLET_IDS to a full Droplet ID (from the Droplet URL), or ensure PUBLIC_URL uses this Droplet IP. ' +
       `Available: ${available.map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`).join(', ') || 'none'}`,
@@ -556,7 +569,7 @@ export async function getDigitalOceanDashboard(
     };
   }
 
-  let resolved;
+  let resolved: Awaited<ReturnType<typeof resolveDropletIds>>;
   try {
     resolved = await resolveDropletIds(client);
   } catch (error: any) {
@@ -582,46 +595,47 @@ export async function getDigitalOceanDashboard(
     };
   }
 
-  const droplets: DropletComputeSnapshot[] = [];
+  const droplets: DropletComputeSnapshot[] = await Promise.all(
+    resolved.ids.map(async (id) => {
+      try {
+        const listed = resolved.listedById.get(id);
+        const meta = listed ? mapDropletMeta(listed) : await fetchDropletMeta(client, id);
+        const metrics = await fetchDropletMetrics(client, id, window);
+        return { ...meta, metrics };
+      } catch (error: any) {
+        const status = error?.response?.status;
+        const msg = error?.response?.data?.message || error?.message || String(error);
+        logger.log('error', `DigitalOcean metrics failed for droplet ${id}: ${msg}`);
 
-  for (const id of resolved.ids) {
-    try {
-      const meta = await fetchDropletMeta(client, id);
-      const metrics = await fetchDropletMetrics(client, id, window);
-      droplets.push({ ...meta, metrics });
-    } catch (error: any) {
-      const status = error?.response?.status;
-      const msg = error?.response?.data?.message || error?.message || String(error);
-      logger.log('error', `DigitalOcean metrics failed for droplet ${id}: ${msg}`);
+        let note = msg;
+        if (status === 404 || /not found/i.test(msg)) {
+          note =
+            `Droplet ${id} was not found. ` +
+            `DIGITALOCEAN_DROPLET_IDS must be the full Droplet ID from the DigitalOcean URL ` +
+            `(e.g. https://cloud.digitalocean.com/droplets/512345678), not part of the public IP. ` +
+            `Available: ${resolved.available
+              .map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`)
+              .join(', ') || 'none'}. ` +
+            `Or set DIGITALOCEAN_DROPLET_IDS=auto`;
+        }
 
-      let note = msg;
-      if (status === 404 || /not found/i.test(msg)) {
-        note =
-          `Droplet ${id} was not found. ` +
-          `DIGITALOCEAN_DROPLET_IDS must be the full Droplet ID from the DigitalOcean URL ` +
-          `(e.g. https://cloud.digitalocean.com/droplets/512345678), not part of the public IP. ` +
-          `Available: ${resolved.available
-            .map((d) => `${d.name}=${d.id}${d.publicIpv4 ? ` (${d.publicIpv4})` : ''}`)
-            .join(', ') || 'none'}. ` +
-          `Or set DIGITALOCEAN_DROPLET_IDS=auto`;
+        return {
+          id,
+          name: `droplet-${id}`,
+          status: 'error',
+          region: null,
+          sizeSlug: null,
+          vcpus: null,
+          memoryMb: null,
+          diskGb: null,
+          priceMonthlyUsd: null,
+          publicIpv4: null,
+          createdAt: null,
+          metrics: emptyMetrics(window, note),
+        };
       }
-
-      droplets.push({
-        id,
-        name: `droplet-${id}`,
-        status: 'error',
-        region: null,
-        sizeSlug: null,
-        vcpus: null,
-        memoryMb: null,
-        diskGb: null,
-        priceMonthlyUsd: null,
-        publicIpv4: null,
-        createdAt: null,
-        metrics: emptyMetrics(window, note),
-      });
-    }
-  }
+    })
+  );
 
   return {
     configured: true,
@@ -631,4 +645,32 @@ export async function getDigitalOceanDashboard(
     availableDroplets: resolved.available,
     droplets,
   };
+}
+
+const digitalOceanDashboardCache = createDashboardSummaryCache<DigitalOceanDashboard>(
+  DIGITALOCEAN_DASHBOARD_CACHE_TTL_MS
+);
+
+export function digitalOceanDashboardCacheKey(window: MetricsWindow): string {
+  return `do:${window}`;
+}
+
+export function peekDigitalOceanDashboardCache(
+  window: MetricsWindow
+): DigitalOceanDashboard | undefined {
+  return digitalOceanDashboardCache.get(digitalOceanDashboardCacheKey(window));
+}
+
+export async function getDigitalOceanDashboardCached(
+  window: MetricsWindow = '6h',
+  opts?: { fresh?: boolean }
+): Promise<DigitalOceanDashboard> {
+  const key = digitalOceanDashboardCacheKey(window);
+  if (!opts?.fresh) {
+    const cached = digitalOceanDashboardCache.get(key);
+    if (cached) return cached;
+  }
+  const fresh = await getDigitalOceanDashboard(window);
+  digitalOceanDashboardCache.set(key, fresh);
+  return fresh;
 }

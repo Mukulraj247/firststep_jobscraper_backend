@@ -77,11 +77,15 @@ const parseLooseDate = (value: unknown): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-export const pickPostedDateFromRow = (data: Record<string, unknown>, fallback: Date): Date => {
+export const pickPostedDateFromRow = (
+  data: Record<string, unknown>,
+  fallback: Date,
+  nowMs: number = Date.now(),
+): Date => {
   const keys = ['datePosted', 'postedAt', 'posted_date', 'posted', 'date', 'listing_date', 'created'];
   for (const k of keys) {
     const parsed = parseLooseDate(data[k]);
-    if (parsed) return parsed;
+    if (parsed && parsed.getTime() <= nowMs) return parsed;
   }
   return fallback;
 };

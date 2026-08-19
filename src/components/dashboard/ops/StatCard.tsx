@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Paper, Stack, Typography } from '@mui/material';
+import { Link as RouterLink } from 'react-router-dom';
 import { cardSx, fadeUpSx, FIRSTSTEP, tint } from './dashboardTokens';
 
 export const StatCard = ({
@@ -9,6 +10,7 @@ export const StatCard = ({
   color = FIRSTSTEP.tealDark,
   icon,
   delay = 0,
+  href,
 }: {
   label: string;
   value: React.ReactNode;
@@ -16,10 +18,25 @@ export const StatCard = ({
   color?: string;
   icon?: React.ReactNode;
   delay?: number;
+  href?: string;
 }) => (
   <Paper
     elevation={0}
-    sx={[cardSx(color), fadeUpSx(delay), { p: 2.25, pt: 2.5, height: '100%', minWidth: 0 }]}
+    {...(href ? { component: RouterLink, to: href } : {})}
+    sx={[
+      cardSx(color),
+      fadeUpSx(delay),
+      {
+        p: 2.25,
+        pt: 2.5,
+        height: '100%',
+        minWidth: 0,
+        display: 'block',
+        textDecoration: 'none',
+        color: 'inherit',
+        ...(href ? { cursor: 'pointer' } : {}),
+      },
+    ]}
   >
     <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
       <Typography

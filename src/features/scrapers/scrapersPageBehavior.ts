@@ -1,6 +1,9 @@
 import { getScheduleLabel } from '../../constants/scheduleOptions';
 import { FIRSTSTEP, RADIUS, hiddenScrollbarSx, tint } from '../../components/dashboard/ops/dashboardTokens';
+import { escapeCsvSpreadsheetCell } from '../../utils/spreadsheet';
+import type { ScheduleHeatmapFire } from '../../api/automation';
 import type { ScheduleDisplayState } from '../automations/automationsPageBehavior';
+import { istHourOf, istMinuteOf } from '../../shared/opsTimezone';
 import {
   DESKTOP_TABLE_HEADER_BG,
   DESKTOP_TABLE_MIN_WIDTH_PX,
@@ -201,6 +204,216 @@ export function runActionAriaLabel(name: string): string {
 
 export function overflowMenuAriaLabel(name: string): string {
   return `More actions for ${name}`;
+}
+
+export const scrapersOverflowMenuActions = ['schedule', 'settings', 'delete'] as const;
+
+export type ScrapersOverflowMenuAction = (typeof scrapersOverflowMenuActions)[number];
+
+export const HEATMAP_EMPTY_COLOR = '#e8eef0';
+export const HEATMAP_LOW_COLOR = '#065f46';
+export const HEATMAP_HIGH_COLOR = '#7f1d1d';
+
+export const SCRAPERS_PAGE_SECTIONS = ['hero', 'heatmap'] as const;
+
+export function scrapersPageShowsScraperList(): boolean {
+  return false;
+}
+
+export const SCRAPERS_HEATMAP_PATH = '/api/dashboard/schedule-heatmap';
+
+export function scrapersUsesRecordingsListApi(): boolean {
+  return false;
+}
+
+export const HEATMAP_HOUR_PERIODS = [
+  { id: 'night', label: 'Night', startHour: 0 },
+  { id: 'morning', label: 'Morning', startHour: 6 },
+  { id: 'afternoon', label: 'Afternoon', startHour: 12 },
+  { id: 'evening', label: 'Evening', startHour: 18 },
+] as const;
+
+export function heatmapHourCellMinHeightPx(): number {
+  return 128;
+}
+
+export function heatmapScheduledTotal(hours: Array<{ count: number }>): number {
+  return hours.reduce((sum, hour) => sum + hour.count, 0);
+}
+
+const HEATMAP_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
+
+export function formatHeatmapDateChip(ymd: string, todayYmd: string): string {
+  if (ymd === todayYmd) return 'Today';
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!match) return ymd;
+  return `${Number(match[3])} ${HEATMAP_MONTHS[Number(match[2]) - 1]}`;
+}
+
+export function heatmapHourLabel(hour: number): string {
+  const h = ((hour % 24) + 24) % 24;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12} ${period}`;
+}
+
+function parseHexRgb(color: string): [number, number, number] {
+  const hex = color.replace('#', '');
+  const full = hex.length === 3 ? hex.split('').map((ch) => ch + ch).join('') : hex;
+  return [
+    parseInt(full.slice(0, 2), 16),
+    parseInt(full.slice(2, 4), 16),
+    parseInt(full.slice(4, 6), 16),
+  ];
+}
+
+function lerpHex(from: string, to: string, t: number): string {
+  const a = parseHexRgb(from);
+  const b = parseHexRgb(to);
+  const mix = (i: number) => Math.round(a[i] + (b[i] - a[i]) * t);
+  return `#${[mix(0), mix(1), mix(2)]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+/** Color by that day's count range: few → dark green, many → dark red. Zero stays empty. */
+export function heatmapHourColor(count: number, counts: number[]): string {
+  if (count <= 0) return HEATMAP_EMPTY_COLOR;
+  const positives = counts.filter((value) => value > 0);
+  if (positives.length === 0) return HEATMAP_EMPTY_COLOR;
+  const min = Math.min(...positives);
+  const max = Math.max(...positives);
+  if (min === max) return lerpHex(HEATMAP_LOW_COLOR, HEATMAP_HIGH_COLOR, 0.5);
+  return lerpHex(HEATMAP_LOW_COLOR, HEATMAP_HIGH_COLOR, (count - min) / (max - min));
+}
+
+export function formatHourMinute12(hour: number, minute: number): string {
+  const h = ((hour % 24) + 24) % 24;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+export function scheduleFireLabel(fire: {
+  company?: string | null;
+  name?: string | null;
+  hour: number;
+  minute: number;
+}): string {
+  const who = (fire.company || fire.name || 'Untitled').trim() || 'Untitled';
+  return `${who} — ${formatHourMinute12(fire.hour, fire.minute)}`;
+}
+
+export function heatmapHourAriaLabel(hour: number, count: number): string {
+  return `${heatmapHourLabel(hour)}, ${count} scheduled`;
+}
+
+export function heatmapFiresForHour<T extends { hour: number }>(fires: T[], hour: number): T[] {
+  return fires.filter((fire) => fire.hour === hour);
+}
+
+export function buildScheduleFiresCsvFilename(dateYmd: string): string {
+  return `scraper-schedules-${dateYmd}.csv`;
+}
+
+export function buildReconfigureMovesCsvFilename(dateYmd: string): string {
+  return `scraper-reconfigure-${dateYmd}.csv`;
+}
+
+function fireGroupKey(fire: { company?: string | null; name?: string | null }): string {
+  const company = (fire.company || '').trim();
+  if (company) return company;
+  return (fire.name || 'Untitled').trim() || 'Untitled';
+}
+
+export function buildScheduleFiresCsv(fires: ScheduleHeatmapFire[]): string {
+  const sorted = [...fires].sort((a, b) => {
+    const aMs = Date.parse(a.at);
+    const bMs = Date.parse(b.at);
+    if (aMs !== bMs) return aMs - bMs;
+    if (a.hour !== b.hour) return a.hour - b.hour;
+    if (a.minute !== b.minute) return a.minute - b.minute;
+    return fireGroupKey(a).localeCompare(fireGroupKey(b));
+  });
+
+  const seen = new Map<string, number>();
+  const header = ['occurrence_label', 'company', 'scraper', 'automation_id', 'time_ist', 'iso']
+    .map(escapeCsvSpreadsheetCell)
+    .join(',');
+
+  const rows = sorted.map((fire) => {
+    const key = fireGroupKey(fire);
+    const n = (seen.get(key) || 0) + 1;
+    seen.set(key, n);
+    const timeIst = formatHourMinute12(fire.hour, fire.minute);
+    return [
+      `${key} ${n}`,
+      fire.company || '',
+      fire.name || '',
+      fire.automationId || '',
+      timeIst,
+      fire.at || '',
+    ]
+      .map(escapeCsvSpreadsheetCell)
+      .join(',');
+  });
+
+  return [header, ...rows].join('\n');
+}
+
+export type ReconfigureMoveCsvRow = {
+  company: string;
+  scraper: string;
+  fromIst: string;
+  toIst: string;
+};
+
+export function buildReconfigureMovesCsv(moves: ReconfigureMoveCsvRow[]): string {
+  const header = ['company', 'scraper', 'from_ist', 'to_ist'].map(escapeCsvSpreadsheetCell).join(',');
+  const rows = moves.map((move) =>
+    [move.company, move.scraper, move.fromIst, move.toIst].map(escapeCsvSpreadsheetCell).join(',')
+  );
+  return [header, ...rows].join('\n');
+}
+
+export function formatIsoAsIstClock(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  return formatHourMinute12(istHourOf(ms), istMinuteOf(ms));
+}
+
+export function reconfigureApiMovesToCsvRows(
+  moves: Array<{ company: string; name: string; fromAt: string; toAt: string }>,
+): ReconfigureMoveCsvRow[] {
+  return moves.map((move) => ({
+    company: move.company || '',
+    scraper: move.name || '',
+    fromIst: formatIsoAsIstClock(move.fromAt),
+    toIst: formatIsoAsIstClock(move.toAt),
+  }));
+}
+
+export function downloadTextFile(content: string, filename: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export function scheduleChipAriaLabel(state: ScheduleDisplayState, name: string): string {

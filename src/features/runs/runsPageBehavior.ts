@@ -1,4 +1,9 @@
 import { FIRSTSTEP, tint } from '../../components/dashboard/ops/dashboardTokens';
+import {
+  formatIstYmd,
+  isIstDateWithinLastDays,
+  lastNIstDayYmds,
+} from '../../shared/opsTimezone';
 
 export type RunsContentState =
   | 'first-load-skeleton'
@@ -10,8 +15,30 @@ export type RunsContentState =
 export const HERO_OVERLINE = 'Run history';
 export const HERO_TITLE = 'All Runs';
 export const HERO_SUBTITLE =
-  'Browse every automation run — filter by status, date, jobs added, or duration, then drill into logs and output.';
+  "Today's runs in IST, grouped by automation. Pick another of the last 7 days, then filter by status, jobs added, or duration.";
 export const HERO_REFRESH_VARIANT = 'outlined' as const;
+
+export const RUNS_DATE_LOOKBACK_DAYS = 7;
+
+export function defaultRunsDate(nowMs: number = Date.now()): string {
+  return formatIstYmd(nowMs);
+}
+
+export function runsDatePickerBounds(nowMs: number = Date.now()): {
+  min: string;
+  max: string;
+} {
+  const days = lastNIstDayYmds(nowMs, RUNS_DATE_LOOKBACK_DAYS);
+  return { min: days[0], max: days[days.length - 1] };
+}
+
+export function clampRunsDate(ymd: string, nowMs: number = Date.now()): string {
+  const today = defaultRunsDate(nowMs);
+  if (!ymd || !isIstDateWithinLastDays(ymd, nowMs, RUNS_DATE_LOOKBACK_DAYS)) {
+    return today;
+  }
+  return ymd;
+}
 
 export const FILTER_CONTROL_IDS = {
   search: 'runs-filter-search',
@@ -63,10 +90,14 @@ export type RunsFiltersValue = {
   duration: string;
 };
 
-export function hasActiveRunFilters(value: RunsFiltersValue): boolean {
+export function hasActiveRunFilters(
+  value: RunsFiltersValue,
+  nowMs: number = Date.now(),
+): boolean {
+  const today = defaultRunsDate(nowMs);
   return Boolean(
     value.searchInput.trim()
-    || value.date
+    || (value.date && value.date !== today)
     || value.status
     || value.jobsAdded
     || value.duration,
@@ -82,14 +113,18 @@ export function resultRangeLabel(from: number, to: number, total: number): strin
   return `Showing ${from}–${to} of ${total}`;
 }
 
-export function activeFilterPills(value: RunsFiltersValue): Array<{ key: string; label: string }> {
+export function activeFilterPills(
+  value: RunsFiltersValue,
+  nowMs: number = Date.now(),
+): Array<{ key: string; label: string }> {
   const pills: Array<{ key: string; label: string }> = [];
   const trimmed = value.searchInput.trim();
+  const today = defaultRunsDate(nowMs);
 
   if (trimmed) {
     pills.push({ key: 'q', label: `Search: ${trimmed}` });
   }
-  if (value.date) {
+  if (value.date && value.date !== today) {
     pills.push({ key: 'date', label: `Date: ${value.date}` });
   }
   if (value.status) {

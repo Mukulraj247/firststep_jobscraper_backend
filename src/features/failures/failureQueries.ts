@@ -24,6 +24,8 @@ export type FailureQuery = {
   anomaly: string;
   reason: string;
   timeWindow: FailureTimeWindow;
+  from?: string;
+  to?: string;
 };
 
 export const failureQueryKeys = {
@@ -40,6 +42,8 @@ export const failureQueryKey = (query: FailureQuery) => [
   query.anomaly,
   query.reason,
   query.timeWindow,
+  query.from || '',
+  query.to || '',
 ] as const;
 
 export type FailureFetcher = (
@@ -56,9 +60,11 @@ const fetchFailures: FailureFetcher = (query, signal) =>
     ...(query.anomaly ? { anomaly: query.anomaly } : {}),
     ...(query.reason ? { failureReason: query.reason } : {}),
     ...(query.q ? { q: query.q } : {}),
-    ...(query.timeWindow === 'all'
-      ? {}
-      : { from: new Date(Date.now() - WINDOW_MS[query.timeWindow]).toISOString() }),
+    ...(query.from && query.to
+      ? { from: query.from, to: query.to }
+      : query.timeWindow === 'all'
+        ? {}
+        : { from: new Date(Date.now() - WINDOW_MS[query.timeWindow]).toISOString() }),
   }, signal);
 
 export const failureQueryOptions = (

@@ -177,14 +177,6 @@ export function AutomationRowActions({
               {copiedScoutId === automation.scoutId ? 'Scout ID copied' : 'Copy Scout ID'}
             </MenuItem>
           ) : null}
-          {automation.targetUrl ? (
-            <MenuItem
-              aria-label={namedActionAriaLabel('Copy target URL', automation.name)}
-              onClick={() => closeAnd(() => handlers.onCopyTargetUrl(automation.targetUrl))}
-            >
-              {copiedTargetUrl === automation.targetUrl ? 'URL copied' : 'Copy target URL'}
-            </MenuItem>
-          ) : null}
           <MenuItem
             aria-label={namedActionAriaLabel('Delete', automation.name)}
             disabled={!canSubmitAction(pending, automation.id, 'delete')}
@@ -249,16 +241,6 @@ export function AutomationDetailsPanel({
         ) : (
           <Typography variant="body2" color="text.disabled">No target URL</Typography>
         )}
-        {automation.targetUrl ? (
-          <Button
-            size="small"
-            onClick={() => onCopyTargetUrl(automation.targetUrl)}
-            aria-label={namedActionAriaLabel('Copy target URL', automation.name)}
-            sx={{ borderRadius: RADIUS.pill, textTransform: 'none' }}
-          >
-            {copiedTargetUrl === automation.targetUrl ? 'Copied URL' : 'Copy URL'}
-          </Button>
-        ) : null}
         {automation.scoutId ? (
           <Button
             size="small"

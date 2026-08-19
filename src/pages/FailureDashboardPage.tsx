@@ -9,7 +9,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   retryRun,
   updateRunFailureReason,
@@ -44,6 +44,7 @@ import {
   failuresLiveRegionMessage,
   hasActiveFilters,
   paginationControlSx,
+  parseFailureDashboardSearch,
   parseRetryConflict,
   pendingActionKey,
   releaseMutation,
@@ -70,6 +71,8 @@ type RetryNotice = {
 
 export const FailureDashboardPage = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedRange = parseFailureDashboardSearch(searchParams);
   const queryClient = useQueryClient();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
@@ -82,7 +85,9 @@ export const FailureDashboardPage = () => {
   >(DEFAULT_FAILURE_STATUS_FILTER);
   const [anomalyFilter, setAnomalyFilter] = useState('');
   const [reasonFilter, setReasonFilter] = useState('');
-  const [window, setWindow] = useState<FailureTimeWindow>('1h');
+  const [window, setWindow] = useState<FailureTimeWindow>(linkedRange.timeWindow);
+  const [rangeFrom, setRangeFrom] = useState(linkedRange.from || '');
+  const [rangeTo, setRangeTo] = useState(linkedRange.to || '');
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
   const [pendingActions, setPendingActions] = useState<PendingActions>({});
@@ -110,6 +115,7 @@ export const FailureDashboardPage = () => {
     anomaly: anomalyFilter,
     reason: reasonFilter,
     timeWindow: window,
+    ...(rangeFrom && rangeTo ? { from: rangeFrom, to: rangeTo } : {}),
   }));
   const runs: FailureRun[] = failureData?.runs ?? [];
   const total = failureData?.pagination?.total ?? 0;
@@ -292,7 +298,11 @@ export const FailureDashboardPage = () => {
         isRefreshing={isRefreshing}
         isLoading={isLoading}
         isMobile={isMobile}
-        onWindowChange={(next) => applyFilterChange(setWindow, setPage, next)}
+        onWindowChange={(next) => {
+          setRangeFrom('');
+          setRangeTo('');
+          applyFilterChange(setWindow, setPage, next);
+        }}
         onRefresh={() => { void load(); }}
       />
 

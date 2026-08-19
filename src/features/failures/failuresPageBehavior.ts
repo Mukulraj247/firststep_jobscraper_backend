@@ -360,6 +360,24 @@ export function failureWindowSelectLabel(window: FailureTimeWindow): string {
   return `Last ${window}`;
 }
 
+export function parseFailureDashboardSearch(search: string | URLSearchParams): {
+  timeWindow: FailureTimeWindow;
+  from?: string;
+  to?: string;
+} {
+  const params = typeof search === 'string' ? new URLSearchParams(search) : search;
+  const windowRaw = String(params.get('window') || '').trim().toLowerCase();
+  const timeWindow = (FAILURE_WINDOWS as string[]).includes(windowRaw)
+    ? (windowRaw as FailureTimeWindow)
+    : '1h';
+  const from = params.get('from')?.trim() || '';
+  const to = params.get('to')?.trim() || '';
+  if (from && to) {
+    return { timeWindow, from, to };
+  }
+  return { timeWindow };
+}
+
 export function windowStatusPillLabel(count: number, window: FailureTimeWindow): string {
   const noun = count === 1 ? 'failure' : 'failures';
   if (window === 'all') return `${count} ${noun} · all time`;

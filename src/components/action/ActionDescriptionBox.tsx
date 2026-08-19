@@ -36,12 +36,12 @@ const Triangle = styled.div<CustomBoxContainerProps>`
 
 const Logo = styled.img`
   position: absolute;
-  top: -80px;
+  top: -56px;
   left: 50%;
   transform: translateX(-50%);
-  width: 70px;
-  height: auto;
-  border-radius: 5px;
+  width: auto;
+  height: 44px;
+  object-fit: contain;
 `;
 
 const Content = styled.div`

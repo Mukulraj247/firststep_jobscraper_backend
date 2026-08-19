@@ -31,7 +31,6 @@ import {
 } from '../constants/output-formats';
 import { processWorkflowActions } from '../utils/workflowHelpers';
 import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
-import { buildRecordingsSummary, buildRobotListSummary, pickLatestRun } from '../utils/robotListSummary';
 import {
   clampCrawlLimit,
   clampSearchLimit,
@@ -65,8 +64,6 @@ router.all('/', requireSignIn, (req, res, next) => {
   next() // pass control to the next handler
 })
 
-const DEFAULT_RECORDINGS_LIMIT = 100;
-const MAX_RECORDINGS_LIMIT = 200;
 const DEFAULT_RUNS_LIMIT = 50;
 const MAX_RUNS_LIMIT = 100;
 
@@ -78,109 +75,6 @@ function parsePagination(query: any, defaultLimit: number, maxLimit: number) {
   const skip = (page - 1) * limit;
   return { page, limit, skip };
 }
-
-/**
- * GET lean paginated robot summaries for the Job boards list.
- * Default: { robots, total, page, limit } without workflow payloads.
- * Escape hatch: ?full=1 returns the legacy bare array of full documents.
- */
-router.get('/recordings', requireSignIn, async (req: AuthenticatedRequest, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).send({ error: 'Unauthorized' });
-    }
-
-    if (String((req.query as any).full || '') === '1') {
-      logger.log('warn', 'GET /recordings?full=1 is deprecated');
-      const data = await Robot.find(ownerIdFilter(req.user.id)).sort({ _id: -1 }).lean();
-      return res.send(data);
-    }
-
-    const { page, limit, skip } = parsePagination(
-      {
-        page: (req.query as any).page ?? '1',
-        limit: (req.query as any).limit ?? '10',
-      },
-      10,
-      MAX_RECORDINGS_LIMIT
-    );
-    const q = String((req.query as any).q || '').trim();
-    const filter: any = { ...ownerIdFilter(req.user.id) };
-    if (q) {
-      filter['recording_meta.name'] = {
-        $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-        $options: 'i',
-      };
-    }
-
-    const [total, robots] = await Promise.all([
-      Robot.countDocuments(filter),
-      Robot.find(filter)
-        .select({ recording_meta: 1, schedule: 1, userId: 1 })
-        .sort({ _id: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ]);
-
-    const metaIds = robots.map((r: any) => r.recording_meta?.id).filter(Boolean);
-    const latestRuns = metaIds.length
-      ? await Run.aggregate([
-          { $match: { robotMetaId: { $in: metaIds } } },
-          { $sort: { startedAt: -1, _id: -1 } },
-          { $group: { _id: '$robotMetaId', doc: { $first: '$$ROOT' } } },
-        ])
-      : [];
-    const runByMeta = new Map(latestRuns.map((x: any) => [x._id, x.doc]));
-
-    const summaries = robots.map((r: any) => {
-      const latest = runByMeta.get(r.recording_meta?.id);
-      return buildRobotListSummary(r, pickLatestRun(latest ? [latest] : []));
-    });
-
-    return res.send({ robots: summaries, total, page, limit });
-  } catch (e) {
-    logger.log('info', `Error while reading robots: ${e}`);
-    return res.status(500).send({ error: 'Failed to retrieve robots' });
-  }
-});
-
-router.get('/recordings/summary', requireSignIn, async (req: AuthenticatedRequest, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).send({ error: 'Unauthorized' });
-    }
-
-    const filter: any = { ...ownerIdFilter(req.user.id) };
-    const [total, robots] = await Promise.all([
-      Robot.countDocuments(filter),
-      Robot.find(filter)
-        .select({ recording_meta: 1, schedule: 1, userId: 1 })
-        .sort({ _id: -1 })
-        .lean(),
-    ]);
-
-    const metaIds = robots.map((r: any) => r.recording_meta?.id).filter(Boolean);
-    const latestRuns = metaIds.length
-      ? await Run.aggregate([
-          { $match: { robotMetaId: { $in: metaIds } } },
-          { $sort: { startedAt: -1, _id: -1 } },
-          { $group: { _id: '$robotMetaId', doc: { $first: '$$ROOT' } } },
-        ])
-      : [];
-    const runByMeta = new Map(latestRuns.map((x: any) => [x._id, x.doc]));
-
-    const summaries = robots.map((r: any) => {
-      const latest = runByMeta.get(r.recording_meta?.id);
-      return buildRobotListSummary(r, pickLatestRun(latest ? [latest] : []));
-    });
-
-    return res.send(buildRecordingsSummary(summaries, total));
-  } catch (e) {
-    logger.log('info', `Error while reading recordings summary: ${e}`);
-    return res.status(500).send({ error: 'Failed to retrieve recordings summary' });
-  }
-});
 
 /**
  * GET endpoint for getting a recording.

@@ -20,7 +20,7 @@ import { cardSx, FIRSTSTEP } from '../components/dashboard/ops/dashboardTokens';
 import { RunsHero } from '../features/runs/RunsHero';
 import { RunsEmptyState } from '../features/runs/RunsEmptyState';
 import { RunsSkeleton } from '../features/runs/RunsSkeleton';
-import { resolveRunsContentState } from '../features/runs/runsPageBehavior';
+import { clampRunsDate, defaultRunsDate, resolveRunsContentState } from '../features/runs/runsPageBehavior';
 import {
   paginationControlSx,
   workspaceAriaBusy,
@@ -63,7 +63,7 @@ export const RunsPage: React.FC<RunsPageProps> = ({
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [searchInput, setSearchInput] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
+  const [dateFilter, setDateFilter] = useState(() => defaultRunsDate());
   const [statusFilter, setStatusFilter] = useState('');
   const [jobsAddedFilter, setJobsAddedFilter] = useState('');
   const [durationFilter, setDurationFilter] = useState('');
@@ -90,7 +90,7 @@ export const RunsPage: React.FC<RunsPageProps> = ({
 
   const filterParams = useMemo(() => ({
     q: searchDebounced || undefined,
-    date: dateFilter || undefined,
+    date: dateFilter,
     status: statusFilter || undefined,
     ...jobsFilterParams,
     ...durationFilterParams,
@@ -241,7 +241,7 @@ export const RunsPage: React.FC<RunsPageProps> = ({
   const clearAllFilters = () => {
     setSearchInput('');
     setSearchDebounced('');
-    setDateFilter('');
+    setDateFilter(defaultRunsDate());
     setStatusFilter('');
     setJobsAddedFilter('');
     setDurationFilter('');
@@ -296,7 +296,7 @@ export const RunsPage: React.FC<RunsPageProps> = ({
             resultTo={to}
             isFetching={isRefreshing}
             onSearchChange={setSearchInput}
-            onDateChange={(value) => { setDateFilter(value); setListPage(0); }}
+            onDateChange={(value) => { setDateFilter(clampRunsDate(value)); setListPage(0); }}
             onStatusChange={(value) => { setStatusFilter(value); setListPage(0); }}
             onJobsAddedChange={(value) => { setJobsAddedFilter(value); setListPage(0); }}
             onDurationChange={(value) => { setDurationFilter(value); setListPage(0); }}

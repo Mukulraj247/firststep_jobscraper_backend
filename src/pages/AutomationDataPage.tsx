@@ -5,6 +5,7 @@ import {
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -14,7 +15,6 @@ import {
   IconButton,
   InputLabel,
   MenuItem,
-  Paper,
   Select,
   Stack,
   Table,
@@ -29,7 +29,11 @@ import {
   Typography,
 } from '@mui/material';
 import Link from '@mui/material/Link';
+import CloseIcon from '@mui/icons-material/Close';
+import DownloadIcon from '@mui/icons-material/Download';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import TuneIcon from '@mui/icons-material/Tune';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import {
   ColumnOverride,
@@ -40,35 +44,25 @@ import {
 } from '../api/automation';
 import { useGlobalInfoStore } from '../context/globalInfo';
 import { escapeCsvSpreadsheetCell } from '../utils/spreadsheet';
-
-const DATA_COLUMN_LABELS: Record<string, string> = {
-  sectorIndustry: 'Sector / industry',
-  f500: 'F500',
-};
-
-const URLISH_COLUMNS = new Set(['jobUrl', 'job_url', 'applicationUrl', 'application_url', 'url', 'link']);
-
-const formatCellDisplay = (column: string, value: unknown): { text: string; href?: string; title: string } => {
-  if (value == null || value === '') {
-    return { text: '', title: '' };
-  }
-  if (typeof value === 'object') {
-    const json = JSON.stringify(value);
-    return { text: json.length > 80 ? `${json.slice(0, 77)}…` : json, title: json };
-  }
-  const raw = String(value);
-  if (URLISH_COLUMNS.has(column) || /^https?:\/\//i.test(raw)) {
-    const short =
-      raw.length > 48
-        ? `${raw.slice(0, 28)}…${raw.slice(-12)}`
-        : raw;
-    return { text: short, href: /^https?:\/\//i.test(raw) ? raw : undefined, title: raw };
-  }
-  if (raw.length > 100) {
-    return { text: `${raw.slice(0, 97)}…`, title: raw };
-  }
-  return { text: raw, title: raw };
-};
+import {
+  FIRSTSTEP,
+  RADIUS,
+  heroGlassGhostButtonSx,
+  heroGlassPrimaryButtonSx,
+  hiddenScrollbarSx,
+  tint,
+} from '../components/dashboard/ops/dashboardTokens';
+import { formatRunJobAddedAt } from '../features/jobs/jobBoardPageBehavior';
+import {
+  dataColumnLabel,
+  dataColumnMinWidthPx,
+  extractedDataTableHeaderCellSx,
+  extractedDataTableRowHoverSx,
+  formatExtractedCellDisplay,
+  formatSourceLabel,
+  isTitleColumn,
+} from '../features/automations/automationDataPageBehavior';
+import { paginationControlSx } from '../features/automations/automationsPageBehavior';
 
 const normalizeRowContext = (
   rc?: RowContextFields | null
@@ -182,9 +176,22 @@ const validateDraft = (
   return null;
 };
 
-export const AutomationDataPage = () => {
-  const { id = '' } = useParams();
+export const AutomationDataPage = ({
+  automationId,
+  onClose,
+  embedded = false,
+}: {
+  automationId?: string;
+  onClose?: () => void;
+  embedded?: boolean;
+} = {}) => {
+  const { id: routeId = '' } = useParams();
+  const id = automationId || routeId;
   const navigate = useNavigate();
+  const close = () => {
+    if (onClose) onClose();
+    else navigate('/automations');
+  };
   const { notify } = useGlobalInfoStore();
   const [page, setPage] = useState(0);
   const [limit, setLimit] = useState(25);
@@ -372,137 +379,311 @@ export const AutomationDataPage = () => {
   };
 
   const activeOverrideCount = Object.keys(overrides).length;
+  const rowNoun = total === 1 ? 'row' : 'rows';
 
   return (
-    <Box sx={{ p: 4 }}>
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'flex-start', md: 'center' }}
-        spacing={2}
-        mb={3}
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: embedded ? 1 : undefined,
+        width: '100%',
+        height: embedded ? '100%' : '100vh',
+        minHeight: embedded ? 0 : '100vh',
+        bgcolor: FIRSTSTEP.white,
+        overflow: 'hidden',
+      }}
+    >
+      <Box
+        sx={{
+          px: { xs: 2, md: 3 },
+          py: { xs: 2, md: 2.5 },
+          borderBottom: `1px solid ${FIRSTSTEP.border}`,
+          background: `linear-gradient(135deg, ${FIRSTSTEP.white} 0%, ${FIRSTSTEP.surfaceAlt} 100%)`,
+          flexShrink: 0,
+        }}
       >
-        <Box>
-          <Typography variant="h4" fontWeight={700}>
-            Extracted Data
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Dynamic table view over the persisted `extracted_data` rows for this automation.
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={1}>
-          <Button variant="outlined" onClick={() => navigate('/dashboard')}>Back</Button>
-          <Button variant="outlined" onClick={openEdit} disabled={isLoading}>
-            Edit columns{activeOverrideCount > 0 ? ` (${activeOverrideCount})` : ''}
-          </Button>
-          <Tooltip title="Exports the current page only">
-            <span>
-              <Button variant="outlined" onClick={exportCsv} disabled={isLoading || !rows.length}>Export CSV</Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="Exports the current page only">
-            <span>
-              <Button variant="contained" onClick={exportJson} disabled={isLoading || !rows.length}>Export JSON</Button>
-            </span>
-          </Tooltip>
+        <Stack
+          direction={{ xs: 'column', md: 'row' }}
+          justifyContent="space-between"
+          alignItems={{ xs: 'flex-start', md: 'center' }}
+          spacing={2}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb: 0.5 }}>
+              <Typography
+                sx={{
+                  fontWeight: 800,
+                  fontSize: { xs: '1.35rem', md: '1.6rem' },
+                  letterSpacing: '-0.03em',
+                  color: FIRSTSTEP.navyDeep,
+                }}
+              >
+                Extracted data
+              </Typography>
+              <Box
+                sx={{
+                  px: 1.25,
+                  py: 0.35,
+                  borderRadius: RADIUS.pill,
+                  bgcolor: 'rgba(79, 179, 169, 0.12)',
+                  border: `1px solid ${tint(FIRSTSTEP.teal, 0.28)}`,
+                }}
+              >
+                <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: FIRSTSTEP.tealDeep }}>
+                  {isLoading ? 'Loading' : `${total} ${rowNoun}`}
+                </Typography>
+              </Box>
+            </Stack>
+            <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted, maxWidth: 520 }}>
+              Jobs this scraper collected. Scroll the table; titles wrap, links open the posting.
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Button
+              variant="outlined"
+              startIcon={<TuneIcon />}
+              onClick={openEdit}
+              disabled={isLoading}
+              sx={heroGlassGhostButtonSx}
+            >
+              Edit columns{activeOverrideCount > 0 ? ` (${activeOverrideCount})` : ''}
+            </Button>
+            <Tooltip title="Exports the current page only">
+              <span>
+                <Button
+                  variant="outlined"
+                  startIcon={<DownloadIcon />}
+                  onClick={exportCsv}
+                  disabled={isLoading || !rows.length}
+                  sx={heroGlassGhostButtonSx}
+                >
+                  CSV
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title="Exports the current page only">
+              <span>
+                <Button
+                  variant="contained"
+                  onClick={exportJson}
+                  disabled={isLoading || !rows.length}
+                  sx={heroGlassPrimaryButtonSx}
+                >
+                  JSON
+                </Button>
+              </span>
+            </Tooltip>
+            <IconButton
+              aria-label="Close extracted data"
+              onClick={close}
+              sx={{
+                color: FIRSTSTEP.navy,
+                border: `1px solid ${FIRSTSTEP.border}`,
+                bgcolor: FIRSTSTEP.white,
+                width: 40,
+                height: 40,
+              }}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Stack>
         </Stack>
-      </Stack>
+      </Box>
 
-      {isLoading ? (
-        <Paper sx={{ p: 4 }}>
-          <Typography color="text.secondary">Loading extracted rows…</Typography>
-        </Paper>
-      ) : (
-      <TableContainer component={Paper} sx={{ maxHeight: '70vh' }}>
-        <Table size="small" stickyHeader>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ whiteSpace: 'nowrap' }}>Run</TableCell>
-              <TableCell sx={{ whiteSpace: 'nowrap' }}>Source</TableCell>
-              <TableCell sx={{ whiteSpace: 'nowrap' }}>Created</TableCell>
-              {visibleColumns.map((column) => {
-                const meta = overrideForVisible(column);
-                const headerLabel = DATA_COLUMN_LABELS[column] ?? column;
-                return (
-                  <TableCell key={column} sx={{ whiteSpace: 'nowrap', maxWidth: 220 }}>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <span>{headerLabel}</span>
-                      {meta?.rename && meta.original && meta.original !== column ? (
-                        <Tooltip title={`Renamed from ${meta.original}`}>
-                          <Chip size="small" color="info" variant="outlined" label={`from ${meta.original}`} />
-                        </Tooltip>
-                      ) : null}
-                      {meta?.clear ? (
-                        <Tooltip title="Values for this column will be empty on every new run">
-                          <Chip size="small" color="warning" variant="outlined" label="cleared on next run" />
-                        </Tooltip>
-                      ) : null}
-                    </Stack>
-                  </TableCell>
-                );
-              })}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((row) => (
-              <TableRow key={row.id} hover>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                  <Button size="small" onClick={() => navigate(`/run/${row.runId}`)}>
-                    {String(row.runId || '').slice(0, 8)}
-                  </Button>
-                </TableCell>
-                <TableCell sx={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <Tooltip title={String(row.source || '')}>
-                    <span>{row.source}</span>
-                  </Tooltip>
-                </TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                  {row.createdAt ? new Date(row.createdAt).toLocaleString() : ''}
-                </TableCell>
+      <TableContainer
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+          ...hiddenScrollbarSx,
+          '&::-webkit-scrollbar': { width: 8, height: 8 },
+          '&::-webkit-scrollbar-thumb': {
+            bgcolor: 'rgba(79, 179, 169, 0.45)',
+            borderRadius: 8,
+          },
+        }}
+      >
+        {isLoading ? (
+          <Stack alignItems="center" justifyContent="center" sx={{ py: 10 }} spacing={1.5}>
+            <CircularProgress size={28} sx={{ color: FIRSTSTEP.teal }} />
+            <Typography color="text.secondary">Loading extracted rows…</Typography>
+          </Stack>
+        ) : (
+          <Table stickyHeader size="small" sx={{ minWidth: 960 }}>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={extractedDataTableHeaderCellSx()}>Run</TableCell>
+                <TableCell sx={extractedDataTableHeaderCellSx()}>Source</TableCell>
+                <TableCell sx={extractedDataTableHeaderCellSx()}>Created</TableCell>
                 {visibleColumns.map((column) => {
-                  const cell = formatCellDisplay(column, row.data?.[column]);
+                  const meta = overrideForVisible(column);
+                  const headerLabel = dataColumnLabel(column);
                   return (
-                    <TableCell key={column} sx={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <Tooltip title={cell.title || ''}>
-                        {cell.href ? (
-                          <Link href={cell.href} target="_blank" rel="noopener noreferrer" underline="hover">
-                            {cell.text}
-                          </Link>
-                        ) : (
-                          <span>{cell.text}</span>
-                        )}
-                      </Tooltip>
+                    <TableCell
+                      key={column}
+                      sx={{
+                        ...extractedDataTableHeaderCellSx(),
+                        minWidth: dataColumnMinWidthPx(column),
+                      }}
+                    >
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <span>{headerLabel}</span>
+                        {meta?.rename && meta.original && meta.original !== column ? (
+                          <Tooltip title={`Renamed from ${meta.original}`}>
+                            <Chip size="small" variant="outlined" label={`from ${meta.original}`} sx={{ height: 20, fontSize: '0.65rem' }} />
+                          </Tooltip>
+                        ) : null}
+                        {meta?.clear ? (
+                          <Tooltip title="Values for this column will be empty on every new run">
+                            <Chip size="small" color="warning" variant="outlined" label="cleared" sx={{ height: 20, fontSize: '0.65rem' }} />
+                          </Tooltip>
+                        ) : null}
+                      </Stack>
                     </TableCell>
                   );
                 })}
               </TableRow>
-            ))}
-            {!rows.length ? (
-              <TableRow>
-                <TableCell colSpan={Math.max(3, visibleColumns.length + 3)}>
-                  <Typography color="text.secondary" sx={{ py: 2 }}>
-                    No extracted rows yet for this automation.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.id} sx={extractedDataTableRowHoverSx()}>
+                  <TableCell sx={{ whiteSpace: 'nowrap', px: 1.5, py: 1.25, verticalAlign: 'top' }}>
+                    <Button
+                      size="small"
+                      onClick={() => navigate(`/run/${row.runId}`)}
+                      sx={{
+                        fontWeight: 700,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: FIRSTSTEP.tealDark,
+                        minWidth: 0,
+                        px: 0.75,
+                      }}
+                    >
+                      {String(row.runId || '').slice(0, 8)}
+                    </Button>
+                  </TableCell>
+                  <TableCell sx={{ maxWidth: 140, px: 1.5, py: 1.25, verticalAlign: 'top' }}>
+                    <Tooltip title={String(row.source || '')}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: FIRSTSTEP.navy,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {formatSourceLabel(String(row.source || ''))}
+                      </Typography>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap', px: 1.5, py: 1.25, verticalAlign: 'top' }}>
+                    <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted, fontWeight: 600 }}>
+                      {formatRunJobAddedAt(row.createdAt) || '—'}
+                    </Typography>
+                  </TableCell>
+                  {visibleColumns.map((column) => {
+                    const cell = formatExtractedCellDisplay(column, row.data?.[column]);
+                    const titleCol = isTitleColumn(column);
+                    return (
+                      <TableCell
+                        key={column}
+                        sx={{
+                          minWidth: dataColumnMinWidthPx(column),
+                          maxWidth: titleCol ? 420 : 280,
+                          px: 1.5,
+                          py: 1.25,
+                          verticalAlign: 'top',
+                          whiteSpace: titleCol ? 'normal' : 'nowrap',
+                          overflow: titleCol ? 'visible' : 'hidden',
+                          textOverflow: titleCol ? 'clip' : 'ellipsis',
+                        }}
+                      >
+                        <Tooltip title={cell.title || ''}>
+                          {cell.kind === 'url' && cell.href ? (
+                            <Link
+                              href={cell.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              underline="hover"
+                              sx={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 0.5,
+                                fontWeight: 700,
+                                color: FIRSTSTEP.tealDark,
+                              }}
+                            >
+                              Open
+                              <OpenInNewIcon sx={{ fontSize: 14 }} />
+                            </Link>
+                          ) : cell.kind === 'f500' ? (
+                            <Chip
+                              size="small"
+                              label={cell.text}
+                              sx={{
+                                height: 22,
+                                fontWeight: 700,
+                                bgcolor: cell.text === 'Yes' ? 'rgba(16, 185, 129, 0.12)' : FIRSTSTEP.surfaceAlt,
+                                color: cell.text === 'Yes' ? FIRSTSTEP.successDeep : FIRSTSTEP.textMuted,
+                              }}
+                            />
+                          ) : (
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                color: FIRSTSTEP.navy,
+                                fontWeight: titleCol ? 600 : 500,
+                                lineHeight: 1.4,
+                              }}
+                            >
+                              {cell.text}
+                            </Typography>
+                          )}
+                        </Tooltip>
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              ))}
+              {!rows.length ? (
+                <TableRow>
+                  <TableCell colSpan={Math.max(3, visibleColumns.length + 3)}>
+                    <Typography color="text.secondary" sx={{ py: 6, textAlign: 'center' }}>
+                      No extracted rows yet for this automation.
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        )}
       </TableContainer>
-      )}
 
-      <TablePagination
-        component="div"
-        count={total}
-        page={page}
-        onPageChange={(_, nextPage) => setPage(nextPage)}
-        rowsPerPage={limit}
-        onRowsPerPageChange={(event) => {
-          setLimit(parseInt(event.target.value, 10));
-          setPage(0);
+      <Box
+        sx={{
+          px: { xs: 1, md: 2 },
+          borderTop: `1px solid ${FIRSTSTEP.border}`,
+          flexShrink: 0,
+          bgcolor: FIRSTSTEP.surfaceAlt,
         }}
-        rowsPerPageOptions={[10, 25, 50, 100]}
-      />
+      >
+        <TablePagination
+          component="div"
+          count={total}
+          page={page}
+          onPageChange={(_, nextPage) => setPage(nextPage)}
+          rowsPerPage={limit}
+          onRowsPerPageChange={(event) => {
+            setLimit(parseInt(event.target.value, 10));
+            setPage(0);
+          }}
+          rowsPerPageOptions={[10, 25, 50, 100]}
+          sx={paginationControlSx(false)}
+        />
+      </Box>
 
       <Dialog open={editOpen} onClose={closeEdit} fullWidth maxWidth="md">
         <DialogTitle>Edit columns</DialogTitle>

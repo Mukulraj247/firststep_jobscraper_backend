@@ -103,8 +103,8 @@ const Login = () => {
           width: "100%",
         }}
       >
-        <img src={ScoutXLogo} alt="Scout-X Scrapper" height={56}
-          width={56} style={{ marginBottom: 20, borderRadius: "12px", objectFit: "contain" }} />
+        <img src={ScoutXLogo} alt="Scout-X Scrapper" height={48}
+          style={{ marginBottom: 20, width: 'auto', maxHeight: 48, objectFit: 'contain', display: 'block' }} />
         <Typography variant="h4" gutterBottom>
           {t('login.title')}
         </Typography>

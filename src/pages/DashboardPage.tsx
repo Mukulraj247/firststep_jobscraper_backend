@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   CircularProgress,
   Paper,
   Stack,
@@ -18,18 +19,32 @@ import LayersOutlinedIcon from '@mui/icons-material/LayersOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import DnsOutlinedIcon from '@mui/icons-material/DnsOutlined';
+import FilterListIcon from '@mui/icons-material/FilterList';
 import LocalOfferOutlinedIcon from '@mui/icons-material/LocalOfferOutlined';
 import {
+  getDashboardDigitalOcean,
   getDashboardMetrics,
-  type OpsMetricsResponse,
   type OpsMetricsWindow,
 } from '../api/automation';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  dashboardDigitalOceanQueryOptions,
+  dashboardMetricsQueryOptions,
+} from '../features/dashboard/dashboardQueries';
 import { useGlobalInfoStore } from '../context/globalInfo';
 import { MiniChart } from '../components/dashboard/ops/MiniChart';
 import { DashboardHeroSection } from '../components/dashboard/ops/DashboardHeroSection';
 import { OpsHeroBackdrop } from '../components/dashboard/ops/OpsHeroBackdrop';
 import { StatCard } from '../components/dashboard/ops/StatCard';
 import { TagPill } from '../components/dashboard/ops/TagPill';
+import { TagFilterModal } from '../features/dashboard/TagFilterModal';
+import {
+  applyDashboardTagSelection,
+  failuresHrefFromDashboard,
+  normalizeChartTimestampMs,
+  selectableDashboardTags,
+} from '../features/dashboard/dashboardPageBehavior';
+import { formatIstDateTime, isIstDateWithinLastDays } from '../shared/opsTimezone';
 import {
   cardSx,
   fadeUpSx,
@@ -53,14 +68,9 @@ const WINDOW_FUTURE_LABEL: Record<OpsMetricsWindow, string> = {
 
 const formatForecastUntil = (iso?: string) => {
   if (!iso) return null;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return formatIstDateTime(ms);
 };
 
 const formatBytes = (n?: number | null) => {
@@ -158,39 +168,83 @@ const ComputeStat = ({
 );
 
 export const DashboardPage = () => {
+  const queryClient = useQueryClient();
   const { notify } = useGlobalInfoStore();
   const [window, setWindow] = useState<OpsMetricsWindow>('6h');
-  const [metrics, setMetrics] = useState<OpsMetricsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [date, setDate] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagModalOpen, setTagModalOpen] = useState(false);
 
-  const load = useCallback(
-    async (silent = false) => {
-      if (silent) setRefreshing(true);
-      else setLoading(true);
-      try {
-        const data = await getDashboardMetrics(window);
-        setMetrics(data);
-      } catch (error: any) {
-        if (error?.response?.status !== 429) {
-          notify('error', error?.response?.data?.error || 'Failed to load dashboard metrics');
-        }
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [window, notify]
+  const query = useMemo(
+    () => ({ window, date: date || null }),
+    [window, date],
   );
+  const metricsQuery = useQuery({
+    ...dashboardMetricsQueryOptions(query),
+    retry: 1,
+  });
+  const digitalOceanQuery = useQuery({
+    ...dashboardDigitalOceanQueryOptions(query),
+    retry: 1,
+  });
+
+  const metrics = metricsQuery.data ?? null;
+  const loading = metricsQuery.isLoading;
+  const refreshing = (metricsQuery.isFetching || digitalOceanQuery.isFetching) && !metricsQuery.isLoading;
+  const notifiedError = useRef<unknown>(null);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!metricsQuery.isError) {
+      notifiedError.current = null;
+      return;
+    }
+    const error = metricsQuery.error as any;
+    if (notifiedError.current === error) return;
+    notifiedError.current = error;
+    if (error?.response?.status !== 429) {
+      notify('error', error?.response?.data?.error || 'Failed to load dashboard metrics');
+    }
+  }, [metricsQuery.error, metricsQuery.isError, notify]);
+
+  const handleRefresh = () => {
+    void Promise.all([
+      queryClient.fetchQuery({
+        queryKey: dashboardMetricsQueryOptions(query).queryKey,
+        queryFn: ({ signal }) => getDashboardMetrics({ ...query, fresh: true }, signal),
+      }),
+      queryClient.fetchQuery({
+        queryKey: dashboardDigitalOceanQueryOptions(query).queryKey,
+        queryFn: ({ signal }) => getDashboardDigitalOcean({ ...query, fresh: true }, signal),
+      }),
+    ]).catch((error: any) => {
+      if (error?.response?.status !== 429) {
+        notify('error', error?.response?.data?.error || 'Failed to load dashboard metrics');
+      }
+    });
+  };
+
+  const handleWindowChange = (next: OpsMetricsWindow) => {
+    setDate('');
+    setWindow(next);
+  };
+
+  const handleDateChange = (next: string) => {
+    if (!next) {
+      setDate('');
+      return;
+    }
+    if (!isIstDateWithinLastDays(next, Date.now(), 7)) return;
+    setDate(next);
+  };
 
   const totals = metrics?.totals;
   const compute = metrics?.compute;
-  const droplet = metrics?.digitalOcean?.droplets?.[0];
+  const digitalOcean = digitalOceanQuery.data ?? metrics?.digitalOcean;
+  const droplet = digitalOcean?.droplets?.[0];
   const m = droplet?.metrics;
+
+  const withChartTime = (points: Array<{ t: number; v: number }>) =>
+    points.map((point) => ({ ...point, t: normalizeChartTimestampMs(point.t) }));
 
   const runSeriesPoints = (metrics?.series.runs || []).map((b) => ({ t: b.t, v: b.total }));
   const passSeriesPoints = (metrics?.series.runs || []).map((b) => ({ t: b.t, v: b.passed }));
@@ -202,21 +256,19 @@ export const DashboardPage = () => {
 
   const upcoming = metrics?.upcomingSchedules;
   const forecastUntilLabel = formatForecastUntil(upcoming?.forecastUntil);
-  const futureWindowLabel = WINDOW_FUTURE_LABEL[window];
+  const futureWindowLabel = date ? WINDOW_FUTURE_LABEL['24h'] : WINDOW_FUTURE_LABEL[window];
+  const failedHref = failuresHrefFromDashboard(
+    date ? { mode: 'day', date } : { mode: 'window', window },
+  );
 
-  const roleTags = useMemo(() => {
-    return [...(metrics?.tags ?? [])]
-      .filter((tag) => (tag.namespace || tag.tag.split(':')[0]) === 'role')
-      .sort(
-        (a, b) =>
-          b.jobsAdded - a.jobsAdded ||
-          b.runs - a.runs ||
-          a.label.localeCompare(b.label),
-      );
-  }, [metrics?.tags]);
-
-  const totalRoleTags = roleTags.length;
-  const activeRoleTags = roleTags.filter((tag) => tag.jobsAdded > 0).length;
+  const catalogTags = useMemo(
+    () => selectableDashboardTags(metrics?.tags ?? []),
+    [metrics?.tags],
+  );
+  const visibleTags = useMemo(
+    () => applyDashboardTagSelection(catalogTags, selectedTags),
+    [catalogTags, selectedTags],
+  );
 
   return (
     <Box
@@ -238,8 +290,10 @@ export const DashboardPage = () => {
 
         <DashboardHeroSection
           window={window}
-          onWindowChange={setWindow}
-          onRefresh={() => load(true)}
+          onWindowChange={handleWindowChange}
+          date={date}
+          onDateChange={handleDateChange}
+          onRefresh={handleRefresh}
           loading={loading}
           refreshing={refreshing}
           passRate={passRate}
@@ -267,7 +321,7 @@ export const DashboardPage = () => {
             <StatCard
               label="Runs"
               value={totals?.runs ?? '—'}
-              hint={`Window ${window}`}
+              hint={date ? `${date} IST` : `Window ${window}`}
               color={METRIC_COLORS.runs}
               icon={<PlayCircleOutlineIcon />}
               delay={0}
@@ -283,9 +337,11 @@ export const DashboardPage = () => {
             <StatCard
               label="Failed"
               value={totals?.failed ?? '—'}
+              hint="Open failure dashboard"
               color={METRIC_COLORS.failed}
               icon={<ErrorOutlineIcon />}
               delay={80}
+              href={failedHref}
             />
             <StatCard
               label="Jobs added"
@@ -399,10 +455,16 @@ export const DashboardPage = () => {
             </Box>
           </Paper>
 
-          {metrics?.digitalOcean && !metrics.digitalOcean.configured ? (
+          {digitalOcean && !digitalOcean.configured && !digitalOcean.pending ? (
             <Alert severity="info" sx={{ mb: 3, borderRadius: RADIUS.control }}>
               DigitalOcean metrics not configured (set DIGITALOCEAN_TOKEN on the server).
             </Alert>
+          ) : null}
+
+          {digitalOceanQuery.isLoading && !m ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4, mb: 3 }}>
+              <CircularProgress size={28} sx={{ color: FIRSTSTEP.tealDark }} />
+            </Box>
           ) : null}
 
           {m ? (
@@ -417,7 +479,7 @@ export const DashboardPage = () => {
               <MiniChart
                 title="CPU %"
                 valueLabel={formatPct(m.cpuPercent?.latest)}
-                points={m.cpuPercent?.points || []}
+                points={withChartTime(m.cpuPercent?.points || [])}
                 color={METRIC_COLORS.cpu}
                 yAxisLabel="CPU %"
                 xAxisLabel="Time"
@@ -429,7 +491,7 @@ export const DashboardPage = () => {
               <MiniChart
                 title="Memory %"
                 valueLabel={formatPct(m.memoryUsedPercent?.latest)}
-                points={m.memoryUsedPercent?.points || []}
+                points={withChartTime(m.memoryUsedPercent?.points || [])}
                 color={METRIC_COLORS.memory}
                 yAxisLabel="Memory %"
                 xAxisLabel="Time"
@@ -445,7 +507,7 @@ export const DashboardPage = () => {
                     ? m.load1.latest.toFixed(2)
                     : '—'
                 }
-                points={m.load1?.points || []}
+                points={withChartTime(m.load1?.points || [])}
                 color={METRIC_COLORS.load}
                 yAxisLabel="Load avg"
                 xAxisLabel="Time"
@@ -455,18 +517,34 @@ export const DashboardPage = () => {
             </Box>
           ) : null}
 
-          <SectionHeading
-            title="Jobs by tag"
-            caption={`Job title / role tags (${totalRoleTags} total · ${activeRoleTags} with jobs in this window).`}
-          />
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            alignItems={{ xs: 'stretch', sm: 'flex-end' }}
+            justifyContent="space-between"
+            spacing={1.5}
+            sx={{ mb: 1.75 }}
+          >
+            <Box sx={{ '& > :last-child': { mb: 0 } }}>
+              <SectionHeading
+                title="View by tags"
+                caption={
+                  selectedTags.length
+                    ? `${visibleTags.length} of ${selectedTags.length} selected tags in this window.`
+                    : 'Select filters to view data.'
+                }
+              />
+            </Box>
+            <Button
+              variant="outlined"
+              startIcon={<FilterListIcon />}
+              onClick={() => setTagModalOpen(true)}
+              sx={{ flexShrink: 0, borderColor: tint(FIRSTSTEP.teal, 0.5), color: FIRSTSTEP.navy }}
+            >
+              Filter
+            </Button>
+          </Stack>
 
-          {activeRoleTags === 0 ? (
-            <Alert severity="info" sx={{ mb: 2.5, borderRadius: RADIUS.control }}>
-              No jobs were added in this window yet. Role tags with zero activity are still listed below.
-            </Alert>
-          ) : null}
-
-          {roleTags.length === 0 ? (
+          {selectedTags.length === 0 ? (
             <Paper
               elevation={0}
               sx={[
@@ -477,7 +555,7 @@ export const DashboardPage = () => {
                   flexDirection: 'column',
                   alignItems: 'center',
                   textAlign: 'center',
-                  gap: 1,
+                  gap: 1.25,
                   '&:hover': { transform: 'none', boxShadow: 'none' },
                 },
               ]}
@@ -497,12 +575,14 @@ export const DashboardPage = () => {
                 <LocalOfferOutlinedIcon />
               </Box>
               <Typography sx={{ fontWeight: 700, color: 'text.primary' }}>
-                No jobs added in this window
+                Select filters to view data
               </Typography>
               <Typography variant="body2" sx={{ color: 'text.secondary', maxWidth: 420 }}>
-                Widen the time window or check that your automations are running to see tag activity
-                here.
+                Choose up to 15 tags to see jobs added and runs for this window.
               </Typography>
+              <Button variant="contained" startIcon={<FilterListIcon />} onClick={() => setTagModalOpen(true)}>
+                Filter
+              </Button>
             </Paper>
           ) : (
             <Box
@@ -517,7 +597,7 @@ export const DashboardPage = () => {
                 pb: 1,
               }}
             >
-              {roleTags.map((tag) => (
+              {visibleTags.map((tag) => (
                 <TagPill
                   key={tag.tag}
                   label={tag.label}
@@ -530,6 +610,14 @@ export const DashboardPage = () => {
           )}
         </>
       )}
+
+      <TagFilterModal
+        open={tagModalOpen}
+        tags={catalogTags}
+        selected={selectedTags}
+        onClose={() => setTagModalOpen(false)}
+        onApply={setSelectedTags}
+      />
     </Box>
   );
 };

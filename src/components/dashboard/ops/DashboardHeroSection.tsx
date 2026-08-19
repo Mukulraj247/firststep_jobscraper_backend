@@ -8,6 +8,7 @@ import {
   MenuItem,
   Select,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -15,6 +16,7 @@ import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined';
 import type { OpsMetricsWindow } from '../../../api/automation';
+import { dashboardDatePickerBounds } from '../../../features/dashboard/dashboardPageBehavior';
 import {
   FIRSTSTEP,
   heroGlassFormControlSx,
@@ -110,6 +112,8 @@ function HeroMetricTile({
 export function DashboardHeroSection({
   window,
   onWindowChange,
+  date,
+  onDateChange,
   onRefresh,
   loading,
   refreshing,
@@ -121,6 +125,8 @@ export function DashboardHeroSection({
 }: {
   window: OpsMetricsWindow;
   onWindowChange: (window: OpsMetricsWindow) => void;
+  date: string;
+  onDateChange: (date: string) => void;
   onRefresh: () => void;
   loading: boolean;
   refreshing: boolean;
@@ -137,6 +143,8 @@ export function DashboardHeroSection({
   futureWindowLabel: string;
   forecastUntilLabel: string | null;
 }) {
+  const bounds = dashboardDatePickerBounds();
+  const dayMode = Boolean(date);
   const upcomingRuns = upcoming?.totalScheduledRuns ?? 0;
   const upcomingAutomations = upcoming?.automationsWithRuns ?? 0;
   const runsMatchAutomations =
@@ -165,7 +173,9 @@ export function DashboardHeroSection({
           </Typography>
           <Typography sx={heroGlassTitleSx('lg')}>Dashboard</Typography>
           <Typography variant="body2" sx={{ ...heroGlassSubtitleSx, maxWidth: 480 }}>
-            Past activity and upcoming schedule share the same {window} range.
+            {dayMode
+              ? `Activity for ${date} (IST, 12:00 AM–11:59 PM).`
+              : `Past activity and upcoming schedule share the same ${window} range.`}
           </Typography>
         </Box>
 
@@ -192,6 +202,16 @@ export function DashboardHeroSection({
               ))}
             </Select>
           </FormControl>
+          <TextField
+            size="small"
+            type="date"
+            label="Day (IST)"
+            InputLabelProps={{ shrink: true }}
+            value={date}
+            inputProps={{ min: bounds.min, max: bounds.max }}
+            onChange={(event) => onDateChange(event.target.value)}
+            sx={heroGlassFormControlSx()}
+          />
           <Button
             variant="contained"
             startIcon={
@@ -216,7 +236,7 @@ export function DashboardHeroSection({
       >
         <Stack spacing={2} direction={{ xs: 'column', sm: 'row', md: 'column' }}>
           <HeroMetricTile
-            label={`Last ${window}`}
+            label={dayMode ? date : `Last ${window}`}
             value={totals?.runs ?? '—'}
             hint={
               passRate != null
@@ -269,7 +289,7 @@ export function DashboardHeroSection({
                   color: FIRSTSTEP.tealDeep,
                 }}
               >
-                Next {window}
+                Next {dayMode ? '24h' : window}
               </Typography>
             </Stack>
             {forecastUntilLabel ? (

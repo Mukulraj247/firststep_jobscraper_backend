@@ -2,8 +2,6 @@ import { createContext, useCallback, useContext, useState } from "react";
 import { AlertSnackbarProps } from "../components/ui/AlertSnackbar";
 import { WhereWhatPair } from "maxun-core";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRecordingsSummary, getStoredRecordings } from "../api/storage";
-import type { RecordingsSummary } from "../types/robotList";
 import { listSaasRunGroups, listSaasRuns, type SaasRunsListParams } from "../api/automation";
 
 const createDataCacheClient = () => new QueryClient({
@@ -390,27 +388,6 @@ export const useCacheInvalidation = () => {
     removeOptimisticRobot,
     invalidateAllCache
   };
-};
-
-export const useCachedRecordings = (params: { page: number; limit: number; q?: string }) => {
-  return useQuery({
-    queryKey: [...dataCacheKeys.recordings, params.page, params.limit, params.q || ''],
-    queryFn: () => getStoredRecordings(params),
-    staleTime: 30 * 1000,
-    gcTime: 5 * 60 * 1000,
-    retry: 2,
-    placeholderData: (prev) => prev,
-  });
-};
-
-export const useCachedRecordingsSummary = () => {
-  return useQuery<RecordingsSummary>({
-    queryKey: [...dataCacheKeys.recordings, 'summary'] as const,
-    queryFn: () => getRecordingsSummary(),
-    staleTime: 30 * 1000,
-    gcTime: 5 * 60 * 1000,
-    retry: 2,
-  });
 };
 
 export const GlobalInfoProvider = ({ children }: { children: JSX.Element }) => {

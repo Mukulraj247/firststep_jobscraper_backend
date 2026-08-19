@@ -193,10 +193,27 @@ export const heroGlassFormControlSx = (
     WebkitBackdropFilter: 'blur(10px)',
     borderRadius: RADIUS.control,
     ...(minHeight ? { minHeight } : {}),
+    outline: 'none',
+    '&:focus, &:focus-visible, &:focus-within': { outline: 'none' },
     '& fieldset': { borderColor: tint(FIRSTSTEP.teal, 0.34) },
     '&:hover fieldset': { borderColor: tint(FIRSTSTEP.teal, 0.52) },
-    '&.Mui-focused fieldset': { borderColor: FIRSTSTEP.teal },
+    '&.Mui-focused fieldset': { borderColor: FIRSTSTEP.teal, borderWidth: 1 },
+    '&:before, &:after': { display: 'none' },
+    '& .MuiInputBase-input:focus, & .MuiInputBase-input:focus-visible': {
+      outline: 'none',
+    },
+    '& input[type="date"]::-webkit-calendar-picker-indicator': {
+      border: 'none',
+      outline: 'none',
+      marginLeft: '4px',
+      padding: 0,
+      cursor: 'pointer',
+    },
+    '& input[type="date"]::-webkit-inner-spin-button': { display: 'none' },
+    '& input[type="date"]::-webkit-datetime-edit': { padding: 0 },
   },
+  '& .MuiInput-underline:before, & .MuiInput-underline:after': { display: 'none' },
+  '& .MuiInput-underline:hover:not(.Mui-disabled):before': { display: 'none' },
   '& .MuiSelect-icon': { color: FIRSTSTEP.tealDark },
 });
 
@@ -306,6 +323,24 @@ export const FOCUS_VISIBLE_RING = {
   outline: '2px solid',
   outlineOffset: '2px',
 } as const;
+
+/**
+ * Keyboard rings for buttons/links only.
+ * Do not include `.MuiOutlinedInput-root:focus-within` — MUI already draws a
+ * fieldset border, so an extra outline reads as a double line on every text field.
+ */
+export const FOCUS_VISIBLE_INTERACTIVE_SELECTORS = [
+  'button:focus-visible',
+  'a:focus-visible',
+  '[role="button"]:focus-visible',
+  'select:focus-visible',
+  'textarea:focus-visible',
+  '.MuiButtonBase-root:focus-visible',
+  '.MuiChip-root:focus-visible',
+  '.MuiPaginationItem-root:focus-visible',
+  '.MuiIconButton-root:focus-visible',
+  '.MuiMenuItem-root:focus-visible',
+] as const;
 
 /** Skip-to-main focus is otherwise invisible; theme baseline applies a 2px ring. */
 export const MAIN_CONTENT_FOCUS_SELECTORS = [

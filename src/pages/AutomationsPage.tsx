@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box,
+  Dialog,
   LinearProgress,
   Paper,
   TablePagination,
@@ -41,11 +42,18 @@ import {
   type ScheduleModalState,
 } from '../features/automations/AutomationDialogs';
 import type { AutomationRowHandlers } from '../features/automations/AutomationRowActions';
+import { AutomationConfigPage } from './AutomationConfigPage';
+import { AutomationDataPage } from './AutomationDataPage';
+import {
+  extractedDataDialogBackdropSx,
+  extractedDataDialogPaperSx,
+} from '../features/automations/automationDataPageBehavior';
 import {
   SOCKET_INVALIDATE_DEBOUNCE_MS,
   applyFilterChange,
   attemptMutation,
   automationsLiveRegionMessage,
+  automationsPageRootOverflow,
   buildCreateAutomationRequest,
   canSubmitAction,
   EMPTY_CREATE_AUTOMATION_FORM,
@@ -116,6 +124,8 @@ export const AutomationsPage = () => {
   const [creating, setCreating] = useState(false);
   const [copiedTargetUrl, setCopiedTargetUrl] = useState<string | null>(null);
   const [copiedScoutId, setCopiedScoutId] = useState<string | null>(null);
+  const [configTargetId, setConfigTargetId] = useState<string | null>(null);
+  const [dataTargetId, setDataTargetId] = useState<string | null>(null);
 
   const copyTargetUrl = useCallback(async (url?: string) => {
     if (!url) return;
@@ -520,11 +530,11 @@ export const AutomationsPage = () => {
     onOpenSchedule: openScheduleModal,
     onPauseSchedule: handleStopSchedule,
     onResumeSchedule: handleResumeSchedule,
-    onViewData: (automation) => navigate(`/automation/${automation.id}/data`),
+    onViewData: (automation) => setDataTargetId(automation.id),
     onRunHistory: (automation) => {
       if (automation.id) navigate(`/runs/${automation.id}`);
     },
-    onConfigure: (automation) => navigate(`/automation/${automation.id}/config`),
+    onConfigure: (automation) => setConfigTargetId(automation.id),
     onDelete: setDeleteTarget,
     onOpenLastRun: (automation) => {
       if (automation.latestRunId) navigate(`/run/${automation.latestRunId}`);
@@ -542,12 +552,10 @@ export const AutomationsPage = () => {
   return (
     <Box
       sx={{
-        flex: 1,
-        minHeight: '100%',
-        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
-        overflow: 'visible',
+        minHeight: '100%',
+        overflow: automationsPageRootOverflow(),
         gap: { xs: 1.5, md: 1.75 },
         p: { xs: 1.5, md: 2 },
         bgcolor: (muiTheme) => (muiTheme.palette.mode === 'dark' ? '#000' : FIRSTSTEP.surface),
@@ -591,7 +599,7 @@ export const AutomationsPage = () => {
       {contentState === 'first-load-skeleton' ? (
         <AutomationSkeleton />
       ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 'none', minHeight: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 'none', minHeight: 0, gap: 1.75 }}>
           {contentState !== 'load-error' ? (
             <Box sx={{ flexShrink: 0 }}>
               <AutomationStats summary={summary} />
@@ -734,6 +742,40 @@ export const AutomationsPage = () => {
         onCloseResumeAll={() => setResumeAllOpen(false)}
         onConfirmResumeAll={() => { void handleResumeAllSchedules(); }}
       />
+
+      <Dialog
+        open={Boolean(configTargetId)}
+        onClose={() => setConfigTargetId(null)}
+        fullWidth
+        maxWidth="md"
+        scroll="paper"
+      >
+        {configTargetId ? (
+          <AutomationConfigPage
+            automationId={configTargetId}
+            onClose={() => setConfigTargetId(null)}
+            embedded
+          />
+        ) : null}
+      </Dialog>
+      <Dialog
+        open={Boolean(dataTargetId)}
+        onClose={() => setDataTargetId(null)}
+        fullWidth
+        maxWidth={false}
+        fullScreen={isMobile}
+        scroll="paper"
+        PaperProps={{ sx: extractedDataDialogPaperSx() }}
+        BackdropProps={{ sx: extractedDataDialogBackdropSx() }}
+      >
+        {dataTargetId ? (
+          <AutomationDataPage
+            automationId={dataTargetId}
+            onClose={() => setDataTargetId(null)}
+            embedded
+          />
+        ) : null}
+      </Dialog>
     </Box>
   );
 };

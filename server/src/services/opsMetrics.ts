@@ -5,11 +5,20 @@ import Run from '../models/Run';
 import Robot from '../models/Robot';
 import { SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
 import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
-import { buildOwnerRunFilter } from './dashboardQueries';
+import { endOfIstDay, floorToIstUnit, startOfIstDay } from '../../../src/shared/opsTimezone';
+import { getJobCategoryDashboardTags } from '../constants/tagCatalog';
 import {
-  getDigitalOceanDashboard,
+  buildOwnerRunFilter,
+  buildOwnerRunWindowMatch,
+  createDashboardSummaryCache,
+} from './dashboardQueries';
+import {
+  isDigitalOceanConfigured,
+  peekDigitalOceanDashboardCache,
+  type DigitalOceanDashboard,
   type MetricsWindow,
 } from './digitalOceanMetrics';
+import { computeUpcomingScheduleMetrics } from './upcomingScheduleMetrics';
 
 export type OpsMetricsWindow = '15m' | '30m' | '1h' | '3h' | '6h' | '24h';
 
@@ -22,8 +31,15 @@ const WINDOW_MS: Record<OpsMetricsWindow, number> = {
   '24h': 24 * 60 * 60 * 1000,
 };
 
-import { getRoleDashboardTags } from '../constants/tagCatalog';
-import { computeUpcomingScheduleMetrics } from './upcomingScheduleMetrics';
+const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export type OpsMetricsBounds = {
+  isCalendarDay: boolean;
+  sinceMs: number;
+  untilMs: number;
+  windowMs: number;
+  bucketStarts: number[];
+};
 
 export function parseOpsMetricsWindow(raw: unknown): OpsMetricsWindow {
   const v = String(raw || '1h').trim().toLowerCase();
@@ -33,7 +49,19 @@ export function parseOpsMetricsWindow(raw: unknown): OpsMetricsWindow {
   return '1h';
 }
 
-function doWindowForOps(window: OpsMetricsWindow): MetricsWindow {
+export function parseOpsMetricsDate(raw: unknown): string | null {
+  const v = String(raw || '').trim();
+  if (!YMD_RE.test(v)) return null;
+  try {
+    startOfIstDay(v);
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+export function doWindowForOps(window: OpsMetricsWindow, isCalendarDay: boolean): MetricsWindow {
+  if (isCalendarDay) return '24h';
   if (window === '15m' || window === '30m' || window === '1h') return '1h';
   if (window === '3h' || window === '6h') return '6h';
   return '24h';
@@ -58,6 +86,66 @@ function bucketCount(window: OpsMetricsWindow): number {
   }
 }
 
+function alignUnitMs(window: OpsMetricsWindow): number {
+  switch (window) {
+    case '15m':
+      return 3 * 60 * 1000;
+    case '30m':
+      return 5 * 60 * 1000;
+    case '1h':
+      return 10 * 60 * 1000;
+    case '3h':
+      return 30 * 60 * 1000;
+    case '6h':
+      return 60 * 60 * 1000;
+    case '24h':
+      return 3 * 60 * 60 * 1000;
+    default:
+      return 60 * 60 * 1000;
+  }
+}
+
+export function resolveOpsMetricsBounds(opts: {
+  window: OpsMetricsWindow;
+  date?: string | null;
+  nowMs?: number;
+}): OpsMetricsBounds {
+  const nowMs = opts.nowMs ?? Date.now();
+  const date = opts.date ? parseOpsMetricsDate(opts.date) : null;
+  if (date) {
+    const sinceMs = startOfIstDay(date).getTime();
+    const untilMs = endOfIstDay(date).getTime();
+    const bucketMs = 3 * 60 * 60 * 1000;
+    return {
+      isCalendarDay: true,
+      sinceMs,
+      untilMs,
+      windowMs: untilMs - sinceMs + 1,
+      bucketStarts: Array.from({ length: 8 }, (_, i) => sinceMs + i * bucketMs),
+    };
+  }
+
+  const unit = alignUnitMs(opts.window);
+  const count = bucketCount(opts.window);
+  const lastStart = floorToIstUnit(nowMs, unit);
+  const sinceMs = lastStart - (count - 1) * unit;
+  return {
+    isCalendarDay: false,
+    sinceMs,
+    untilMs: nowMs,
+    windowMs: WINDOW_MS[opts.window],
+    bucketStarts: Array.from({ length: count }, (_, i) => sinceMs + i * unit),
+  };
+}
+
+function bucketIndexFor(ts: number, bucketStarts: number[], untilMs: number): number {
+  for (let i = 0; i < bucketStarts.length; i += 1) {
+    const next = i + 1 < bucketStarts.length ? bucketStarts[i + 1] : untilMs + 1;
+    if (ts >= bucketStarts[i] && ts < next) return i;
+  }
+  return -1;
+}
+
 function isSuccessStatus(status: string): boolean {
   const s = String(status || '').toLowerCase();
   return s === 'success' || s === 'completed';
@@ -67,6 +155,119 @@ function isFailedStatus(status: string): boolean {
   const s = String(status || '').toLowerCase();
   return s === 'failed' || s === 'dead' || s === 'aborted';
 }
+
+export function opsMetricsCacheKey(
+  userId: unknown,
+  window: OpsMetricsWindow,
+  date?: string | null,
+): string {
+  const ownerId = normalizeOwnerIdForWrite(userId) || 'none';
+  return `ops:${ownerId}:${window}:${date || ''}`;
+}
+
+export function resolveDigitalOceanForOpsMetrics(
+  cached: DigitalOceanDashboard | undefined,
+  configured: boolean,
+): DigitalOceanDashboard {
+  if (cached) return cached;
+  return {
+    configured,
+    generatedAt: new Date().toISOString(),
+    pending: true,
+    droplets: [],
+  };
+}
+
+export type OpsMetricsTagDefinition = {
+  tag: string;
+  label: string;
+  namespace: string;
+  namespaceLabel: string;
+};
+
+export function rollupOpsMetricsFromRuns(opts: {
+  runs: any[];
+  bounds: OpsMetricsBounds;
+  tagsByMeta: Map<string, string[]>;
+  catalog: OpsMetricsTagDefinition[];
+}) {
+  const inWindow = (opts.runs as any[]).filter((r) => {
+    const ts = runTimestampMs(r);
+    return ts != null && ts >= opts.bounds.sinceMs && ts <= opts.bounds.untilMs;
+  });
+
+  let passed = 0;
+  let failed = 0;
+  let running = 0;
+  let rowsExtracted = 0;
+  let jobsAddedToBoard = 0;
+  const series = opts.bounds.bucketStarts.map((start) => ({
+    t: start,
+    label: new Date(start).toISOString(),
+    total: 0,
+    passed: 0,
+    failed: 0,
+    jobsAdded: 0,
+  }));
+  const tagTotals = new Map<string, { jobsAdded: number; runs: number }>();
+
+  for (const r of inWindow) {
+    const status = String(r.status || '');
+    const jobs = typeof r.jobsAddedToBoard === 'number' ? r.jobsAddedToBoard : 0;
+    if (isSuccessStatus(status)) passed += 1;
+    else if (isFailedStatus(status)) failed += 1;
+    else if (activeStatuses.includes(status.toLowerCase())) running += 1;
+    rowsExtracted += typeof r.rowsExtracted === 'number' ? r.rowsExtracted : 0;
+    jobsAddedToBoard += jobs;
+
+    const ts = runTimestampMs(r);
+    if (ts != null) {
+      const idx = bucketIndexFor(ts, opts.bounds.bucketStarts, opts.bounds.untilMs);
+      if (idx >= 0) {
+        const bucket = series[idx];
+        bucket.total += 1;
+        if (isSuccessStatus(status)) bucket.passed += 1;
+        else if (isFailedStatus(status)) bucket.failed += 1;
+        bucket.jobsAdded += jobs;
+      }
+    }
+
+    const tags = opts.tagsByMeta.get(String(r.robotMetaId)) || [];
+    for (const tag of tags) {
+      const current = tagTotals.get(tag) || { jobsAdded: 0, runs: 0 };
+      current.runs += 1;
+      current.jobsAdded += jobs;
+      tagTotals.set(tag, current);
+    }
+  }
+
+  return {
+    inWindow,
+    totals: {
+      runs: inWindow.length,
+      passed,
+      failed,
+      running,
+      rowsExtracted,
+      jobsAddedToBoard,
+    },
+    series,
+    tags: opts.catalog.map((definition) => {
+      const totals = tagTotals.get(definition.tag);
+      return {
+        tag: definition.tag,
+        label: definition.label,
+        namespace: definition.namespace,
+        namespaceLabel: definition.namespaceLabel,
+        jobsAdded: totals?.jobsAdded ?? 0,
+        runs: totals?.runs ?? 0,
+      };
+    }),
+  };
+}
+
+const activeStatuses = ['running', 'pending', 'queued'];
+const opsMetricsResponseCache = createDashboardSummaryCache<any>();
 
 function runTimestampMs(run: any): number | null {
   if (run?.sortAt) {
@@ -86,30 +287,27 @@ function runTimestampMs(run: any): number | null {
 export async function buildOpsMetrics(opts: {
   userId: string | number;
   window: OpsMetricsWindow;
+  date?: string | null;
+  fresh?: boolean;
 }) {
-  const windowMs = WINDOW_MS[opts.window];
+  const cacheKey = opsMetricsCacheKey(opts.userId, opts.window, opts.date);
+  if (!opts.fresh) {
+    const cached = opsMetricsResponseCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
   const now = Date.now();
-  const since = new Date(now - windowMs);
+  const bounds = resolveOpsMetricsBounds({
+    window: opts.window,
+    date: opts.date,
+    nowMs: now,
+  });
+  const since = new Date(bounds.sinceMs);
+  const until = new Date(bounds.untilMs);
   const sinceIso = since.toISOString();
   const ownerId = normalizeOwnerIdForWrite(opts.userId);
-
-  const robots = await Robot.find(ownerIdFilter(opts.userId))
-    .select(
-      'schedule recording_meta.id recording_meta.tags recording_meta.saasConfig.tags recording_meta.saasConfig.schedule'
-    )
-    .lean();
-  const metaIds = robots
-    .map((r: any) => String(r.recording_meta?.id || ''))
-    .filter(Boolean);
-  const tagsByMeta = new Map<string, string[]>();
-  for (const r of robots as any[]) {
-    const id = String(r.recording_meta?.id || '');
-    const meta = r.recording_meta || {};
-    const fromMeta = Array.isArray(meta.tags) ? meta.tags : null;
-    const fromSaas = Array.isArray(meta.saasConfig?.tags) ? meta.saasConfig.tags : [];
-    const tags = (fromMeta && fromMeta.length ? fromMeta : fromSaas).map((t: any) => String(t));
-    if (id) tagsByMeta.set(id, tags);
-  }
+  const runMatch = buildOwnerRunWindowMatch(opts.userId, since, until);
+  const doWindow = doWindowForOps(opts.window, bounds.isCalendarDay);
 
   let browserPoolStats = { activeBrowsers: 0, browserIds: [] as string[] };
   try {
@@ -125,14 +323,12 @@ export async function buildOpsMetrics(opts: {
     /* pool may be empty during boot */
   }
 
-  const activeStatuses = ['running', 'pending', 'queued'];
-  const ownerRunFilter = buildOwnerRunFilter(opts.userId);
-  const runMatch = {
-    ...ownerRunFilter,
-    sortAt: { $gte: since },
-  };
-
-  const [runs, activeNow, digitalOcean] = await Promise.all([
+  const [robots, runs, activeNow] = await Promise.all([
+    Robot.find(ownerIdFilter(opts.userId))
+      .select(
+        'schedule recording_meta.id recording_meta.tags recording_meta.saasConfig.tags recording_meta.saasConfig.schedule'
+      )
+      .lean(),
     ownerId
       ? Run.find(runMatch)
           .select(
@@ -142,123 +338,66 @@ export async function buildOpsMetrics(opts: {
       : Promise.resolve([]),
     ownerId
       ? Run.countDocuments({
-          ...ownerRunFilter,
+          ...buildOwnerRunFilter(opts.userId),
           status: { $in: activeStatuses },
         })
       : Promise.resolve(0),
-    getDigitalOceanDashboard(doWindowForOps(opts.window)).catch(() => null),
   ]);
 
-  const inWindow = (runs as any[]).filter((r) => {
-    const ts = runTimestampMs(r);
-    return ts != null && ts >= since.getTime();
+  const metaIds = robots
+    .map((r: any) => String(r.recording_meta?.id || ''))
+    .filter(Boolean);
+  const tagsByMeta = new Map<string, string[]>();
+  for (const r of robots as any[]) {
+    const id = String(r.recording_meta?.id || '');
+    const meta = r.recording_meta || {};
+    const fromMeta = Array.isArray(meta.tags) ? meta.tags : null;
+    const fromSaas = Array.isArray(meta.saasConfig?.tags) ? meta.saasConfig.tags : [];
+    const tags = (fromMeta && fromMeta.length ? fromMeta : fromSaas).map((t: any) => String(t));
+    if (id) tagsByMeta.set(id, tags);
+  }
+
+  const rolled = rollupOpsMetricsFromRuns({
+    runs: runs as any[],
+    bounds,
+    tagsByMeta,
+    catalog: getJobCategoryDashboardTags(),
   });
 
-  let passed = 0;
-  let failed = 0;
-  let running = 0;
-  let rowsExtracted = 0;
-  let jobsAddedToBoard = 0;
-  for (const r of inWindow) {
-    const status = String(r.status || '');
-    if (isSuccessStatus(status)) passed += 1;
-    else if (isFailedStatus(status)) failed += 1;
-    else if (activeStatuses.includes(status.toLowerCase())) running += 1;
-    rowsExtracted += typeof r.rowsExtracted === 'number' ? r.rowsExtracted : 0;
-    jobsAddedToBoard += typeof r.jobsAddedToBoard === 'number' ? r.jobsAddedToBoard : 0;
-  }
-
-  const sinceMs = since.getTime();
-  const buckets = bucketCount(opts.window);
-  const bucketMs = windowMs / buckets;
-  const series = Array.from({ length: buckets }, (_, i) => {
-    const start = sinceMs + i * bucketMs;
-    const end = start + bucketMs;
-    return {
-      t: start,
-      label: new Date(start).toISOString(),
-      total: 0,
-      passed: 0,
-      failed: 0,
-      jobsAdded: 0,
-    };
-  });
-
-  for (const r of inWindow) {
-    const ts = runTimestampMs(r);
-    if (ts == null) continue;
-    const idx = Math.min(buckets - 1, Math.max(0, Math.floor((ts - sinceMs) / bucketMs)));
-    const bucket = series[idx];
-    bucket.total += 1;
-    const status = String(r.status || '');
-    if (isSuccessStatus(status)) bucket.passed += 1;
-    else if (isFailedStatus(status)) bucket.failed += 1;
-    bucket.jobsAdded += typeof r.jobsAddedToBoard === 'number' ? r.jobsAddedToBoard : 0;
-  }
-
-  const tagJobs: Array<{
-    tag: string;
-    label: string;
-    namespace: string;
-    namespaceLabel: string;
-    jobsAdded: number;
-    runs: number;
-  }> = [];
-  for (const definition of getRoleDashboardTags()) {
-    let jobs = 0;
-    let runCount = 0;
-    for (const r of inWindow) {
-      const tags = tagsByMeta.get(String(r.robotMetaId)) || [];
-      if (!tags.includes(definition.tag)) continue;
-      runCount += 1;
-      jobs += typeof r.jobsAddedToBoard === 'number' ? r.jobsAddedToBoard : 0;
-    }
-    tagJobs.push({
-      tag: definition.tag,
-      label: definition.label,
-      namespace: definition.namespace,
-      namespaceLabel: definition.namespaceLabel,
-      jobsAdded: jobs,
-      runs: runCount,
-    });
-  }
-
+  const forecastWindowMs = bounds.isCalendarDay ? WINDOW_MS['24h'] : bounds.windowMs;
   const upcomingSchedules = computeUpcomingScheduleMetrics(
     robots as any[],
-    windowMs,
+    forecastWindowMs,
     new Date(now),
   );
 
-  return {
+  const payload = {
     generatedAt: new Date().toISOString(),
     window: opts.window,
-    windowMs,
+    windowMs: bounds.windowMs,
     since: sinceIso,
+    until: until.toISOString(),
+    date: bounds.isCalendarDay ? parseOpsMetricsDate(opts.date) : null,
     totals: {
-      runs: inWindow.length,
-      passed,
-      failed,
-      running,
-      rowsExtracted,
-      jobsAddedToBoard,
+      ...rolled.totals,
       activeRunsNow: activeNow,
       automations: metaIds.length,
     },
     series: {
-      runs: series.map((b) => ({
+      runs: rolled.series.map((b) => ({
         t: b.t,
         label: b.label,
         total: b.total,
         passed: b.passed,
         failed: b.failed,
       })),
-      jobsAdded: series.map((b) => ({
+      jobsAdded: rolled.series.map((b) => ({
         t: b.t,
         label: b.label,
         jobsAdded: b.jobsAdded,
       })),
     },
-    tags: tagJobs,
+    tags: rolled.tags,
     upcomingSchedules,
     compute: {
       scraperWorkerConcurrency: SCRAPER_JOB_CONCURRENCY,
@@ -269,11 +408,12 @@ export async function buildOpsMetrics(opts: {
       memoryUsage: process.memoryUsage(),
       uptimeSeconds: Math.round(process.uptime()),
     },
-    digitalOcean: digitalOcean || {
-      configured: false,
-      generatedAt: new Date().toISOString(),
-      droplets: [],
-      error: 'DigitalOcean metrics unavailable',
-    },
+    digitalOcean: resolveDigitalOceanForOpsMetrics(
+      peekDigitalOceanDashboardCache(doWindow),
+      isDigitalOceanConfigured(),
+    ),
   };
+
+  opsMetricsResponseCache.set(cacheKey, payload);
+  return payload;
 }

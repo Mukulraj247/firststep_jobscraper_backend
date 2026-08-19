@@ -4,6 +4,7 @@
  * in one testable module so automations + opsMetrics stay aligned.
  */
 import { normalizeOwnerIdForWrite, ownerIdVariants } from '../utils/ownerId';
+import { startOfIstDay } from '../../../src/shared/opsTimezone';
 
 export type RunListIndexSpec = {
   keys: Record<string, 1 | -1>;
@@ -138,6 +139,28 @@ export function buildOwnerRunFilter(userId: unknown): Record<string, unknown> {
   };
 }
 
+/**
+ * Owner + time-window match with `sortAt` inside each `$or` branch so Mongo can
+ * use `run_owner_sort_at_desc_idx` instead of filtering sortAt after a full owner scan.
+ */
+export function buildOwnerRunWindowMatch(
+  userId: unknown,
+  fromDate: Date,
+  toDate: Date,
+): Record<string, unknown> {
+  const ownerFilter = buildOwnerRunFilter(userId);
+  const sortAtRange = { $gte: fromDate, $lte: toDate };
+  if (!('$or' in ownerFilter) || !Array.isArray(ownerFilter.$or)) {
+    return { ...ownerFilter, sortAt: sortAtRange };
+  }
+  return {
+    $or: ownerFilter.$or.map((branch) => ({
+      ...(branch as Record<string, unknown>),
+      sortAt: sortAtRange,
+    })),
+  };
+}
+
 /** Expands owner scope with owned automation ids for rows missing owner fields. */
 export function buildOwnerRunScope(
   userId: unknown,
@@ -202,6 +225,39 @@ export function buildRunSortAtRangeMatch(
   if (fromDate) range.$gte = fromDate;
   if (toDate) range.$lt = toDate;
   return { [sortField]: range };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** `date=YYYY-MM-DD` is an IST calendar day. `from`/`to` stay raw ISO instants. */
+export function parseRunListDateQuery(input: {
+  date?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): { fromDate: Date | null; toDate: Date | null } {
+  const dateRaw = String(input.date || '').trim();
+  if (dateRaw) {
+    try {
+      const fromDate = startOfIstDay(dateRaw);
+      return { fromDate, toDate: new Date(fromDate.getTime() + DAY_MS) };
+    } catch {
+      return { fromDate: null, toDate: null };
+    }
+  }
+
+  const fromRaw = String(input.from || '').trim();
+  const toRaw = String(input.to || '').trim();
+  let fromDate: Date | null = null;
+  let toDate: Date | null = null;
+  if (fromRaw) {
+    const parsed = new Date(fromRaw);
+    if (!Number.isNaN(parsed.getTime())) fromDate = parsed;
+  }
+  if (toRaw) {
+    const parsed = new Date(toRaw);
+    if (!Number.isNaN(parsed.getTime())) toDate = parsed;
+  }
+  return { fromDate, toDate };
 }
 
 /**

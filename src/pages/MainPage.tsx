@@ -8,6 +8,7 @@ import { DashboardPage } from './DashboardPage';
 import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
+import { jobBoardHidesScrollbar, jobBoardScrollSx } from '../features/jobs/jobBoardPageBehavior';
 import { useGlobalInfoStore, useCacheInvalidation } from "../context/globalInfo";
 import { createAndRunRecording, createRunForStoredRecording, CreateRunResponseWithQueue, interpretStoredRecording, notifyAboutAbort, scheduleStoredRecording } from "../api/storage";
 import { io, Socket } from "socket.io-client";
@@ -338,18 +339,17 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
     }
   }
 
-  const growsWithContent = content === 'automations' || content === 'failures' || content === 'runs' || content === 'robots';
-
   return (
     <AppShell value={content} handleChangeContent={setContent}>
       <Box
         sx={{
           flex: 1,
-          minHeight: growsWithContent ? '100%' : 0,
+          minHeight: 0,
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          overflow: growsWithContent ? 'visible' : 'auto',
+          overflow: 'auto',
+          ...(content === 'jobs' && jobBoardHidesScrollbar() ? jobBoardScrollSx() : {}),
         }}
       >
         {DisplayContent()}

@@ -35,8 +35,8 @@ export interface JobBoardJob {
 }
 
 export interface JobBoardFilters {
-  companies: string[];
   categories: string[];
+  locations: string[];
 }
 
 export interface JobBoardListResponse {
@@ -54,8 +54,11 @@ export const listJobs = async (params?: {
   page?: number;
   limit?: number;
   q?: string;
-  company?: string;
   category?: string;
+  location?: string;
+  workMode?: string;
+  jobType?: string;
+  added?: string;
   runId?: string;
 }): Promise<JobBoardListResponse> => {
   const page = params?.page ?? 1;
@@ -65,8 +68,11 @@ export const listJobs = async (params?: {
       page,
       limit,
       ...(params?.q ? { q: params.q } : {}),
-      ...(params?.company ? { company: params.company } : {}),
       ...(params?.category ? { category: params.category } : {}),
+      ...(params?.location ? { location: params.location } : {}),
+      ...(params?.workMode ? { workMode: params.workMode } : {}),
+      ...(params?.jobType ? { jobType: params.jobType } : {}),
+      ...(params?.added && params.added !== 'all' ? { added: params.added } : {}),
       ...(params?.runId ? { runId: params.runId } : {}),
     },
     withCredentials: true,
@@ -75,7 +81,7 @@ export const listJobs = async (params?: {
   return {
     jobs: data.jobs || [],
     pagination: data.pagination || { page: 1, limit, total: 0, totalPages: 1 },
-    filters: data.filters || { companies: [], categories: [] },
+    filters: data.filters || { categories: [], locations: [] },
   };
 };
 

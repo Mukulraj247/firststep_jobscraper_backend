@@ -5,6 +5,8 @@ import {
   HAMBURGER_BUTTON_ID,
   MAIN_CONTENT_ID,
   NAVBAR_LANDMARK_TAG,
+  NAVBAR_LOGO_MAX_HEIGHT_PX,
+  NAVBAR_MIN_HEIGHT_PX,
   SIDEBAR_STORAGE_KEY,
   SIDEBAR_WIDTH_COLLAPSED,
   SIDEBAR_WIDTH_EXPANDED,
@@ -19,6 +21,9 @@ import {
   providerPathAfterNavigation,
   readSidebarCollapsed,
   reservedSidebarWidth,
+  desktopSidebarPinSx,
+  appShellRootSx,
+  appShellMainSx,
   shouldMoveFocusToMain,
   shouldRestoreHamburgerOnDrawerClose,
   shouldRenderSkipLink,
@@ -32,8 +37,13 @@ import {
   sidebarWidthTransition,
   skipLinkComesBeforeNavbar,
   skipLinkIsFirstTabStop,
+  navbarLogoImgStyle,
 } from './appShellBehavior';
-import { FOCUS_VISIBLE_RING, MAIN_CONTENT_FOCUS_SELECTORS } from './ops/dashboardTokens';
+import {
+  FOCUS_VISIBLE_INTERACTIVE_SELECTORS,
+  FOCUS_VISIBLE_RING,
+  MAIN_CONTENT_FOCUS_SELECTORS,
+} from './ops/dashboardTokens';
 
 describe('shouldUseMobileDrawer', () => {
   it('uses a temporary drawer below the MUI md 900px cutoff', () => {
@@ -75,6 +85,20 @@ describe('desktop sidebar collapse', () => {
     expect(reservedSidebarWidth(899, true)).toBe(0);
     expect(reservedSidebarWidth(900, false)).toBe(240);
     expect(reservedSidebarWidth(1280, true)).toBe(76);
+  });
+
+  it('pins the desktop sidebar and keeps only main content in the scrollport', () => {
+    expect(appShellRootSx()).toMatchObject({ height: '100%', overflow: 'hidden' });
+    expect(desktopSidebarPinSx()).toMatchObject({
+      position: 'sticky',
+      top: 0,
+      height: '100%',
+      overflow: 'hidden',
+    });
+    expect(appShellMainSx()).toMatchObject({
+      overflow: 'hidden',
+      minHeight: 0,
+    });
   });
 });
 
@@ -254,6 +278,18 @@ describe('navbar landmark', () => {
   it('uses a header element for the bar', () => {
     expect(NAVBAR_LANDMARK_TAG).toBe('header');
   });
+
+  it('keeps the centered logo inside the bar so it cannot steal clicks on the page', () => {
+    expect(NAVBAR_MIN_HEIGHT_PX).toBeGreaterThanOrEqual(56);
+    expect(NAVBAR_LOGO_MAX_HEIGHT_PX).toBeGreaterThanOrEqual(44);
+    expect(NAVBAR_LOGO_MAX_HEIGHT_PX).toBeLessThan(NAVBAR_MIN_HEIGHT_PX);
+  });
+
+  it('does not round the wordmark into a white face/halo behind the mark', () => {
+    expect(navbarLogoImgStyle().borderRadius).toBeUndefined();
+    expect(navbarLogoImgStyle().objectFit).toBe('contain');
+    expect(navbarLogoImgStyle().width).toBe('auto');
+  });
 });
 
 describe('global focus-visible ring', () => {
@@ -265,5 +301,11 @@ describe('global focus-visible ring', () => {
   it('includes a 2px ring on #main-content focus and focus-visible', () => {
     expect(MAIN_CONTENT_FOCUS_SELECTORS).toContain('[id="main-content"]:focus');
     expect(MAIN_CONTENT_FOCUS_SELECTORS).toContain('[id="main-content"]:focus-visible');
+  });
+
+  it('does not put a second outline on outlined inputs (MUI fieldset is already the border)', () => {
+    const joined = FOCUS_VISIBLE_INTERACTIVE_SELECTORS.join(', ');
+    expect(joined).not.toMatch(/MuiOutlinedInput-root:focus-within/);
+    expect(joined).not.toMatch(/MuiOutlinedInput-root:focus-visible/);
   });
 });

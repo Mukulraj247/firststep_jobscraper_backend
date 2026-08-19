@@ -36,7 +36,7 @@ export function RunsEmptyState({
           No runs match these filters
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 420 }}>
-          Try a different search, date, status, jobs count, or duration — or clear filters to see all automations.
+          Try a different search, day, status, jobs count, or duration — or clear extra filters to see today.
         </Typography>
         <Button
           variant="outlined"
@@ -66,10 +66,10 @@ export function RunsEmptyState({
         <PlayCircleOutlineIcon />
       </Box>
       <Typography variant="h6" fontWeight={700}>
-        No runs yet
+        No runs on this day
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 420 }}>
-        Once your automations start running, every execution will appear here grouped by automation.
+        Nothing ran on this IST day yet. Pick another of the last 7 days, or wait for the next scheduled run.
       </Typography>
     </Stack>
   );

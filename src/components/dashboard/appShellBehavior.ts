@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react';
+
 export const DESKTOP_BREAKPOINT_PX = 900;
 export const SIDEBAR_WIDTH_EXPANDED = 240;
 export const SIDEBAR_WIDTH_COLLAPSED = 76;
@@ -6,6 +8,19 @@ export const MAIN_CONTENT_ID = 'main-content';
 export const SKIP_LINK_CLASS = 'skip-link';
 export const SKIP_LINK_HREF = '#main-content';
 export const SKIP_LINK_LABEL = 'Skip to main content';
+export const NAVBAR_MIN_HEIGHT_PX = 56;
+export const NAVBAR_LOGO_MAX_HEIGHT_PX = 44;
+
+export function navbarLogoImgStyle(): CSSProperties {
+  return {
+    height: NAVBAR_LOGO_MAX_HEIGHT_PX,
+    width: 'auto',
+    maxHeight: NAVBAR_LOGO_MAX_HEIGHT_PX,
+    objectFit: 'contain',
+    display: 'block',
+    pointerEvents: 'none',
+  };
+}
 /** Skip link is rendered in PageWrapper before the navbar so it is the first tab stop. */
 export const skipLinkIsFirstTabStop = true;
 export const DRAWER_ARIA_LABEL = 'Main navigation';
@@ -151,4 +166,27 @@ export function persistSidebarCollapsed(
 
 export function shouldShowHamburger(isMobile: boolean, shellMounted: boolean): boolean {
   return isMobile && shellMounted;
+}
+
+export function appShellRootSx() {
+  return {
+    height: '100%' as const,
+    overflow: 'hidden' as const,
+  };
+}
+
+export function desktopSidebarPinSx() {
+  return {
+    position: 'sticky' as const,
+    top: 0,
+    height: '100%' as const,
+    overflow: 'hidden' as const,
+  };
+}
+
+export function appShellMainSx() {
+  return {
+    overflow: 'hidden' as const,
+    minHeight: 0 as const,
+  };
 }

@@ -1,10 +1,6 @@
-import { ScrapersPage, type ScrapersPageProps } from '../../features/scrapers/ScrapersPage';
-
-export type RecordingsTableProps = ScrapersPageProps & {
-  handleEditRecording?: (id: string, fileName: string) => void;
-};
+import { ScrapersPage } from '../../features/scrapers/ScrapersPage';
 
 /** @deprecated Use ScrapersPage from features/scrapers */
-export const RecordingsTable = (props: RecordingsTableProps) => <ScrapersPage {...props} />;
+export const RecordingsTable = () => <ScrapersPage />;
 
 export { ScrapersPage };

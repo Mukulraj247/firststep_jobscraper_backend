@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { FIRSTSTEP, FOCUS_VISIBLE_RING, MAIN_CONTENT_FOCUS_SELECTORS } from '../components/dashboard/ops/dashboardTokens';
+import { FIRSTSTEP, FOCUS_VISIBLE_INTERACTIVE_SELECTORS, FOCUS_VISIBLE_RING, MAIN_CONTENT_FOCUS_SELECTORS } from '../components/dashboard/ops/dashboardTokens';
 
 export { FOCUS_VISIBLE_RING };
 
@@ -38,8 +38,24 @@ const baselineA11y = (ringColor: string) => ({
   [MAIN_CONTENT_FOCUS_SELECTORS.join(', ')]: {
     ...focusVisibleFor(ringColor),
   },
-  'button:focus-visible, a:focus-visible, [role="button"]:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .MuiButtonBase-root:focus-visible, .MuiChip-root:focus-visible, .MuiPaginationItem-root:focus-visible, .MuiIconButton-root:focus-visible, .MuiMenuItem-root:focus-visible, .MuiInputBase-input:focus-visible': {
+  [FOCUS_VISIBLE_INTERACTIVE_SELECTORS.join(', ')]: {
     ...focusVisibleFor(ringColor),
+  },
+  '.MuiOutlinedInput-root, .MuiOutlinedInput-root:focus, .MuiOutlinedInput-root:focus-visible, .MuiOutlinedInput-root:focus-within': {
+    outline: 'none',
+  },
+  '.MuiOutlinedInput-input:focus, .MuiOutlinedInput-input:focus-visible': {
+    outline: 'none',
+  },
+  '.MuiOutlinedInput-input[type="date"]::-webkit-calendar-picker-indicator': {
+    border: 'none',
+    outline: 'none',
+    padding: 0,
+    marginLeft: 4,
+    cursor: 'pointer',
+  },
+  '.MuiOutlinedInput-input[type="date"]::-webkit-inner-spin-button': {
+    display: 'none',
   },
 });
 
@@ -183,6 +199,19 @@ const lightTheme = createTheme({
         },
       },
     },
+    MuiTextField: {
+      defaultProps: {
+        variant: 'outlined',
+      },
+    },
+    MuiInput: {
+      styleOverrides: {
+        underline: {
+          '&:before, &:after': { borderBottom: 'none' },
+          '&:hover:not(.Mui-disabled, .Mui-error):before': { borderBottom: 'none' },
+        },
+      },
+    },
     MuiPaginationItem: {
       styleOverrides: {
         root: {
@@ -192,7 +221,20 @@ const lightTheme = createTheme({
     },
     MuiOutlinedInput: {
       styleOverrides: {
-        input: lightFocus,
+        root: {
+          '&:before, &:after': { display: 'none' },
+          outline: 'none',
+          '&:focus, &:focus-visible, &:focus-within': { outline: 'none' },
+          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+            borderWidth: 1,
+          },
+        },
+        notchedOutline: {
+          borderWidth: 1,
+        },
+        input: {
+          '&:focus, &:focus-visible': { outline: 'none' },
+        },
       },
     },
     MuiMenuItem: {
@@ -359,6 +401,19 @@ const darkTheme = createTheme({
         },
       },
     },
+    MuiTextField: {
+      defaultProps: {
+        variant: 'outlined',
+      },
+    },
+    MuiInput: {
+      styleOverrides: {
+        underline: {
+          '&:before, &:after': { borderBottom: 'none' },
+          '&:hover:not(.Mui-disabled, .Mui-error):before': { borderBottom: 'none' },
+        },
+      },
+    },
     MuiPaginationItem: {
       styleOverrides: {
         root: {
@@ -368,7 +423,20 @@ const darkTheme = createTheme({
     },
     MuiOutlinedInput: {
       styleOverrides: {
-        input: darkFocus,
+        root: {
+          '&:before, &:after': { display: 'none' },
+          outline: 'none',
+          '&:focus, &:focus-visible, &:focus-within': { outline: 'none' },
+          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+            borderWidth: 1,
+          },
+        },
+        notchedOutline: {
+          borderWidth: 1,
+        },
+        input: {
+          '&:focus, &:focus-visible': { outline: 'none' },
+        },
       },
     },
     MuiMenuItem: {

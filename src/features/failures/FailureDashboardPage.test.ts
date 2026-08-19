@@ -51,6 +51,7 @@ import {
   labelledSelectContract,
   normalizeReasonCounts,
   paginationControlSx,
+  parseFailureDashboardSearch,
   parseRetryConflict,
   pendingActionKey,
   failuresTableScrollSx,
@@ -253,6 +254,21 @@ describe('retry idempotency and active-run conflict', () => {
       retrySequence: 2,
     }, 'Acme Scout')).toMatch(/run-old/);
     expect(retrySuccessHref('run-new')).toBe('/run/run-new');
+  });
+});
+
+describe('parseFailureDashboardSearch', () => {
+  it('reads window and IST day bounds from the dashboard Failed link', () => {
+    expect(parseFailureDashboardSearch('window=6h')).toEqual({ timeWindow: '6h' });
+    expect(
+      parseFailureDashboardSearch(
+        'from=2026-08-10T18:30:00.000Z&to=2026-08-11T18:29:59.999Z',
+      ),
+    ).toEqual({
+      timeWindow: '1h',
+      from: '2026-08-10T18:30:00.000Z',
+      to: '2026-08-11T18:29:59.999Z',
+    });
   });
 });
 

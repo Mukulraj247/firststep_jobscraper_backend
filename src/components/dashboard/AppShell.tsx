@@ -15,6 +15,9 @@ import {
   HAMBURGER_BUTTON_ID,
   MAIN_CONTENT_ID,
   SIDEBAR_WIDTH_EXPANDED,
+  appShellMainSx,
+  appShellRootSx,
+  desktopSidebarPinSx,
   drawerDisableRestoreFocus,
   drawerTransitionDuration,
   nextDrawerOpenAfterRouteChange,
@@ -32,6 +35,9 @@ export {
   HAMBURGER_BUTTON_ID,
   MAIN_CONTENT_ID,
   NAVBAR_LANDMARK_TAG,
+  NAVBAR_LOGO_MAX_HEIGHT_PX,
+  NAVBAR_MIN_HEIGHT_PX,
+  navbarLogoImgStyle,
   SIDEBAR_STORAGE_KEY,
   SIDEBAR_WIDTH_COLLAPSED,
   SIDEBAR_WIDTH_EXPANDED,
@@ -46,6 +52,9 @@ export {
   providerPathAfterNavigation,
   readSidebarCollapsed,
   reservedSidebarWidth,
+  desktopSidebarPinSx,
+  appShellRootSx,
+  appShellMainSx,
   shouldMoveFocusToMain,
   shouldRestoreHamburgerOnDrawerClose,
   shouldRenderSkipLink,
@@ -242,13 +251,11 @@ export const AppShell = ({ value, handleChangeContent, children }: AppShellProps
       sx={{
         display: 'flex',
         alignItems: 'stretch',
-        minHeight: '100%',
+        ...appShellRootSx(),
         flex: 1,
-        height: 'auto',
         width: '100%',
         minWidth: 0,
         maxWidth: '100%',
-        overflow: 'visible',
       }}
     >
       {!isMobile ? (
@@ -257,11 +264,10 @@ export const AppShell = ({ value, handleChangeContent, children }: AppShellProps
             width: sidebarWidth,
             flexShrink: 0,
             minWidth: 0,
-            alignSelf: 'stretch',
-            minHeight: '100%',
             zIndex: 1000,
             transition: sidebarWidthTransition(false),
             '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+            ...desktopSidebarPinSx(),
           }}
         >
           {nav}
@@ -299,8 +305,7 @@ export const AppShell = ({ value, handleChangeContent, children }: AppShellProps
         sx={{
           flex: 1,
           minWidth: 0,
-          minHeight: '100%',
-          overflow: 'visible',
+          ...appShellMainSx(),
           display: 'flex',
           flexDirection: 'column',
         }}

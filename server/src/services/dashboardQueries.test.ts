@@ -16,6 +16,7 @@ import {
   DASHBOARD_SUMMARY_CACHE_TTL_MS_MIN,
   DASHBOARD_SUMMARY_CACHE_TTL_MS_MAX,
   buildOwnerRunFilter,
+  buildOwnerRunWindowMatch,
   buildOwnerRunScope,
   buildRunListSort,
   buildRunListSortAtStage,
@@ -31,6 +32,7 @@ import {
   resolveRunListIndexHint,
   clampDashboardSummaryCacheTtlMs,
   createDashboardSummaryCache,
+  parseRunListDateQuery,
   RUN_LIST_SORT_FIELD,
   RUN_RESOLVED_DURATION_FIELD,
   MAX_SANE_LIST_DURATION_MS,
@@ -71,6 +73,31 @@ describe('buildOwnerRunFilter', () => {
 
   it('returns an impossible match when userId is missing', () => {
     expect(buildOwnerRunFilter(null)).toEqual({ ownerId: '__none__' });
+  });
+});
+
+describe('buildOwnerRunWindowMatch', () => {
+  it('puts the sortAt window inside each owner $or branch so Mongo can use owner+sortAt indexes', () => {
+    const from = new Date('2026-08-18T10:00:00.000Z');
+    const to = new Date('2026-08-18T16:00:00.000Z');
+    const match = buildOwnerRunWindowMatch(42, from, to);
+
+    expect(match).toEqual({
+      $or: [
+        { ownerId: '42', sortAt: { $gte: from, $lte: to } },
+        { runByUserId: { $in: [42, '42'] }, sortAt: { $gte: from, $lte: to } },
+      ],
+    });
+    expect(match).not.toHaveProperty('sortAt');
+  });
+
+  it('keeps the impossible owner match when userId is missing', () => {
+    const from = new Date('2026-08-18T10:00:00.000Z');
+    const to = new Date('2026-08-18T16:00:00.000Z');
+    expect(buildOwnerRunWindowMatch(null, from, to)).toEqual({
+      ownerId: '__none__',
+      sortAt: { $gte: from, $lte: to },
+    });
   });
 });
 
@@ -124,6 +151,24 @@ describe('buildRunSortAtRangeMatch', () => {
     const to = new Date('2026-08-18T00:00:00.000Z');
     expect(buildRunSortAtRangeMatch(from, to)).toEqual({
       listSortAt: { $gte: from, $lt: to },
+    });
+  });
+});
+
+describe('parseRunListDateQuery', () => {
+  it('treats date=YYYY-MM-DD as a full IST calendar day, not UTC midnight', () => {
+    expect(parseRunListDateQuery({ date: '2026-08-18' })).toEqual({
+      fromDate: new Date('2026-08-17T18:30:00.000Z'),
+      toDate: new Date('2026-08-18T18:30:00.000Z'),
+    });
+  });
+
+  it('keeps explicit from/to ISO bounds when no date is sent', () => {
+    const from = '2026-08-17T18:30:00.000Z';
+    const to = '2026-08-18T18:30:00.000Z';
+    expect(parseRunListDateQuery({ from, to })).toEqual({
+      fromDate: new Date(from),
+      toDate: new Date(to),
     });
   });
 });

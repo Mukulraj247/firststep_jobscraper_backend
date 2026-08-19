@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   alpha,
+  Autocomplete,
   Avatar,
   Box,
   Button,
@@ -9,13 +10,9 @@ import {
   CircularProgress,
   Dialog,
   DialogContent,
-  FormControl,
   IconButton,
   InputAdornment,
-  InputLabel,
-  MenuItem,
   Pagination,
-  Select,
   Stack,
   TextField,
   Typography,
@@ -42,9 +39,38 @@ import {
   splitJobDescriptionSections,
   extractCardHighlights,
 } from '../../utils/jobDescriptionSections';
+import { OpsHeroBackdrop } from '../dashboard/ops/OpsHeroBackdrop';
+import {
+  FIRSTSTEP,
+  RADIUS,
+  cardSx,
+  fadeUpSx,
+  heroGlassFormControlSx,
+  heroGlassOverlineSx,
+  heroGlassPanelSx,
+  heroGlassPillTextSx,
+  heroGlassSubtitleSx,
+  heroGlassTitleSx,
+  tint,
+} from '../dashboard/ops/dashboardTokens';
+import {
+  ADDED_DATE_PRESETS,
+  JOB_TYPE_OPTIONS,
+  WORK_MODE_OPTIONS,
+  formatFacetOptionLabel,
+  formatJobBoardDate,
+  formatJobBoardRelative,
+  hasActiveJobBoardFilters,
+  jobBoardFacetListboxSx,
+  jobBoardFilterChipSx,
+  jobBoardPageRootOverflow,
+  jobBoardScrollSx,
+  resolveJobDisplayInstant,
+  type JobBoardAddedPreset,
+} from '../../features/jobs/jobBoardPageBehavior';
 
-const ACCENT = '#ff00c3';
-const TEAL = '#023345';
+const ACCENT = FIRSTSTEP.tealDark;
+const TEAL = FIRSTSTEP.navy;
 const PAGE_SIZE = 15;
 
 /** Known brand marks when enrichment didn't capture a logo. */
@@ -135,27 +161,12 @@ const colorForCompany = (name: string): string => {
   return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
 };
 
-const formatPosted = (value: unknown): string => {
-  const raw = asText(value);
-  if (!raw) return '';
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return raw;
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+const formatPosted = (posted: unknown, createdAt?: unknown): string => {
+  return formatJobBoardDate(resolveJobDisplayInstant(posted, createdAt));
 };
 
-const formatRelative = (value: unknown): string => {
-  const raw = asText(value);
-  if (!raw) return '';
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return raw;
-  const diffMs = Date.now() - d.getTime();
-  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (days < 0) return formatPosted(value);
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days}d ago`;
-  if (days < 30) return `${Math.floor(days / 7)}w ago`;
-  return formatPosted(value);
+const formatRelative = (posted: unknown, createdAt?: unknown): string => {
+  return formatJobBoardRelative(resolveJobDisplayInstant(posted, createdAt));
 };
 
 const snippet = (text: string, max = 110): string => {
@@ -211,7 +222,7 @@ const SoftChip: React.FC<{ label: string; tone?: 'default' | 'teal' | 'accent' }
       : tone === 'accent'
         ? alpha(ACCENT, 0.1)
         : alpha('#0f172a', 0.04);
-  const color = tone === 'teal' ? TEAL : tone === 'accent' ? '#b8008f' : '#475569';
+  const color = tone === 'teal' ? TEAL : tone === 'accent' ? FIRSTSTEP.tealDark : '#475569';
   const text = asText(label);
   const short = text.length > 42 ? `${text.slice(0, 41).trim()}…` : text;
   return (
@@ -416,8 +427,8 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
     employmentHint: parsed.employmentHint,
     remoteHint: parsed.remoteHint,
   };
-  const posted = formatRelative(data.date || job.createdAt);
-  const postedExact = formatPosted(data.date || job.createdAt);
+  const posted = formatRelative(data.date, job.createdAt);
+  const postedExact = formatPosted(data.date, job.createdAt);
   const logo = resolveCompanyLogo(company, asText(data.companyLogoUrl));
   const applyUrl = asText(data.applyUrl) || asText(data.jobUrl);
   const experience =
@@ -767,7 +778,7 @@ const JobDetailModal: React.FC<{
   const jobUrl = asText(data.jobUrl);
   const applyUrl = asText(data.applyUrl) || jobUrl;
   const description = toReadableDescription(data.jobDescription);
-  const posted = formatPosted(data.date || job?.createdAt);
+  const posted = formatPosted(data.date, job?.createdAt);
   const logo = resolveCompanyLogo(company, asText(data.companyLogoUrl));
   const experience =
     typeof data.jobExperience === 'number' && data.jobExperience > 0
@@ -836,17 +847,17 @@ const JobDetailModal: React.FC<{
               target="_blank"
               rel="noopener noreferrer"
               sx={{
-                bgcolor: ACCENT,
-                color: '#fff',
+                bgcolor: FIRSTSTEP.teal,
+                color: FIRSTSTEP.navyDeep,
                 fontWeight: 700,
                 textTransform: 'none',
                 px: 2.5,
                 py: 1,
                 borderRadius: 2,
-                boxShadow: `0 4px 14px ${alpha(ACCENT, 0.3)}`,
+                boxShadow: `0 4px 14px ${tint(FIRSTSTEP.teal, 0.34)}`,
                 whiteSpace: 'nowrap',
-                '&:hover': { bgcolor: '#e000ad' },
-                '&.Mui-disabled': { bgcolor: alpha(ACCENT, 0.35), color: '#fff' },
+                '&:hover': { bgcolor: '#5fc4b9' },
+                '&.Mui-disabled': { bgcolor: tint(FIRSTSTEP.teal, 0.35), color: FIRSTSTEP.navyDeep },
               }}
             >
               {t('jobboard.apply')}
@@ -860,12 +871,14 @@ const JobDetailModal: React.FC<{
 
       <DialogContent
         ref={scrollRef}
-        sx={{
-          flex: 1,
-          overflow: 'auto',
-          px: { xs: 2, sm: 3 },
-          py: 2.5,
-        }}
+        sx={[
+          jobBoardScrollSx(),
+          {
+            flex: 1,
+            px: { xs: 2, sm: 3 },
+            py: 2.5,
+          },
+        ]}
       >
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
@@ -953,26 +966,100 @@ const JobDetailModal: React.FC<{
   );
 };
 
+const FILTER_CAPTION_SX = {
+  fontWeight: 700,
+  letterSpacing: 0.6,
+  color: FIRSTSTEP.textMuted,
+} as const;
+
+const JobBoardFacetAutocomplete: React.FC<{
+  label: string;
+  placeholder: string;
+  value: string;
+  options: string[];
+  onChange: (next: string) => void;
+}> = ({ label, placeholder, value, options, onChange }) => {
+  const merged = useMemo(() => {
+    if (value && !options.includes(value)) return [value, ...options];
+    return options;
+  }, [options, value]);
+
+  return (
+    <Autocomplete
+      size="small"
+      options={merged}
+      value={value || null}
+      onChange={(_event, next) => onChange(next ?? '')}
+      getOptionLabel={(option) => formatFacetOptionLabel(option)}
+      isOptionEqualToValue={(a, b) => a === b}
+      autoHighlight
+      clearOnEscape
+      ListboxProps={{ sx: jobBoardFacetListboxSx() }}
+      renderOption={(props, option) => (
+        <li {...props} key={option} title={option}>
+          {formatFacetOptionLabel(option, 72)}
+        </li>
+      )}
+      renderInput={(params) => (
+        <TextField {...params} label={label} placeholder={placeholder} />
+      )}
+      sx={{ minWidth: 200, flex: '1 1 200px', ...heroGlassFormControlSx() }}
+    />
+  );
+};
+
+const JobBoardChipFilter: React.FC<{
+  caption: string;
+  value: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  onChange: (next: string) => void;
+}> = ({ caption, value, options, onChange }) => (
+  <Stack spacing={1.25}>
+    <Typography variant="caption" sx={FILTER_CAPTION_SX}>
+      {caption}
+    </Typography>
+    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+      {options.map((option) => {
+        const selected = value === option.value;
+        return (
+          <Chip
+            key={option.value || 'any'}
+            clickable
+            size="small"
+            label={option.label}
+            onClick={() => onChange(option.value)}
+            color={selected ? 'primary' : 'default'}
+            variant={selected ? 'filled' : 'outlined'}
+            sx={jobBoardFilterChipSx(selected)}
+          />
+        );
+      })}
+    </Stack>
+  </Stack>
+);
+
 export const JobBoardPage: React.FC = () => {
   const { t } = useTranslation();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
 
   const [jobs, setJobs] = useState<JobBoardJob[]>([]);
-  const [filters, setFilters] = useState<JobBoardFilters>({ companies: [], categories: [] });
+  const [filters, setFilters] = useState<JobBoardFilters>({ categories: [], locations: [] });
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 });
   const [page, setPage] = useState(1);
   const [q, setQ] = useState('');
   const [qDraft, setQDraft] = useState('');
-  const [company, setCompany] = useState('');
+  const [added, setAdded] = useState<JobBoardAddedPreset>('all');
   const [category, setCategory] = useState('');
+  const [location, setLocation] = useState('');
+  const [workMode, setWorkMode] = useState('');
+  const [jobType, setJobType] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobBoardJob | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const gridTopRef = useRef<HTMLDivElement | null>(null);
 
   const loadJobs = useCallback(async () => {
     setLoading(true);
@@ -982,29 +1069,29 @@ export const JobBoardPage: React.FC = () => {
         page,
         limit: PAGE_SIZE,
         q: q || undefined,
-        company: company || undefined,
         category: category || undefined,
+        location: location || undefined,
+        workMode: workMode || undefined,
+        jobType: jobType || undefined,
+        added,
       });
       setJobs(res.jobs);
       setPagination(res.pagination);
-      setFilters(res.filters);
+      setFilters({
+        categories: res.filters?.categories || [],
+        locations: res.filters?.locations || [],
+      });
     } catch {
-      setError(t('jobboard.load_error'));
+      setError(t('jobboard.load_error', { defaultValue: 'Could not load jobs.' }));
       setJobs([]);
     } finally {
       setLoading(false);
     }
-  }, [page, q, company, category, t]);
+  }, [page, q, category, location, workMode, jobType, added, t]);
 
   useEffect(() => {
     void loadJobs();
-  }, [page, q, company, category]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (gridTopRef.current) {
-      gridTopRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    }
-  }, [page, q, company, category]);
+  }, [loadJobs]);
 
   useEffect(() => {
     if (!selectedId || !modalOpen) {
@@ -1056,186 +1143,262 @@ export const JobBoardPage: React.FC = () => {
     setPage(1);
   };
 
-  const panelBg = isDark ? alpha('#fff', 0.03) : '#fff';
+  const resetFilters = () => {
+    setQDraft('');
+    setQ('');
+    setAdded('all');
+    setCategory('');
+    setLocation('');
+    setWorkMode('');
+    setJobType('');
+    setPage(1);
+  };
+
+  const filtersActive = hasActiveJobBoardFilters({
+    q,
+    added,
+    category,
+    location,
+    workMode,
+    jobType,
+  });
+
   const limit = pagination.limit || PAGE_SIZE;
   const total = pagination.total || 0;
   const rangeFrom = total === 0 ? 0 : (page - 1) * limit + 1;
   const rangeTo = Math.min(page * limit, total);
+  const controlSx = heroGlassFormControlSx();
 
   return (
     <Box
       sx={{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-        bgcolor: isDark ? 'transparent' : alpha(TEAL, 0.02),
+        overflow: jobBoardPageRootOverflow(),
+        bgcolor: isDark ? 'transparent' : FIRSTSTEP.surface,
+        px: { xs: 2, md: 3 },
+        pt: 2.5,
+        pb: 3,
       }}
     >
-      <Box ref={gridTopRef} sx={{ flexShrink: 0, px: { xs: 2, md: 3 }, pt: 2.5, pb: 2 }}>
-        <Stack direction="row" alignItems="baseline" spacing={1.5} mb={0.5}>
-          <Typography
-            sx={{
-              fontWeight: 800,
-              fontSize: { xs: '1.5rem', md: '1.75rem' },
-              letterSpacing: '-0.03em',
-              color: TEAL,
-            }}
-          >
-            {t('jobboard.heading')}
-          </Typography>
-          {total > 0 && (
-            <Chip
-              size="small"
-              label={total}
-              sx={{ bgcolor: alpha(ACCENT, 0.12), color: '#b8008f', fontWeight: 700, height: 24 }}
-            />
-          )}
-        </Stack>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {total > 0
-            ? t('jobboard.heading_subtitle', { count: total })
-            : t('jobboard.heading_subtitle_empty')}
-        </Typography>
+      <Box sx={[fadeUpSx(0), heroGlassPanelSx({ shadow: 'lifted' }), { p: { xs: 2.5, md: 3 }, mb: 2 }]}>
+        <OpsHeroBackdrop />
+        <Stack
+          direction={{ xs: 'column', lg: 'row' }}
+          spacing={{ xs: 2.5, lg: 4 }}
+          alignItems={{ xs: 'stretch', lg: 'flex-start' }}
+          sx={{ position: 'relative', zIndex: 1 }}
+        >
+          <Box sx={{ minWidth: 0, flex: { lg: '0 0 320px' }, maxWidth: { lg: 360 } }}>
+            <Typography variant="overline" sx={heroGlassOverlineSx}>
+              Hiring pipeline
+            </Typography>
+            <Typography sx={heroGlassTitleSx('lg')}>
+              {t('jobboard.heading', { defaultValue: 'Job board' })}
+            </Typography>
+            <Typography variant="body2" sx={{ ...heroGlassSubtitleSx, maxWidth: 360 }}>
+              Structured roles from Scout-X scrapes.
+            </Typography>
+            <Stack direction="row" alignItems="baseline" spacing={1.25} sx={{ mt: 2 }}>
+              <Typography
+                sx={{
+                  fontWeight: 800,
+                  fontSize: { xs: '2.4rem', md: '3rem' },
+                  lineHeight: 1,
+                  letterSpacing: '-0.04em',
+                  color: FIRSTSTEP.navyDeep,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {total.toLocaleString('en-IN')}
+              </Typography>
+              <Typography sx={{ ...heroGlassPillTextSx, pb: 0.4 }}>
+                {total === 1 ? 'job' : 'jobs'}
+              </Typography>
+            </Stack>
+          </Box>
 
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} useFlexGap flexWrap="wrap">
-          <TextField
-            size="small"
-            placeholder={t('jobboard.search')}
-            value={qDraft}
-            onChange={(e) => setQDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                setQ(qDraft.trim());
-                setPage(1);
-              }
-            }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search sx={{ color: 'text.secondary', fontSize: 20 }} />
-                </InputAdornment>
-              ),
-              endAdornment: qDraft ? (
-                <InputAdornment position="end">
-                  <IconButton size="small" aria-label="Clear search" onClick={clearSearch} edge="end">
-                    <Close sx={{ fontSize: 18 }} />
-                  </IconButton>
-                </InputAdornment>
-              ) : undefined,
-            }}
-            sx={{
-              minWidth: { xs: '100%', sm: 240 },
-              flex: { sm: '1 1 240px' },
-              maxWidth: 360,
-              bgcolor: panelBg,
-              '& .MuiOutlinedInput-root': { borderRadius: 2 },
-            }}
-          />
-          <FormControl size="small" sx={{ minWidth: 140, bgcolor: panelBg }}>
-            <InputLabel>{t('jobboard.filter_company')}</InputLabel>
-            <Select
-              label={t('jobboard.filter_company')}
-              value={company}
-              onChange={(e) => {
-                setCompany(String(e.target.value));
+          <Stack spacing={1.75} sx={{ minWidth: 0, flex: 1 }}>
+            <TextField
+              size="small"
+              placeholder="Search job title or company"
+              value={qDraft}
+              onChange={(e) => setQDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  setQ(qDraft.trim());
+                  setPage(1);
+                }
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search sx={{ color: FIRSTSTEP.tealDark, fontSize: 20 }} />
+                  </InputAdornment>
+                ),
+                endAdornment: qDraft ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" aria-label="Clear search" onClick={clearSearch} edge="end">
+                      <Close sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </InputAdornment>
+                ) : undefined,
+              }}
+              sx={[controlSx, { width: '100%' }]}
+            />
+
+            <JobBoardChipFilter
+              caption="ADDED"
+              value={added}
+              options={ADDED_DATE_PRESETS}
+              onChange={(next) => {
+                setAdded(next as JobBoardAddedPreset);
                 setPage(1);
               }}
-              sx={{ borderRadius: 2 }}
+            />
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} useFlexGap flexWrap="wrap">
+              <JobBoardFacetAutocomplete
+                label="Category"
+                placeholder="Search category"
+                value={category}
+                options={filters.categories}
+                onChange={(next) => {
+                  setCategory(next);
+                  setPage(1);
+                }}
+              />
+              <JobBoardFacetAutocomplete
+                label="Location"
+                placeholder="Search location"
+                value={location}
+                options={filters.locations}
+                onChange={(next) => {
+                  setLocation(next);
+                  setPage(1);
+                }}
+              />
+              {filtersActive ? (
+                <Button
+                  size="small"
+                  onClick={resetFilters}
+                  sx={{ fontWeight: 700, color: FIRSTSTEP.tealDark, borderRadius: RADIUS.pill, alignSelf: 'center' }}
+                >
+                  Clear filters
+                </Button>
+              ) : null}
+            </Stack>
+
+            <Stack
+              direction={{ xs: 'column', xl: 'row' }}
+              spacing={1.75}
+              useFlexGap
+              flexWrap="wrap"
             >
-              <MenuItem value="">{t('jobboard.filter_all')}</MenuItem>
-              {filters.companies.map((c) => (
-                <MenuItem key={c} value={c}>
-                  {c}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 140, bgcolor: panelBg }}>
-            <InputLabel>{t('jobboard.filter_category')}</InputLabel>
-            <Select
-              label={t('jobboard.filter_category')}
-              value={category}
-              onChange={(e) => {
-                setCategory(String(e.target.value));
-                setPage(1);
-              }}
-              sx={{ borderRadius: 2 }}
-            >
-              <MenuItem value="">{t('jobboard.filter_all')}</MenuItem>
-              {filters.categories.map((c) => (
-                <MenuItem key={c} value={c}>
-                  {c}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <JobBoardChipFilter
+                  caption="WORK MODE"
+                  value={workMode}
+                  options={WORK_MODE_OPTIONS}
+                  onChange={(next) => {
+                    setWorkMode(next);
+                    setPage(1);
+                  }}
+                />
+              </Box>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <JobBoardChipFilter
+                  caption="JOB TYPE"
+                  value={jobType}
+                  options={JOB_TYPE_OPTIONS}
+                  onChange={(next) => {
+                    setJobType(next);
+                    setPage(1);
+                  }}
+                />
+              </Box>
+            </Stack>
+          </Stack>
         </Stack>
       </Box>
 
       {error && (
-        <Typography color="error" sx={{ px: 3, pb: 1 }}>
+        <Typography color="error" sx={{ pb: 1 }}>
           {error}
         </Typography>
       )}
 
-      <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: { xs: 2, md: 3 }, pb: 3 }}>
-        {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
-            <CircularProgress size={36} sx={{ color: ACCENT }} />
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
+          <CircularProgress size={36} sx={{ color: FIRSTSTEP.tealDark }} />
+        </Box>
+      ) : jobs.length === 0 ? (
+        <Box sx={[cardSx(), { textAlign: 'center', py: 10, px: 3 }]}>
+          <BusinessOutlined sx={{ fontSize: 48, color: tint(FIRSTSTEP.navy, 0.28), mb: 1 }} />
+          <Typography sx={{ fontWeight: 700, mb: 0.75, color: FIRSTSTEP.navyDeep }}>
+            {filtersActive
+              ? 'No jobs match these filters'
+              : t('jobboard.empty_title', { defaultValue: 'No jobs yet' })}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 420, mx: 'auto' }}>
+            {filtersActive
+              ? 'Try another title/company search, added window, location, or work mode.'
+              : t('jobboard.empty_body', {
+                  defaultValue: 'Once scrapes add listings, they will show up here.',
+                })}
+          </Typography>
+          {filtersActive ? (
+            <Button onClick={resetFilters} sx={{ mt: 1.5, fontWeight: 700, color: FIRSTSTEP.tealDark }}>
+              Clear filters
+            </Button>
+          ) : null}
+        </Box>
+      ) : (
+        <>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: {
+                xs: 'minmax(0, 1fr)',
+                sm: 'repeat(2, minmax(0, 1fr))',
+                md: 'repeat(3, minmax(0, 1fr))',
+                lg: 'repeat(4, minmax(0, 1fr))',
+                xl: 'repeat(5, minmax(0, 1fr))',
+              },
+              gap: 1.75,
+              alignItems: 'stretch',
+            }}
+          >
+            {jobs.map((job) => (
+              <JobGridCard key={job.id} job={job} onOpen={() => openJob(job.id)} />
+            ))}
           </Box>
-        ) : jobs.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 10, px: 3 }}>
-            <BusinessOutlined sx={{ fontSize: 48, color: alpha(TEAL, 0.3), mb: 1 }} />
-            <Typography sx={{ fontWeight: 700, mb: 0.75 }}>{t('jobboard.empty_title')}</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 360, mx: 'auto' }}>
-              {t('jobboard.empty_body')}
-            </Typography>
-          </Box>
-        ) : (
-          <>
-            <Box
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: {
-                  xs: 'minmax(0, 1fr)',
-                  sm: 'repeat(2, minmax(0, 1fr))',
-                  md: 'repeat(3, minmax(0, 1fr))',
-                  lg: 'repeat(4, minmax(0, 1fr))',
-                  xl: 'repeat(5, minmax(0, 1fr))',
-                },
-                gap: 1.75,
-                alignItems: 'stretch',
-              }}
-            >
-              {jobs.map((job) => (
-                <JobGridCard key={job.id} job={job} onOpen={() => openJob(job.id)} />
-              ))}
-            </Box>
 
-            <Stack alignItems="center" spacing={1} sx={{ mt: 3 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                {t('jobboard.showing_range', { from: rangeFrom, to: rangeTo, total })}
-              </Typography>
-              {pagination.totalPages > 1 && (
-                <Pagination
-                  count={pagination.totalPages}
-                  page={page}
-                  onChange={(_, p) => setPage(p)}
-                  size="medium"
-                  sx={{
-                    '& .Mui-selected': {
-                      bgcolor: `${alpha(ACCENT, 0.15)} !important`,
-                      color: '#b8008f',
-                    },
-                  }}
-                />
-              )}
-            </Stack>
-          </>
-        )}
-      </Box>
+          <Stack alignItems="center" spacing={1} sx={{ mt: 3 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+              {t('jobboard.showing_range', {
+                from: rangeFrom,
+                to: rangeTo,
+                total,
+                defaultValue: 'Showing {{from}}–{{to}} of {{total}}',
+              })}
+            </Typography>
+            {pagination.totalPages > 1 && (
+              <Pagination
+                count={pagination.totalPages}
+                page={page}
+                onChange={(_, p) => setPage(p)}
+                size="medium"
+                sx={{
+                  '& .Mui-selected': {
+                    bgcolor: `${tint(FIRSTSTEP.teal, 0.22)} !important`,
+                    color: FIRSTSTEP.navyDeep,
+                  },
+                }}
+              />
+            )}
+          </Stack>
+        </>
+      )}
 
       <JobDetailModal open={modalOpen} job={detail} loading={detailLoading} onClose={closeModal} />
     </Box>
