@@ -395,7 +395,7 @@ VITE_PUBLIC_URL=http://YOUR_DROPLET_IP:8080
 # If you set false locally, also run: npm run worker:dev
 RUN_EMBEDDED_WORKERS=true
 
-# Cap Mongo connections per Node process (API + scraper + enrichment each open a pool).
+# Cap Mongo connections per Node process (API + scheduler + scraper + enrichment + aggregators each open a pool).
 # MONGODB_MAX_POOL_SIZE=10
 
 # Safe for 2–4 GB RAM
@@ -468,16 +468,19 @@ pm2 startup
 
 `pm2 startup` will print a command. **Copy and run that command**, then run `pm2 save` again if asked.
 
-You should see **three** apps online:
+You should see **five** apps online:
 
 | PM2 name | Role |
 |----------|------|
 | `scout-x` | API + dashboard (no Chromium). `RUN_EMBEDDED_WORKERS=false` |
-| `scoutx-scraper` | Scheduled scrapes + Agenda (`npm run worker`) |
+| `scoutx-scheduler` | Schedules + catch-up + ops digest (no Chromium) |
+| `scoutx-scraper` | Career scrapes + Agenda (`npm run worker`) |
 | `scoutx-enrichment` | Job-board enrichment via scrape.do / ATS (no Chromium) |
+| `scoutx-aggregators` | Hiring Cafe Aggregators queue (`npm run worker:aggregators`) |
 
 > **Job board enrichment:** Set `SCRAPE_DO_TOKEN` in `.env` first.  
-> **If scrapes stay pending forever:** `scoutx-scraper` is not running — check `pm2 status` and `pm2 logs scoutx-scraper`.
+> **If career scrapes stay pending forever:** `scoutx-scraper` is not running — check `pm2 status` and `pm2 logs scoutx-scraper`.  
+> **If Aggregators / Hiring Cafe stay pending:** start/restart `scoutx-aggregators` — check `pm2 logs scoutx-aggregators`.
 
 ### G3 — Check status
 
@@ -485,22 +488,25 @@ You should see **three** apps online:
 pm2 status
 pm2 logs scout-x --lines 50
 pm2 logs scoutx-scraper --lines 50
+pm2 logs scoutx-aggregators --lines 50
 ```
 
 Healthy signs:
 
-- All three processes are **online**  
+- All five processes are **online**  
 - API logs include `Embedded workers disabled for this API process`  
 - Scraper logs include `Worker runtime started`  
+- Aggregator logs include `Aggregator worker runtime started`  
 - API is listening (often port **8080**)  
 - No endless crash loop  
 
 Useful PM2 commands later:
 
 ```bash
-pm2 restart scout-x scoutx-scraper scoutx-enrichment
+pm2 restart all
 pm2 stop scoutx-scraper
 pm2 logs scoutx-scraper --lines 100
+pm2 logs scoutx-aggregators --lines 100
 ```
 
 ---
@@ -659,12 +665,13 @@ When a specific site blocks DigitalOcean:
 
 | Task | Command / action |
 |------|------------------|
-| See if app is running | `pm2 status` (expect scout-x, scoutx-scraper, scoutx-enrichment) |
-| View live logs | `pm2 logs scout-x` / `pm2 logs scoutx-scraper` |
-| Restart after `.env` change | `pm2 restart scout-x scoutx-scraper scoutx-enrichment` |
+| See if app is running | `pm2 status` (expect scout-x, scoutx-scheduler, scoutx-scraper, scoutx-enrichment, scoutx-aggregators) |
+| View live logs | `pm2 logs scout-x` / `pm2 logs scoutx-scraper` / `pm2 logs scoutx-aggregators` |
+| Restart after `.env` change | `pm2 restart all` |
 | Deploy new code | `git pull` → `npm ci --include=dev` → build → `pm2 restart all` |
 | Reboot Droplet | App should come back if `pm2 startup` + `pm2 save` were done |
 | Scrapes stuck pending | Start/restart `scoutx-scraper`; check `pm2 logs scoutx-scraper` |
+| Hiring Cafe Aggregators stuck pending | Start/restart `scoutx-aggregators`; check `pm2 logs scoutx-aggregators` |
 | Enrichment not filling Job board | Set `SCRAPE_DO_TOKEN`, check `pm2 logs scoutx-enrichment` |
 | Check disk space | `df -h` |
 | Check memory | `free -h` |
@@ -730,8 +737,8 @@ If you already decided on DigitalOcean, use this guide. If you want lower cost f
 - [ ] `.env` filled with production values  
 - [ ] `npm run build:server` OK  
 - [ ] `npm run build` OK  
-- [ ] `pm2 start ecosystem.config.cjs` + `pm2 startup` + `pm2 save` OK (three apps online)  
-- [ ] API log shows embedded workers disabled; scraper log shows Worker runtime started  
+- [ ] `pm2 start ecosystem.config.cjs` + `pm2 startup` + `pm2 save` OK (five apps online)  
+- [ ] API log shows embedded workers disabled; scraper + aggregators logs show Worker runtime started  
 
 ### Access / test
 
@@ -753,7 +760,7 @@ If you already decided on DigitalOcean, use this guide. If you want lower cost f
 4. SSH in; install Node, Chromium libs, PM2.  
 5. Create **MongoDB Atlas** and put the URI in `.env`.  
 6. Upload/clone Scout-X; install; build.  
-7. Start with PM2 via `ecosystem.config.cjs` (API + scraper + enrichment; API has `RUN_EMBEDDED_WORKERS=false`).  
+7. Start with PM2 via `ecosystem.config.cjs` (API + scheduler + scraper + enrichment + aggregators; API has `RUN_EMBEDDED_WORKERS=false`).
 8. Open firewall; test one scrape; then one schedule.  
 9. Add domain/HTTPS/proxy/Spaces only after the basics work.  
 10. (Optional) Wire DigitalOcean API + ZeptoMail for `/admin` compute panel and 6-hour digests.

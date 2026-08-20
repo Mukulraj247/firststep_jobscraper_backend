@@ -2,14 +2,16 @@
  * PM2 process file for Scout-X on a single DigitalOcean droplet.
  *
  * Topology (process isolation):
- *   scout-x             — API only (no Chromium). RUN_EMBEDDED_WORKERS=false
- *   scoutx-scheduler    — Agenda schedules + catch-up + ops digest (no Chromium)
- *   scoutx-scraper      — Agenda scrapes + Chromium (SCHEDULER_ENABLED=false)
- *   scoutx-enrichment   — scrape.do / ATS enrichment (no Chromium)
+ *   scout-x               — API only (no Chromium). RUN_EMBEDDED_WORKERS=false
+ *   scoutx-scheduler      — Agenda schedules + catch-up + ops digest (no Chromium)
+ *   scoutx-scraper        — Agenda career scrapes + Chromium (SCHEDULER_ENABLED=false)
+ *   scoutx-enrichment     — scrape.do / ATS enrichment (no Chromium)
+ *   scoutx-aggregators    — Hiring Cafe aggregator-jobs + Chromium (SCHEDULER_ENABLED=false)
  *
- * Do NOT set RUN_EMBEDDED_WORKERS=true on the API while scoutx-scraper is running —
- * that double-starts Chromium workers (Agenda locks prevent double-runs, but wastes RAM).
- * If you forget to start scoutx-scraper, runs stay pending forever.
+ * Do NOT set RUN_EMBEDDED_WORKERS=true on the API while scoutx-scraper / scoutx-aggregators
+ * are running — that double-starts Chromium workers (Agenda locks prevent double-runs, but wastes RAM).
+ * If you forget to start scoutx-scraper, career runs stay pending forever.
+ * If you forget scoutx-aggregators, Aggregators / Hiring Cafe runs stay pending forever.
  * If you forget scoutx-scheduler (with scraper SCHEDULER_ENABLED=false), schedules never fire.
  *
  * Usage (from repo root after build):
@@ -30,7 +32,7 @@ module.exports = {
       autorestart: true,
       // Allow SIGTERM handler to finish HTTP/socket close (no long scrape drain on API).
       kill_timeout: 15000,
-      // API should stay lean — Chromium lives in scoutx-scraper.
+      // API should stay lean — Chromium lives in scoutx-scraper / scoutx-aggregators.
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
@@ -83,6 +85,25 @@ module.exports = {
         NODE_ENV: 'production',
         UV_THREADPOOL_SIZE: '8',
       },
+    },
+    {
+      name: 'scoutx-aggregators',
+      script: 'node',
+      args: '--expose-gc --max-old-space-size=768 server/dist/server/src/aggregatorWorker.js',
+      cwd: __dirname,
+      instances: 1,
+      autorestart: true,
+      env: {
+        NODE_ENV: 'production',
+        SCHEDULER_ENABLED: 'false',
+        LOW_MEMORY_MODE: 'true',
+        // Keep at 1 on a shared droplet so Chromium does not fight scoutx-scraper.
+        AGGREGATOR_WORKER_CONCURRENCY: '1',
+        // Prefer AGGREGATOR_JOB_TIMEOUT_MS in .env (default 600000 for list + detail enrich).
+      },
+      // Must exceed AGGREGATOR_JOB_TIMEOUT_MS + drain buffer.
+      kill_timeout: 660000,
+      max_memory_restart: '900M',
     },
   ],
 };
