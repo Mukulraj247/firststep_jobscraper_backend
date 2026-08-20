@@ -490,7 +490,7 @@ router.get(
       res.cookie('robot_auth_robotId', robotId, oauthStatusCookieOptions);
 
       const baseUrl = process.env.PUBLIC_URL || "http://localhost:5173";
-      const redirectUrl = `${baseUrl}/robots/`;
+      const redirectUrl = `${baseUrl}/scrapers/`;
 
       res.redirect(redirectUrl);
     } catch (error: any) {
@@ -701,7 +701,7 @@ router.get("/airtable/callback", requireSignIn, async (req: Request, res) => {
 
     if (error) {
       return res.redirect(
-        `${baseUrl}/robots/${state}/integrate?error=${encodeURIComponent(error.toString())}`
+        `${baseUrl}/scrapers/${state}/integrate?error=${encodeURIComponent(error.toString())}`
       );
     }
 
@@ -735,7 +735,7 @@ router.get("/airtable/callback", requireSignIn, async (req: Request, res) => {
       const errorData = await tokenResponse.json();
       console.error('Token exchange failed:', errorData);
       return res.redirect(
-        `${baseUrl}/robots/${state}/integrate?error=${encodeURIComponent(errorData.error_description || 'Authentication failed')}`
+        `${baseUrl}/scrapers/${state}/integrate?error=${encodeURIComponent(errorData.error_description || 'Authentication failed')}`
       );
     }
 
@@ -763,13 +763,13 @@ router.get("/airtable/callback", requireSignIn, async (req: Request, res) => {
       if (err) console.error('Session cleanup error:', err);
     });
 
-    const redirectUrl = `${baseUrl}/robots/`;
+    const redirectUrl = `${baseUrl}/scrapers/`;
 
     res.redirect(redirectUrl);
   } catch (error: any) {
     console.error('Airtable callback error:', error);
     res.redirect(
-      `${baseUrl}/robots/${req.session.robotId}/integrate?error=${encodeURIComponent(error.message)}`
+      `${baseUrl}/scrapers/${req.session.robotId}/integrate?error=${encodeURIComponent(error.message)}`
     );
   }
 });

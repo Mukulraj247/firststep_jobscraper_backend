@@ -108,6 +108,12 @@ BROWSER_HEALTH_EXTERNAL_PORT=3002
 # CAMOUFOX_PROXY_SERVER=
 # CAMOUFOX_PROXY_USERNAME=
 # CAMOUFOX_PROXY_PASSWORD=
+# SCRAPER_PROXY_ENABLED=false           # Skip account/env proxies; per-automation proxy still used
+# One-page Decodo trial (npm run probe:decodo). Do not set these as DEFAULT_PROXY_URL.
+# DECODO_PROXY_SERVER=gate.decodo.com:7000
+# DECODO_PROXY_USERNAME=
+# DECODO_PROXY_PASSWORD=
+# DECODO_TEST_URL=https://hiring.jhu.edu/careers?query=Software+Engineering&start=20&pid=1133914568201&sort_by=relevance
 
 # Optional AI extraction settings
 # Optional proxy rotation settings for scraper runs

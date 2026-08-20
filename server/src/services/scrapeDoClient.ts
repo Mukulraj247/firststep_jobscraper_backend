@@ -15,6 +15,29 @@ import logger from '../logger';
 
 export type ScrapeTier = 1 | 2 | 3;
 
+export interface ScrapeJobPageOpts {
+  /** First tier to try. Ignored when useLearnedTier is true and a profile exists. */
+  startTier?: ScrapeTier;
+  /** Never escalate past this tier (1=HTML, 2=JS render, 3=super). */
+  maxTier?: ScrapeTier;
+  /** When false, ignore ScrapeProfile and always start at startTier (default 1). */
+  useLearnedTier?: boolean;
+}
+
+export function scrapeTiersToTry(
+  learned: ScrapeTier,
+  opts: ScrapeJobPageOpts = {}
+): ScrapeTier[] {
+  const maxTier = (opts.maxTier ?? 3) as ScrapeTier;
+  const useLearned = opts.useLearnedTier !== false;
+  let start = opts.startTier ?? 1;
+  if (useLearned) start = learned;
+  start = Math.min(Math.max(1, start), maxTier) as ScrapeTier;
+  const tiers: ScrapeTier[] = [];
+  for (let t = start; t <= maxTier; t++) tiers.push(t as ScrapeTier);
+  return tiers;
+}
+
 export interface ScrapeDoResult {
   ok: boolean;
   status: number;
@@ -187,18 +210,19 @@ function shouldEscalate(status: number, html: string, fields: ParsedJobFields): 
 
 /**
  * Fetch a job detail page via scrape.do, escalating tiers only when needed.
- * Starts at the learned host tier (or 1).
+ * Defaults: learned host tier through super (3). Pass maxTier/useLearnedTier
+ * to keep credit spend low after an ATS miss.
  */
-export async function scrapeJobPage(url: string): Promise<ScrapeDoResult> {
+export async function scrapeJobPage(url: string, opts: ScrapeJobPageOpts = {}): Promise<ScrapeDoResult> {
   const host = jobUrlHost(url) || '';
-  const startTier: ScrapeTier[] = [];
-  let start: ScrapeTier = 1;
+  const maxTier = (opts.maxTier ?? 3) as ScrapeTier;
+  let learned: ScrapeTier = 1;
   try {
-    start = await getLearnedTier(host);
+    learned = await getLearnedTier(host);
   } catch {
-    start = 1;
+    learned = 1;
   }
-  for (let t = start; t <= 3; t++) startTier.push(t as ScrapeTier);
+  const startTier = scrapeTiersToTry(learned, opts);
 
   let totalCredits = 0;
   let lastError = '';
@@ -253,7 +277,7 @@ export async function scrapeJobPage(url: string): Promise<ScrapeDoResult> {
       }
 
       const fields = parseJobPageHtml(html, url);
-      const escalate = shouldEscalate(status, html, fields) && tier < 3;
+      const escalate = shouldEscalate(status, html, fields) && tier < maxTier;
 
       if (!escalate && status >= 200 && status < 400 && (fields.jobTitle || fields.jobDescription)) {
         await recordScrapeSuccess(host, tier, credits || expectedCredits(tier));
@@ -277,11 +301,13 @@ export async function scrapeJobPage(url: string): Promise<ScrapeDoResult> {
     } catch (err: any) {
       lastError = err?.message || String(err);
       logger.log('warn', `scrape.do tier ${tier} failed for host=${host}: ${lastError}`);
-      if (tier === 3) break;
+      if (tier >= maxTier) break;
     }
   }
 
-  await recordScrapeFailure(host, tried);
+  if (maxTier >= 3) {
+    await recordScrapeFailure(host, tried);
+  }
   return {
     ok: false,
     status: 0,

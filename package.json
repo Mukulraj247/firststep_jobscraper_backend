@@ -114,7 +114,9 @@
     "backfill:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/backfillJobBoardFromExtracted.ts",
     "repair:job-board": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/repairJobBoardDescriptions.ts",
     "repack:schedules": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/repackAllSchedules.ts",
-    "sync:agenda:production": "cross-env TS_NODE_TRANSPILE_ONLY=1 AGENDA_COLLECTION=agendaJobs npx ts-node --project server/tsconfig.json server/src/scripts/syncProductionAgenda.ts"
+    "sync:agenda:production": "cross-env TS_NODE_TRANSPILE_ONLY=1 AGENDA_COLLECTION=agendaJobs npx ts-node --project server/tsconfig.json server/src/scripts/syncProductionAgenda.ts",
+    "probe:decodo": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/probeDecodoTrial.ts",
+    "probe:phenom": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/probePhenomWidgets.ts"
   },
   "overrides": {
     "playwright-core": "1.58.0"

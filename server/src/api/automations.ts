@@ -42,6 +42,8 @@ import {
 } from '../utils/failureReason';
 import { buildOpsMetrics, doWindowForOps, parseOpsMetricsDate, parseOpsMetricsWindow } from '../services/opsMetrics';
 import { getDigitalOceanDashboardCached } from '../services/digitalOceanMetrics';
+import { sendOpsDigest } from '../services/opsDigest';
+import { mapOpsDigestSendResult, opsDigestStatusBody } from '../services/opsDigestHttp';
 import { computeScheduleHeatmap } from '../services/scheduleHeatmap';
 import { formatIstYmd, isIstDateOnDayStrip } from '../../../src/shared/opsTimezone';
 import {
@@ -596,6 +598,25 @@ router.get('/dashboard/digital-ocean', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to fetch DigitalOcean dashboard metrics: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch DigitalOcean metrics' });
+  }
+});
+
+router.get('/dashboard/digest/status', async (_req: any, res: any) => {
+  try {
+    return res.json(opsDigestStatusBody());
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch ops digest status: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to load digest status' });
+  }
+});
+
+router.post('/dashboard/digest/test', async (_req: any, res: any) => {
+  try {
+    const mapped = mapOpsDigestSendResult(await sendOpsDigest({ force: true }));
+    return res.status(mapped.httpStatus).json(mapped.body);
+  } catch (error: any) {
+    logger.log('error', `Failed to send ops digest: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to send ops digest' });
   }
 });
 

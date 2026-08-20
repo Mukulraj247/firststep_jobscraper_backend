@@ -9,7 +9,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   retryRun,
   updateRunFailureReason,
@@ -51,8 +51,10 @@ import {
   resolveFailuresContentState,
   retrySuccessHref,
   retrySuccessMessage,
+  runDetailsBackHref,
   runDisplayName,
   runIdentity,
+  serializeFailureListSearch,
   shouldShowBackgroundRefreshBar,
   workspaceAriaBusy,
   workspaceNoLiftHoverSx,
@@ -61,6 +63,7 @@ import {
   type PendingActions,
   type RowActionErrors,
 } from '../features/failures/failuresPageBehavior';
+import { pushReturnState } from '../features/navigation/inAppReturn';
 
 type RetryNotice = {
   kind: 'success' | 'conflict';
@@ -71,7 +74,8 @@ type RetryNotice = {
 
 export const FailureDashboardPage = () => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const linkedRange = parseFailureDashboardSearch(searchParams);
   const queryClient = useQueryClient();
   const theme = useTheme();
@@ -82,14 +86,14 @@ export const FailureDashboardPage = () => {
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [statusFilter, setStatusFilter] = useState<
     typeof DEFAULT_FAILURE_STATUS_FILTER | 'failed,dead' | 'failed' | 'dead' | 'aborted'
-  >(DEFAULT_FAILURE_STATUS_FILTER);
-  const [anomalyFilter, setAnomalyFilter] = useState('');
-  const [reasonFilter, setReasonFilter] = useState('');
+  >(linkedRange.status as typeof DEFAULT_FAILURE_STATUS_FILTER | 'failed,dead' | 'failed' | 'dead' | 'aborted');
+  const [anomalyFilter, setAnomalyFilter] = useState(linkedRange.anomaly);
+  const [reasonFilter, setReasonFilter] = useState(linkedRange.reason);
   const [window, setWindow] = useState<FailureTimeWindow>(linkedRange.timeWindow);
   const [rangeFrom, setRangeFrom] = useState(linkedRange.from || '');
   const [rangeTo, setRangeTo] = useState(linkedRange.to || '');
-  const [q, setQ] = useState('');
-  const [qDebounced, setQDebounced] = useState('');
+  const [q, setQ] = useState(linkedRange.q);
+  const [qDebounced, setQDebounced] = useState(linkedRange.q);
   const [pendingActions, setPendingActions] = useState<PendingActions>({});
   const [rowActionErrors, setRowActionErrors] = useState<RowActionErrors>({});
   const [retryTarget, setRetryTarget] = useState<FailureRun | null>(null);
@@ -99,6 +103,32 @@ export const FailureDashboardPage = () => {
     const t = setTimeout(() => setQDebounced(q.trim()), 300);
     return () => clearTimeout(t);
   }, [q]);
+
+  useEffect(() => {
+    const next = serializeFailureListSearch({
+      q: qDebounced,
+      status: statusFilter,
+      reason: reasonFilter,
+      anomaly: anomalyFilter,
+      timeWindow: window,
+      from: rangeFrom || undefined,
+      to: rangeTo || undefined,
+    });
+    const current = searchParams.toString();
+    const nextParams = next.startsWith('?') ? next.slice(1) : next;
+    if (current === nextParams) return;
+    setSearchParams(nextParams, { replace: true });
+  }, [
+    qDebounced,
+    statusFilter,
+    reasonFilter,
+    anomalyFilter,
+    window,
+    rangeFrom,
+    rangeTo,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const {
     data: failureData,
@@ -269,7 +299,8 @@ export const FailureDashboardPage = () => {
   const handlers: FailureRowHandlers = {
     onDetails: (run) => {
       const runId = runIdentity(run);
-      if (runId) navigate(`/run/${runId}`);
+      const returnTo = runDetailsBackHref(`${location.pathname}${location.search}`, '/failures');
+      if (runId) navigate(`/run/${runId}`, { state: { returnTo } });
     },
     onRetry: setRetryTarget,
     onReasonChange: handleReasonOverride,
@@ -360,7 +391,7 @@ export const FailureDashboardPage = () => {
                   <Button
                     color="inherit"
                     size="small"
-                    onClick={() => { if (retryNotice.href) navigate(retryNotice.href); }}
+                    onClick={() => { if (retryNotice.href) navigate(retryNotice.href, { state: pushReturnState(location) }); }}
                     sx={{ fontWeight: 700 }}
                   >
                     {retryNotice.linkLabel}

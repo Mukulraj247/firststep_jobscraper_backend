@@ -1,4 +1,5 @@
 import { FIRSTSTEP, RADIUS, tint } from '../../components/dashboard/ops/dashboardTokens';
+import { formatRunJobAddedAt } from '../jobs/jobBoardPageBehavior';
 import {
   DESKTOP_TABLE_HEADER_BG,
   DESKTOP_TABLE_ROW_DIVIDER,
@@ -15,6 +16,7 @@ export const DATA_COLUMN_LABELS: Record<string, string> = {
   job_title: 'Title',
   companyName: 'Company',
   location: 'Location',
+  date: 'Posted',
 };
 
 export const URLISH_COLUMNS = new Set([
@@ -51,6 +53,7 @@ export function isTitleColumn(column: string): boolean {
 export function dataColumnMinWidthPx(column: string): number {
   if (isTitleColumn(column)) return 280;
   if (isUrlishColumn(column)) return 88;
+  if (column === 'date' || column === 'datePosted' || column === 'posted') return 220;
   if (column === 'f500' || column === 'jobId') return 96;
   return 160;
 }
@@ -90,6 +93,10 @@ export function formatExtractedCellDisplay(
       title: raw,
       kind: 'url',
     };
+  }
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+    const formatted = formatRunJobAddedAt(raw);
+    if (formatted) return { text: formatted, title: raw, kind: 'text' };
   }
   if (!isTitleColumn(column) && raw.length > 100) {
     return { text: `${raw.slice(0, 97)}…`, title: raw, kind: 'text' };
@@ -135,6 +142,35 @@ export function extractedDataTableHeaderCellSx() {
     px: 1.5,
     borderBottom: `1px solid ${DESKTOP_TABLE_ROW_DIVIDER}`,
   };
+}
+
+export function extractedDataTableScrollSx() {
+  return {
+    flex: 1,
+    minHeight: 0,
+    overflowX: 'scroll' as const,
+    overflowY: 'auto' as const,
+    scrollbarGutter: 'stable',
+    scrollbarWidth: 'auto' as const,
+    msOverflowStyle: 'auto' as const,
+    '&::-webkit-scrollbar': {
+      display: 'block',
+      width: 12,
+      height: 12,
+    },
+    '&::-webkit-scrollbar-track': {
+      bgcolor: FIRSTSTEP.surfaceAlt,
+    },
+    '&::-webkit-scrollbar-thumb': {
+      bgcolor: tint(FIRSTSTEP.teal, 0.65),
+      borderRadius: 8,
+      border: `2px solid ${FIRSTSTEP.surfaceAlt}`,
+    },
+  };
+}
+
+export function extractedDataTableMinWidthPx(dataColumnCount: number): number {
+  return 460 + dataColumnCount * 180;
 }
 
 export function extractedDataTableRowHoverSx() {

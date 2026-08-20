@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import JobBoardListing, { IJobBoardListing } from '../models/JobBoardListing';
 import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import { getLlmUsageToday, addLlmUsage } from '../models/LlmUsageBudget';
-import { fetchAtsJob, detectAts } from '../services/atsAdapters';
+import { fetchAtsJob, shouldNeverScrapeDoUrl } from '../services/atsAdapters';
 import {
   fetchBrowserJobFallback,
   shouldTryBrowserJobFallback,
@@ -24,7 +24,7 @@ import {
   preferJobUrlTitle,
   htmlToPlainText,
 } from '../services/jobPageParser';
-import { contentHashFromFields } from '../services/jobBoardEnrichment';
+import { contentHashFromFields, isListRowComplete } from '../services/jobBoardEnrichment';
 import {
   extractJobFieldsWithGemini,
   isGeminiConfigured,
@@ -272,7 +272,7 @@ async function persistResult(
   fields: ParsedJobFields,
   opts: {
     status: 'ready' | 'partial' | 'failed' | 'expired' | 'queued';
-    method: 'ats' | 'scrape.do' | 'browser' | 'llm' | 'none';
+    method: 'ats' | 'scrape.do' | 'browser' | 'llm' | 'list' | 'none';
     tier: number;
     creditsSpent: number;
     error?: string;
@@ -427,9 +427,17 @@ async function persistResult(
 async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics): Promise<void> {
   const listFields = snapshotAsFields(doc);
 
-  // Tier 0: ATS direct
-  const ats = await fetchAtsJob(doc.jobUrl);
-  await yieldEventLoop();
+  // Tier 0: ATS direct — try jobUrl first, then applyUrl if they differ.
+  const atsCandidates = [doc.jobUrl, doc.applyUrl].filter(
+    (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index
+  );
+  let ats: Awaited<ReturnType<typeof fetchAtsJob>> = null;
+  for (const url of atsCandidates) {
+    ats = await fetchAtsJob(url);
+    await yieldEventLoop();
+    if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) break;
+    ats = null;
+  }
   if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) {
     metrics.ats_hit += 1;
     const merged = mergeParsedFields(ats.fields, listFields);
@@ -448,31 +456,34 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  // Direct ATS API hosts are authoritative. A miss means the requisition is
-  // gone, so do not spend scrape.do credits on a generic landing page.
-  const detected = detectAts(doc.jobUrl);
-  let isDirectOracleHcm = false;
-  try {
-    isDirectOracleHcm = /\.fa(?:\.ocs)?\.oraclecloud\.com$/i.test(new URL(doc.jobUrl).hostname);
-  } catch {
-    isDirectOracleHcm = false;
-  }
-  if (
-    (detected?.provider === 'oraclecloud' && isDirectOracleHcm) ||
-    detected?.provider === 'workday'
-  ) {
+  // CDN / social / aggregator hosts: never spend scrape.do.
+  // ATS misses still fall through to a cheap scrape.do fallback.
+  if (shouldNeverScrapeDoUrl(doc.jobUrl || '') || shouldNeverScrapeDoUrl(doc.applyUrl || '')) {
     metrics.expired += 1;
     await persistResult(doc, listFields, {
       status: 'expired',
-      method: 'ats',
+      method: 'none',
       tier: 0,
       creditsSpent: 0,
-      error:
-        detected?.provider === 'workday'
-          ? 'workday_requisition_not_found'
-          : 'oraclecloud_requisition_not_found',
+      error: 'non_job_host_skip_scrape_do',
       incrementAttempts: true,
     });
+    return;
+  }
+
+  // List already complete: do not spend scrape.do credits.
+  if (isListRowComplete(doc.listSnapshot || {})) {
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status,
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
     return;
   }
 
@@ -513,7 +524,11 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  const result = await scrapeJobPage(doc.jobUrl);
+  const result = await scrapeJobPage(doc.jobUrl, {
+    startTier: 1,
+    maxTier: 2,
+    useLearnedTier: false,
+  });
   await yieldEventLoop();
 
   if (result.creditsSpent > 0) {
@@ -649,7 +664,11 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       skills: doc.skills || [],
     };
     metrics.llm_hit += 1;
-  } else if (isGeminiConfigured() && cleaned) {
+  } else if (
+    isGeminiConfigured() &&
+    cleaned &&
+    descriptionQualityScore(merged.jobDescription) <= 0
+  ) {
     const usage = await getLlmUsageToday();
     if (usage.calls >= LLM_DAILY_CALL_BUDGET || usage.tokens >= LLM_DAILY_TOKEN_BUDGET) {
       metrics.llm_budget_paused = true;

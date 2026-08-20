@@ -43,7 +43,7 @@ export const Recordings = ({
   const handleClose = () => {
     setParams([]);
     setRecordingInfo('', '');
-    navigate('/robots');
+    navigate('/scrapers');
   };
 
   useEffect(() => {
@@ -66,10 +66,10 @@ export const Recordings = ({
 
     if (airtableAuthStatus === 'success' && robotId) {
       notify(airtableAuthStatus, t('recordingtable.notifications.auth_success'));
-      handleNavigate(`/robots/${robotId}/integrate/airtable`, robotId, '', []);
+      handleNavigate(`/scrapers/${robotId}/integrate/airtable`, robotId, '', []);
     } else if (authStatus === 'success' && robotId) {
       notify(authStatus, t('recordingtable.notifications.auth_success'));
-      handleNavigate(`/robots/${robotId}/integrate/googleSheets`, robotId, '', []);
+      handleNavigate(`/scrapers/${robotId}/integrate/googleSheets`, robotId, '', []);
     }
   }, [handleNavigate, notify, t]);
 

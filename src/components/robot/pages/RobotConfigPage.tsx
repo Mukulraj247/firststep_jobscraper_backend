@@ -53,7 +53,7 @@ export const RobotConfigPage: React.FC<RobotConfigPageProps> = ({
     } else {
       // Try to determine the correct path based on current URL
       const currentPath = location.pathname;
-      const basePath = currentPath.includes('/prebuilt-robots') ? '/prebuilt-robots' : '/robots';
+      const basePath = currentPath.includes('/prebuilt-robots') ? '/prebuilt-robots' : '/scrapers';
       navigate(basePath);
     }
   };

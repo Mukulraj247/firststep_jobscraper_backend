@@ -364,6 +364,10 @@ export function parseFailureDashboardSearch(search: string | URLSearchParams): {
   timeWindow: FailureTimeWindow;
   from?: string;
   to?: string;
+  q: string;
+  status: string;
+  reason: string;
+  anomaly: string;
 } {
   const params = typeof search === 'string' ? new URLSearchParams(search) : search;
   const windowRaw = String(params.get('window') || '').trim().toLowerCase();
@@ -372,11 +376,45 @@ export function parseFailureDashboardSearch(search: string | URLSearchParams): {
     : '1h';
   const from = params.get('from')?.trim() || '';
   const to = params.get('to')?.trim() || '';
+  const q = params.get('q')?.trim() || '';
+  const status = params.get('status')?.trim() || DEFAULT_FAILURE_STATUS_FILTER;
+  const reason = params.get('reason')?.trim() || '';
+  const anomaly = params.get('anomaly')?.trim() || '';
   if (from && to) {
-    return { timeWindow, from, to };
+    return { timeWindow, from, to, q, status, reason, anomaly };
   }
-  return { timeWindow };
+  return { timeWindow, q, status, reason, anomaly };
 }
+
+export function serializeFailureListSearch(input: {
+  q: string;
+  status: string;
+  reason: string;
+  anomaly: string;
+  timeWindow: FailureTimeWindow;
+  from?: string;
+  to?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (input.q.trim()) params.set('q', input.q.trim());
+  if (input.status && input.status !== DEFAULT_FAILURE_STATUS_FILTER) params.set('status', input.status);
+  if (input.reason) params.set('reason', input.reason);
+  if (input.anomaly) params.set('anomaly', input.anomaly);
+  if (input.from && input.to) {
+    params.set('from', input.from);
+    params.set('to', input.to);
+  } else if (input.timeWindow) {
+    params.set('window', input.timeWindow);
+  }
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : '';
+}
+
+export {
+  isSafeInAppReturnPath,
+  runDetailsBackHref,
+  runDetailsBackLabel,
+} from '../navigation/inAppReturn';
 
 export function windowStatusPillLabel(count: number, window: FailureTimeWindow): string {
   const noun = count === 1 ? 'failure' : 'failures';

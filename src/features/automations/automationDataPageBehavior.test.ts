@@ -3,6 +3,7 @@ import {
   dataColumnLabel,
   dataColumnMinWidthPx,
   extractedDataDialogPaperSx,
+  extractedDataTableScrollSx,
   formatExtractedCellDisplay,
   formatSourceLabel,
 } from './automationDataPageBehavior';
@@ -45,5 +46,18 @@ describe('extracted data presentation', () => {
     const paper = extractedDataDialogPaperSx();
     expect(paper.height).toEqual({ xs: '100%', md: '88vh' });
     expect(paper.maxWidth).toBe(1320);
+  });
+
+  it('keeps a visible horizontal scrollbar so right-side columns are reachable', () => {
+    const scroll = extractedDataTableScrollSx();
+    expect(scroll.overflowX).toBe('scroll');
+    expect(scroll.scrollbarWidth).toBe('auto');
+    expect(scroll['&::-webkit-scrollbar']).toMatchObject({ display: 'block', height: 12 });
+  });
+
+  it('formats ISO date cells instead of clipping the raw timestamp', () => {
+    const cell = formatExtractedCellDisplay('date', '2026-08-19T07:59:18.000Z');
+    expect(cell.text).toBe('19 Aug 2026, 1:29 PM IST');
+    expect(cell.text).not.toContain('T07:59');
   });
 });

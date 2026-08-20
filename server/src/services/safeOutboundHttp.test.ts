@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertPinnedPeerAddress,
+  assertPinnedPeerInAllowlist,
   createPinnedLookup,
   requestSafeOutboundUrl,
 } from './safeOutboundHttp';
@@ -12,12 +13,24 @@ describe('pinned outbound HTTP transport', () => {
     const callback = vi.fn();
 
     lookup('hooks.example', {}, callback);
-
     expect(callback).toHaveBeenCalledWith(null, '203.0.113.10', 4);
+
+    const twoArg = vi.fn();
+    lookup('hooks.example', twoArg as any);
+    expect(twoArg).toHaveBeenCalledWith(null, '203.0.113.10', 4);
   });
 
   it('refuses a changed peer address', () => {
     expect(() => assertPinnedPeerAddress('203.0.113.10', '10.0.0.8')).toThrow(
+      UnsafeOutboundUrlError
+    );
+  });
+
+  it('allows any DNS-validated CDN address for the same host', () => {
+    expect(() =>
+      assertPinnedPeerInAllowlist(['203.0.113.10', '203.0.113.11'], '203.0.113.11')
+    ).not.toThrow();
+    expect(() => assertPinnedPeerInAllowlist(['203.0.113.10'], '10.0.0.8')).toThrow(
       UnsafeOutboundUrlError
     );
   });

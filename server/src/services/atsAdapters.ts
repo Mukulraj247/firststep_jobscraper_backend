@@ -11,8 +11,8 @@ import {
   normalizeLocation,
   normalizeSalaryRange,
 } from './jobPageParser';
-import { resolveSafeOutboundUrl } from '../utils/outboundUrlPolicy';
-import { assertPinnedPeerAddress, createPinnedLookup } from './safeOutboundHttp';
+import { resolveSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/outboundUrlPolicy';
+import { assertPinnedPeerInAllowlist, createPinnedLookup } from './safeOutboundHttp';
 
 export type AtsProvider =
   | 'greenhouse'
@@ -24,7 +24,12 @@ export type AtsProvider =
   | 'oraclecloud'
   | 'googlecareers'
   | 'ibmcareers'
-  | 'workday';
+  | 'workday'
+  | 'eightfold'
+  | 'icims'
+  | 'taleo'
+  | 'njoyn'
+  | 'careerhtml';
 
 export interface AtsFetchResult {
   provider: AtsProvider;
@@ -43,6 +48,14 @@ const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 16 });
  */
 const GREENHOUSE_VANITY_BOARDS: Record<string, string> = {
   'stripe.com': 'stripe',
+  'asana.com': 'asana',
+  'okta.com': 'okta',
+  'github.com': 'github',
+  'github.careers': 'github',
+  'docusign.com': 'docusign',
+  'careers.docusign.com': 'docusign',
+  'jobs.twilio.com': 'twilio',
+  'twilio.com': 'twilio',
 };
 
 const SALESFORCE_WORKDAY_BASE =
@@ -183,14 +196,38 @@ httpClient.interceptors.request.use(async (config) => {
   const target = await resolveSafeOutboundUrl(rawUrl);
   const selected = target.addresses[0];
   if (!selected) throw new Error('ATS outbound hostname could not be resolved');
-  (config as any).lookup = createPinnedLookup(selected.address, selected.family);
-  (config as any).__safeOutboundAddress = selected.address;
+  const hostname = new URL(rawUrl).hostname;
+  const pinnedAgentOptions = {
+    keepAlive: true,
+    maxSockets: 16,
+    lookup: createPinnedLookup(selected.address, selected.family),
+  };
+  // Shared keepAliveAgent ignores config.lookup, so CDNs with many A records fail
+  // the peer pin. Attach a per-request agent that actually uses the pinned lookup.
+  if (new URL(rawUrl).protocol === 'https:') {
+    config.httpsAgent = new https.Agent({
+      ...pinnedAgentOptions,
+      servername: hostname,
+    } as https.AgentOptions);
+  } else {
+    config.httpAgent = new http.Agent(pinnedAgentOptions as http.AgentOptions);
+  }
+  (config as any).__safeOutboundAddresses = target.addresses.map((item) => item.address);
   config.maxRedirects = 0;
   return config;
 });
 httpClient.interceptors.response.use((response) => {
-  const expected = (response.config as any).__safeOutboundAddress;
-  if (expected) assertPinnedPeerAddress(expected, response.request?.socket?.remoteAddress);
+  const expected = (response.config as any).__safeOutboundAddresses as string[] | undefined;
+  const socket = response.request?.socket;
+  const peer =
+    socket?.remoteAddress ||
+    socket?.socket?.remoteAddress ||
+    response.request?.connection?.remoteAddress;
+  // Pinned Agent lookup already constrains DNS. Axios sometimes omits peer on TLS
+  // sockets; only enforce the allowlist when Node reports a remote address.
+  if (expected?.length && peer) {
+    assertPinnedPeerInAllowlist(expected, peer);
+  }
   return response;
 });
 
@@ -220,6 +257,328 @@ const ORACLE_TENANT_COMPANY: Record<string, string> = {
 function companyOrEmpty(name: string): string {
   const n = String(name || '').trim();
   return isPortalCompanyName(n) ? '' : n;
+}
+
+function titleCaseToken(token: string): string {
+  const key = token.toLowerCase();
+  if (key.length <= 3) return key.toUpperCase();
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function workdayCompanyHint(tenant: string): string {
+  const known: Record<string, string> = {
+    td: 'TD',
+    mtb: 'M&T Bank',
+    intel: 'Intel',
+  };
+  return known[tenant.toLowerCase()] || titleCaseToken(tenant);
+}
+
+export function detectWorkday(
+  parsed: URL
+): { provider: 'workday'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const m = host.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/i);
+  if (!m) return null;
+  const tenant = m[1];
+  const parts = parsed.pathname.split('/').filter(Boolean);
+  const localeLike = /^(?:en|fr|de|es|pt|zh|ja|ko|it|nl|sv|da|fi|pl|tr)(?:-[a-z]{2})?$/i;
+  const filtered = parts.filter(
+    (p) => !localeLike.test(p) && !/^(wday|cxs)$/i.test(p)
+  );
+  const jobIdx = filtered.findIndex((p) => /^(job|jobs|details)$/i.test(p));
+  if (jobIdx < 1) return null;
+  const site = filtered[0];
+  if (!site || /^(job|jobs|details)$/i.test(site)) return null;
+  return {
+    provider: 'workday',
+    apiUrl: `https://${host}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}`,
+    companyHint: workdayCompanyHint(tenant),
+  };
+}
+
+function oracleJobIdFromParts(parts: string[]): string {
+  const lower = parts.map((p) => p.toLowerCase());
+  const jobIdx = lower.lastIndexOf('job');
+  if (jobIdx >= 0 && parts[jobIdx + 1]) return parts[jobIdx + 1].split('?')[0];
+  const previewIdx = lower.lastIndexOf('preview');
+  if (previewIdx >= 0 && parts[previewIdx + 1]) return parts[previewIdx + 1].split('?')[0];
+  return '';
+}
+
+function detectEightfold(
+  parsed: URL
+): { provider: 'eightfold'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!host.endsWith('.eightfold.ai') && host !== 'eightfold.ai') return null;
+  const pid =
+    parsed.searchParams.get('pid') ||
+    parsed.searchParams.get('position_id') ||
+    (parsed.pathname.match(/\/(?:careers\/)?(?:job|position|positions)\/(\d+)/i) || [])[1] ||
+    '';
+  if (!pid || !/^\d+$/.test(pid)) return null;
+  const company = host.replace(/\.eightfold\.ai$/i, '') || 'Eightfold';
+  return {
+    provider: 'eightfold',
+    apiUrl: `https://${host}/api/apply/v2/jobs/${encodeURIComponent(pid)}`,
+    companyHint: titleCaseToken(company),
+  };
+}
+
+function detectIcims(
+  parsed: URL
+): { provider: 'icims'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!host.endsWith('.icims.com') && host !== 'icims.com') return null;
+  const parts = parsed.pathname.split('/').filter(Boolean);
+  const jobsIdx = parts.findIndex((p) => p.toLowerCase() === 'jobs');
+  const id = jobsIdx >= 0 ? parts[jobsIdx + 1] : '';
+  if (!id || !/^\d+$/.test(id)) return null;
+  const sub = host.replace(/\.icims\.com$/i, '').replace(/^(staff|careers)-/i, '');
+  return {
+    provider: 'icims',
+    apiUrl: `https://${host}/jobs/${encodeURIComponent(id)}/job`,
+    companyHint: titleCaseToken(sub.split('.')[0] || sub),
+  };
+}
+
+function detectTaleo(
+  parsed: URL
+): { provider: 'taleo'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!host.endsWith('.taleo.net') && host !== 'taleo.net') return null;
+  const jobId =
+    parsed.searchParams.get('job') ||
+    parsed.searchParams.get('rid') ||
+    parsed.searchParams.get('requisitionId') ||
+    '';
+  if (!jobId) return null;
+  const clean = new URL(parsed.href);
+  clean.hash = '';
+  const tenant = host.replace(/\.taleo\.net$/i, '').split('.')[0];
+  return {
+    provider: 'taleo',
+    apiUrl: clean.toString(),
+    companyHint: titleCaseToken(tenant),
+  };
+}
+
+function detectNjoyn(
+  parsed: URL
+): { provider: 'njoyn'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!host.endsWith('.njoyn.com') && host !== 'njoyn.com') return null;
+  const jobId = parsed.searchParams.get('JobID') || parsed.searchParams.get('jobid') || '';
+  if (!jobId) return null;
+  const clean = new URL(parsed.href);
+  clean.hash = '';
+  const tenant = host.replace(/\.njoyn\.com$/i, '').split('.')[0];
+  return {
+    provider: 'njoyn',
+    apiUrl: clean.toString(),
+    companyHint: tenant.toUpperCase() === 'CGI' ? 'CGI' : titleCaseToken(tenant),
+  };
+}
+
+function isHiringCafeHost(host: string): boolean {
+  return host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
+}
+
+function looksLikeJobDetailPath(parsed: URL): boolean {
+  const path = parsed.pathname;
+  if (
+    /\/(?:job|jobs|details|posting|postings|opening|openings|position|positions|requisition|apply|listing)\b/i.test(
+      path
+    )
+  ) {
+    return true;
+  }
+  const keys = ['jobid', 'job', 'rid', 'req', 'pid', 'gh_jid', 'requisitionid', 'reqid'];
+  for (const [key, value] of parsed.searchParams) {
+    if (keys.includes(key.toLowerCase()) && String(value || '').trim()) return true;
+  }
+  return false;
+}
+
+/** Career hosts from scrape.do spend that we fetch directly instead of scrape.do. Never HiringCafe. */
+const CAREER_HTML_HOST_COMPANIES: Record<string, string> = {
+  'jobs.apple.com': 'Apple',
+  'amazon.jobs': 'Amazon',
+  'passport.amazon.jobs': 'Amazon',
+  'careers.truist.com': 'Truist',
+  'jobs-us.pwc.com': 'PwC',
+  'careers.wipro.com': 'Wipro',
+  'higher.gs.com': 'Goldman Sachs',
+  'careers.ford.com': 'Ford',
+  'careers.zionsbank.com': 'Zions Bank',
+  'zionsbank.com': 'Zions Bank',
+  'metacareers.com': 'Meta',
+  'careers.techmahindra.com': 'Tech Mahindra',
+  'careers.bankofamerica.com': 'Bank of America',
+  'careers.ey.com': 'EY',
+  'careers.airbnb.com': 'Airbnb',
+  'wellsfargojobs.com': 'Wells Fargo',
+  'careers.cognizant.com': 'Cognizant',
+  'careers-inc.nttdata.com': 'NTT Data',
+  'jobs.carrier.com': 'Carrier',
+  'careers.toyota.com': 'Toyota',
+  'jobs.uber.com': 'Uber',
+  'jobs.uci.edu': 'UC Irvine',
+  'jobs.twilio.com': 'Twilio',
+  'jobs.statefarm.com': 'State Farm',
+  'jobs.compassgroupcareers.com': 'Compass Group',
+  'jobs.citizensbank.com': 'Citizens Bank',
+  'jobs.citi.com': 'Citi',
+  'jobs.bmo.com': 'BMO',
+  'github.careers': 'GitHub',
+  'sia-partners.com': 'Sia Partners',
+  'wave.com': 'Wave',
+  'virtusa.com': 'Virtusa',
+  'okta.com': 'Okta',
+  'numble.be': 'Numble',
+  'lifeattiktok.com': 'TikTok',
+  'jobs.gem.com': 'Gem',
+  'epam.com': 'EPAM',
+  'careers.epam.com': 'EPAM',
+  'comeet.com': 'Comeet',
+  'cityjobs.nyc.gov': 'NYC',
+  'carrierjobs.cn': 'Carrier',
+  'careers.zoom.us': 'Zoom',
+  'careers.unitedhealthgroup.com': 'UnitedHealth',
+  'careers.umich.edu': 'University of Michigan',
+  'careers.travelers.com': 'Travelers',
+  'careers.summitllc.com': 'Summit',
+  'careers.statestreet.com': 'State Street',
+  'careers.servicenow.com': 'ServiceNow',
+  'careers.regions.com': 'Regions',
+  'careers.ozk.com': 'OZK',
+  'careers.dxc.com': 'DXC',
+  'careers.docusign.com': 'DocuSign',
+  'careers.cisco.com': 'Cisco',
+  'careers.boozallen.com': 'Booz Allen',
+  'careers.hpe.com': 'HPE',
+  'capgemini.com': 'Capgemini',
+  'atos.net': 'Atos',
+  'asana.com': 'Asana',
+  'akkodis.com': 'Akkodis',
+  'recruiting.paylocity.com': 'Paylocity',
+  'salesforce.com': 'Salesforce',
+  'careers.salesforce.com': 'Salesforce',
+};
+
+const CAREER_HTML_SUFFIXES = [
+  'paylocity.com',
+  'jobvite.com',
+  'applytojob.com',
+  'pinpointhq.com',
+  'ripplehire.com',
+  'hrmdirect.com',
+  'tal.net',
+  'adp.com',
+  'entertimeonline.com',
+  'amazon.jobs',
+];
+
+function careerHtmlCompanyHint(host: string): string {
+  if (CAREER_HTML_HOST_COMPANIES[host]) return CAREER_HTML_HOST_COMPANIES[host];
+  const suffix = CAREER_HTML_SUFFIXES.find((s) => host === s || host.endsWith(`.${s}`));
+  if (suffix === 'amazon.jobs') return 'Amazon';
+  const tenant = host.split('.')[0];
+  if (host.endsWith('.applytojob.com') || host.endsWith('.pinpointhq.com') || host.endsWith('.ripplehire.com')) {
+    return titleCaseToken(tenant);
+  }
+  if (host.startsWith('careers.') || host.startsWith('jobs.')) {
+    const brand = host.split('.')[1] || tenant;
+    return titleCaseToken(brand);
+  }
+  return titleCaseToken(tenant);
+}
+
+function isCareerHtmlHost(host: string): boolean {
+  if (isHiringCafeHost(host)) return false;
+  if (CAREER_HTML_HOST_COMPANIES[host]) return true;
+  return CAREER_HTML_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+function detectCareerHtml(
+  parsed: URL
+): { provider: 'careerhtml'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (!isCareerHtmlHost(host) || !looksLikeJobDetailPath(parsed)) return null;
+  const clean = new URL(parsed.href);
+  clean.hash = '';
+  return {
+    provider: 'careerhtml',
+    apiUrl: clean.toString(),
+    companyHint: careerHtmlCompanyHint(host),
+  };
+}
+
+const SKIP_SCRAPE_DO_HOSTS = new Set([
+  'careers.ibm.com',
+  'ibmglobal.avature.net',
+  'careers.oracle.com',
+  'enterpriseplatform.dell.com',
+  'media.licdn.com',
+  'instagram.com',
+  'twitter.com',
+  'x.com',
+  'facebook.com',
+  'developers.cloudflare.com',
+  'linkedin.com',
+  'indeed.com',
+  ...Object.keys(CAREER_HTML_HOST_COMPANIES),
+]);
+
+const SKIP_SCRAPE_DO_SUFFIXES = [
+  'myworkdayjobs.com',
+  'greenhouse.io',
+  'lever.co',
+  'ashbyhq.com',
+  'taleo.net',
+  'icims.com',
+  'eightfold.ai',
+  'oraclecloud.com',
+  'njoyn.com',
+  ...CAREER_HTML_SUFFIXES,
+];
+
+const NEVER_SCRAPE_DO_HOSTS = new Set([
+  'media.licdn.com',
+  'instagram.com',
+  'twitter.com',
+  'x.com',
+  'facebook.com',
+  'developers.cloudflare.com',
+  'linkedin.com',
+  'indeed.com',
+]);
+
+/** Non-job / CDN hosts that must never hit scrape.do. ATS misses still fall back to cheap scrape.do. */
+export function shouldNeverScrapeDoUrl(url: string): boolean {
+  if (!url) return false;
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return false;
+  }
+  return NEVER_SCRAPE_DO_HOSTS.has(host);
+}
+
+export function shouldSkipScrapeDoUrl(url: string): boolean {
+  if (!url) return false;
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return false;
+  }
+  if (isHiringCafeHost(host)) return false;
+  if (detectAts(url)) return true;
+  if (!host) return false;
+  if (SKIP_SCRAPE_DO_HOSTS.has(host)) return true;
+  return SKIP_SCRAPE_DO_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
 function oracleTenantCompany(tenant: string): string {
@@ -381,9 +740,8 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
     const tenant = host.split('.')[0];
     const parts = path.split('/').filter(Boolean);
     const sitesIdx = parts.indexOf('sites');
-    const jobIdx = parts.indexOf('job');
     const siteNumber = sitesIdx >= 0 ? parts[sitesIdx + 1] : '';
-    const jobId = jobIdx >= 0 ? (parts[jobIdx + 1] || '').split('?')[0] : '';
+    const jobId = oracleJobIdFromParts(parts);
     if (tenant && siteNumber && jobId) {
       const finder = encodeURIComponent(`ById;Id="${jobId}",siteNumber=${siteNumber}`);
       return {
@@ -431,6 +789,24 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
   const salesforceWorkday = detectSalesforceWorkday(parsed);
   if (salesforceWorkday) return salesforceWorkday;
 
+  const workday = detectWorkday(parsed);
+  if (workday) return workday;
+
+  const eightfold = detectEightfold(parsed);
+  if (eightfold) return eightfold;
+
+  const icims = detectIcims(parsed);
+  if (icims) return icims;
+
+  const taleo = detectTaleo(parsed);
+  if (taleo) return taleo;
+
+  const njoyn = detectNjoyn(parsed);
+  if (njoyn) return njoyn;
+
+  const careerHtml = detectCareerHtml(parsed);
+  if (careerHtml) return careerHtml;
+
   return null;
 }
 
@@ -463,6 +839,38 @@ function mapWorkday(data: any, companyHint: string, pageUrl: string): ParsedJobF
   f.employmentType = String(info.timeType || '').trim();
   f.applyUrl = pageUrl;
   return f;
+}
+
+function mapEightfold(data: any, companyHint: string, pageUrl: string): ParsedJobFields {
+  const job = data?.data || data?.job || data || {};
+  const f = empty();
+  f.jobTitle = String(job.name || job.title || job.position_name || '').trim();
+  f.companyName = companyOrEmpty(job.company || companyHint);
+  f.jobDescription = stripHtmlTags(
+    job.job_description || job.description || job.jobDescription || ''
+  );
+  const loc = job.location || job.locations;
+  f.location = Array.isArray(loc)
+    ? loc.map((item: any) => (typeof item === 'string' ? item : item?.name || '')).filter(Boolean).join(', ')
+    : String(loc || job.city || '').trim();
+  f.employmentType = String(job.employment_type || job.type || '').trim();
+  f.applyUrl = job.url || job.apply_url || pageUrl;
+  return f;
+}
+
+function workdayRequisitionId(pageUrl: string): string {
+  const jr = pageUrl.match(/(?:^|_|\/|-)(JR-?\d+)\b/i)?.[1];
+  if (jr) return jr.replace(/-/g, '');
+  const r = pageUrl.match(/(?:^|_|\/|-)(R-?\d+)\b/i)?.[1];
+  if (r) return r.replace(/-/g, '');
+  try {
+    const last = new URL(pageUrl).pathname.split('/').filter(Boolean).pop() || '';
+    const fromSlug = last.match(/_((?:JR|R)-?\d+)$/i)?.[1];
+    if (fromSlug) return fromSlug.replace(/-/g, '');
+    return decodeURIComponent(last);
+  } catch {
+    return '';
+  }
 }
 
 async function fetchWorkdayJob(
@@ -886,6 +1294,31 @@ async function fetchIbmCareersHtml(pageUrl: string): Promise<string> {
   });
 }
 
+async function fetchHtmlAtsJob(
+  pageUrl: string,
+  apiUrl: string,
+  provider: AtsProvider,
+  companyHint: string
+): Promise<AtsFetchResult | null> {
+  const res = await httpClient.get(apiUrl, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    responseType: 'text',
+    transitional: { forcedJSONParsing: false },
+    maxContentLength: 3 * 1024 * 1024,
+    maxBodyLength: 3 * 1024 * 1024,
+  });
+  if (res.status >= 400 || !res.data) return null;
+  const fields = parseJobPageHtml(String(res.data), pageUrl);
+  if (!fields.companyName) fields.companyName = companyOrEmpty(companyHint);
+  if (!fields.jobTitle && !fields.jobDescription) return null;
+  return { provider, fields };
+}
+
 /**
  * Fetch structured job fields from a public ATS API. Returns null when the URL
  * is not an ATS page or the API call fails / returns unusable data.
@@ -936,9 +1369,18 @@ export async function fetchAtsJob(pageUrl: string): Promise<AtsFetchResult | nul
     }
 
     if (detected.provider === 'workday') {
-      const jobId = pageUrl.match(/\b(jr\d+)\b/i)?.[1];
+      const jobId = workdayRequisitionId(pageUrl);
       if (!jobId) return null;
       return await fetchWorkdayJob(detected.apiUrl, jobId, detected.companyHint, pageUrl);
+    }
+
+    if (
+      detected.provider === 'icims' ||
+      detected.provider === 'taleo' ||
+      detected.provider === 'njoyn' ||
+      detected.provider === 'careerhtml'
+    ) {
+      return await fetchHtmlAtsJob(pageUrl, detected.apiUrl, detected.provider, detected.companyHint);
     }
 
     const res = await httpClient.get(detected.apiUrl, {
@@ -976,6 +1418,9 @@ export async function fetchAtsJob(pageUrl: string): Promise<AtsFetchResult | nul
       case 'recruitee':
         fields = mapRecruitee(res.data, detected.companyHint, pageUrl);
         break;
+      case 'eightfold':
+        fields = mapEightfold(res.data, detected.companyHint, pageUrl);
+        break;
       case 'oraclecloud': {
         fields = mapOracleCloud(res.data, detected.companyHint, pageUrl);
         const item = Array.isArray(res.data?.items) ? res.data.items[0] : null;
@@ -1004,7 +1449,8 @@ export type AtsBoardProvider =
   | 'findly'
   | 'successfactors'
   | 'oraclecloud'
-  | 'bankofamerica';
+  | 'bankofamerica'
+  | 'phenom';
 
 export interface AtsBoardDetection {
   provider: AtsBoardProvider;
@@ -1248,6 +1694,585 @@ async function fetchFindlyBoardJobs(
   const rows = mapFindlyBoardJobs(all, companyHint, origin, cfg.jobDetailPath);
   if (!rows.length) return null;
   return { provider: 'findly', companyHint, rows };
+}
+
+const PHENOM_BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const PHENOM_DEFAULT_DDO_KEY = 'refineSearch';
+const PHENOM_DEFAULT_PAGE_NAME = 'search-results';
+const PHENOM_WIDGETS_PAGE_SIZE = 20;
+const PHENOM_WIDGETS_MARKER = 'phenom-widgets://resolve';
+
+export type PhenomSiteKind = 'widgets' | 'pcsx';
+
+export interface PhenomSiteConfig {
+  kind: PhenomSiteKind;
+  companyHint: string;
+  domain?: string;
+  refNum?: string;
+  ddoKey: string;
+  pageName: string;
+}
+
+function phenomQueryLooksLikePcsx(parsed: URL): boolean {
+  const pid = (parsed.searchParams.get('pid') || '').trim();
+  if (/^\d{6,}$/.test(pid)) return true;
+  if (parsed.searchParams.has('filter_include_remote')) return true;
+  if (parsed.searchParams.has('filter_include_relocation')) return true;
+  if ([...parsed.searchParams.keys()].some((key) => key.startsWith('filter_'))) return true;
+  const sortBy = (parsed.searchParams.get('sort_by') || '').trim();
+  if (sortBy && /^(distance|relevance|date|hot)$/i.test(sortBy)) return true;
+  return false;
+}
+
+/** True when the career URL looks like Phenom / Phenom Career Site (Eightfold PCS). */
+export function looksLikePhenomBoard(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  if (host.includes('phenompeople.com')) return true;
+  if (host === 'eightfold.ai' || host.endsWith('.eightfold.ai')) return true;
+  if (host.startsWith('hiring.')) return true;
+  if (phenomQueryLooksLikePcsx(parsed)) return true;
+  if (/\/job\/[^/]+\/[^/]+\/\d+\/\d+\/?$/i.test(path)) return true;
+  if (/\/careers\/job\/\d+/i.test(path)) return true;
+  // Qualcomm / NVIDIA-style PCS shells: careers.<brand>.com/careers
+  if (host.startsWith('careers.') && /^\/careers$/i.test(path)) return true;
+  return false;
+}
+
+function phenomCompanyHintFromHost(host: string): string {
+  const stripped = host
+    .toLowerCase()
+    .replace(/^www\./, '')
+    .replace(/^(hiring|careers|jobs)\./, '')
+    .replace(/\.eightfold\.ai$/i, '')
+    .replace(/\.phenompeople\.com$/i, '');
+  const token = stripped.split('.')[0] || host;
+  return titleCaseToken(token);
+}
+
+function phenomOrigin(pageUrl: string): string | null {
+  try {
+    return new URL(pageUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
+function decodeHtmlJsonBlob(raw: string): any | null {
+  const text = String(raw || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&amp;/g, '&')
+    .trim();
+  if (!text.startsWith('{') && !text.startsWith('[')) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function cookieHeaderFromSetCookie(headers: unknown): string | undefined {
+  const rec = headers as { [key: string]: unknown; get?: (name: string) => unknown } | null;
+  if (!rec) return undefined;
+  const raw =
+    rec['set-cookie'] ??
+    rec['Set-Cookie'] ??
+    (typeof rec.get === 'function' ? rec.get('set-cookie') : undefined);
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const parts = list
+    .map((entry) => String(entry || '').split(';')[0].trim())
+    .filter(Boolean);
+  return parts.length ? parts.join('; ') : undefined;
+}
+
+function mergeCookieHeader(existing: string | undefined, incoming: string | undefined): string | undefined {
+  if (!incoming) return existing;
+  if (!existing) return incoming;
+  const map = new Map<string, string>();
+  for (const part of `${existing}; ${incoming}`.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed || !trimmed.includes('=')) continue;
+    const eq = trimmed.indexOf('=');
+    map.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim());
+  }
+  const joined = [...map.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+  return joined || undefined;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function walkFindString(obj: any, keys: string[], depth = 0): string {
+  if (!obj || depth > 6) return '';
+  if (Array.isArray(obj)) {
+    for (const item of obj.slice(0, 40)) {
+      const found = walkFindString(item, keys, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof obj !== 'object') return '';
+  const wanted = new Set(keys.map((k) => k.toLowerCase()));
+  for (const [key, value] of Object.entries(obj)) {
+    if (wanted.has(key.toLowerCase()) && typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === 'object') {
+      const found = walkFindString(value, keys, depth + 1);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+/**
+ * Discover Phenom tenant config from public HTML.
+ * Never copies `pid=` from the URL into `refNum`.
+ */
+export function parsePhenomConfigFromHtml(html: string, pageUrl = ''): PhenomSiteConfig | null {
+  if (!html) return null;
+  const $ = cheerio.load(String(html));
+  const pcsxBlob = decodeHtmlJsonBlob($('#pcsx-data').text());
+  const brandingBlob = decodeHtmlJsonBlob($('#branding-data').text());
+  const navbarBlob = decodeHtmlJsonBlob($('#navbar-data').text());
+
+  const groupIdMatch = String(html).match(/window\._EF_GROUP_ID\s*=\s*["']([^"']+)["']/i);
+  const productMatch = String(html).match(/window\._EF_PRODUCT\s*=\s*["']([^"']+)["']/i);
+  const domain =
+    firstString(
+      groupIdMatch?.[1],
+      pcsxBlob?.domain,
+      brandingBlob?.domain,
+      navbarBlob?.domain
+    ) || undefined;
+  const product = firstString(productMatch?.[1], navbarBlob?.product);
+  const companyHint = firstString(
+    walkFindString(navbarBlob, ['company_name', 'companyName']),
+    walkFindString(brandingBlob, ['company_name', 'companyName']),
+    walkFindString(pcsxBlob, ['company_name', 'companyName']),
+    phenomCompanyHintFromHost(phenomOrigin(pageUrl) ? new URL(pageUrl).hostname : '')
+  );
+
+  const pcsConfirmed =
+    !!pcsxBlob ||
+    product.toUpperCase() === 'PCS' ||
+    /static\.vscdn\.net/i.test(html) ||
+    /pcsx-data|_EF_GROUP_ID|_EF_PRODUCT/i.test(html);
+
+  let phApp: any = null;
+  const phAppAssign =
+    html.match(/phApp(?:\.ddo)?\s*=\s*(\{[\s\S]*?\});/) ||
+    html.match(/window\.phApp\s*=\s*(\{[\s\S]*?\});/);
+  if (phAppAssign?.[1]) phApp = decodeHtmlJsonBlob(phAppAssign[1]);
+
+  const refNum = firstString(
+    walkFindString(phApp, ['refNum', 'siteId', 'siteID']),
+    (html.match(/["']refNum["']\s*:\s*["']([^"']+)["']/) || [])[1]
+  );
+  const ddoKey =
+    firstString(walkFindString(phApp, ['ddoKey']), PHENOM_DEFAULT_DDO_KEY) || PHENOM_DEFAULT_DDO_KEY;
+  const pageName =
+    firstString(walkFindString(phApp, ['pageName']), PHENOM_DEFAULT_PAGE_NAME) || PHENOM_DEFAULT_PAGE_NAME;
+
+  const widgetsConfirmed =
+    !!refNum ||
+    /phenompeople\.com/i.test(html) ||
+    /refineSearch/i.test(html) ||
+    /["']ddoKey["']/i.test(html);
+
+  if (pcsConfirmed && domain) {
+    return {
+      kind: 'pcsx',
+      companyHint: companyHint || phenomCompanyHintFromHost('site'),
+      domain,
+      ddoKey,
+      pageName,
+    };
+  }
+  if (widgetsConfirmed && refNum) {
+    return {
+      kind: 'widgets',
+      companyHint: companyHint || phenomCompanyHintFromHost('site'),
+      refNum,
+      ddoKey,
+      pageName,
+    };
+  }
+  return null;
+}
+
+export function buildPhenomWidgetsRequest(
+  config: PhenomSiteConfig,
+  from: number,
+  size = PHENOM_WIDGETS_PAGE_SIZE
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    ddoKey: config.ddoKey || PHENOM_DEFAULT_DDO_KEY,
+    pageName: config.pageName || PHENOM_DEFAULT_PAGE_NAME,
+    jobs: true,
+    counts: true,
+    size,
+    from,
+    keywords: '',
+    global: true,
+    selected_fields: {},
+    sort: { order: 'desc', field: 'postedDate' },
+  };
+  if (config.refNum) body.refNum = config.refNum;
+  return body;
+}
+
+function phenomAbsoluteUrl(origin: string, raw: unknown): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    return new URL(value, origin).toString();
+  } catch {
+    return '';
+  }
+}
+
+function phenomWidgetsJobs(data: any): { jobs: any[]; totalHits: number } {
+  const root = data?.refineSearch?.data || data?.data || data;
+  const jobs = Array.isArray(root?.jobs) ? root.jobs : Array.isArray(data?.jobs) ? data.jobs : [];
+  const totalRaw = root?.totalHits ?? root?.hits ?? root?.totalCount ?? data?.totalHits ?? data?.count;
+  const totalHits = typeof totalRaw === 'number' && Number.isFinite(totalRaw) ? totalRaw : jobs.length;
+  return { jobs, totalHits };
+}
+
+function mapPhenomWidgetsJobs(jobs: any[], companyHint: string, origin: string): AtsBoardJobRow[] {
+  return jobs
+    .map((job) => {
+      const jobUrl = phenomAbsoluteUrl(
+        origin,
+        firstString(
+          job?.applyUrl,
+          job?.apply_url,
+          job?.jobUrl,
+          job?.jobURL,
+          job?.hostedUrl,
+          job?.externalPath,
+          job?.url
+        )
+      );
+      const loc = firstString(
+        job?.location,
+        [job?.city, job?.state, job?.country].filter(Boolean).join(', ')
+      );
+      return rowFromParts({
+        jobUrl,
+        title: firstString(job?.title, job?.jobTitle, job?.positionTitle),
+        company: firstString(job?.companyName, job?.company, companyHint),
+        location: loc,
+        employmentType: firstString(job?.type, job?.employmentType, job?.jobType) || undefined,
+        date: firstString(job?.postedDate, job?.datePosted, job?.postedDateStr) || undefined,
+        department: firstString(job?.category, job?.department, job?.jobCategory) || undefined,
+      });
+    })
+    .filter((row) => row.jobUrl && row.jobTitle);
+}
+
+function mapPhenomPcsxPositions(positions: any[], companyHint: string, origin: string): AtsBoardJobRow[] {
+  return positions
+    .map((job) => {
+      const jobUrl = phenomAbsoluteUrl(
+        origin,
+        firstString(job?.positionUrl, job?.url, job?.applyUrl, job?.canonicalUrl)
+      );
+      const loc = Array.isArray(job?.locations)
+        ? job.locations.filter(Boolean).join(', ')
+        : firstString(job?.location, job?.standardizedLocations?.[0]);
+      const ts = Number(job?.postedTs || job?.creationTs || 0);
+      const date =
+        Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000).toISOString() : firstString(job?.postedDate);
+      return rowFromParts({
+        jobUrl,
+        title: firstString(job?.name, job?.title, job?.displayJobId),
+        company: companyHint,
+        location: loc,
+        employmentType: firstString(job?.workLocationOption) || undefined,
+        date: date || undefined,
+        department: firstString(job?.department) || undefined,
+      });
+    })
+    .filter((row) => row.jobUrl && row.jobTitle);
+}
+
+function dedupePhenomRows(rows: AtsBoardJobRow[]): AtsBoardJobRow[] {
+  const seen = new Set<string>();
+  const out: AtsBoardJobRow[] = [];
+  for (const row of rows) {
+    const key = row.jobUrl;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+const PHENOM_PCSX_PAGE_SIZE = 10;
+
+function phenomHtmlRequestHeaders(cookie?: string): Record<string, string> {
+  return {
+    Accept: 'text/html,application/xhtml+xml',
+    'User-Agent': PHENOM_BROWSER_UA,
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+}
+
+function phenomJsonRequestHeaders(origin: string, referer: string, cookie?: string): Record<string, string> {
+  return {
+    Accept: 'application/json',
+    'User-Agent': PHENOM_BROWSER_UA,
+    Origin: origin,
+    Referer: referer,
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+}
+
+export async function discoverPhenomSiteConfig(
+  pageUrl: string
+): Promise<{ config: PhenomSiteConfig; origin: string; referer: string; cookie?: string } | null> {
+  let origin: string;
+  try {
+    origin = new URL(pageUrl).origin;
+  } catch {
+    return null;
+  }
+  const candidates = [`${origin}/careers`, `${origin}/`, pageUrl];
+  let cookie: string | undefined;
+  for (const url of candidates) {
+    try {
+      const res = await httpClient.get(url, {
+        headers: phenomHtmlRequestHeaders(cookie),
+        maxContentLength: 4 * 1024 * 1024,
+        maxBodyLength: 4 * 1024 * 1024,
+        responseType: 'text',
+        transformResponse: [(data) => data],
+      });
+      cookie = mergeCookieHeader(cookie, cookieHeaderFromSetCookie(res.headers));
+      if (res.status >= 400 || typeof res.data !== 'string') continue;
+      const config = parsePhenomConfigFromHtml(res.data, url);
+      if (config) return { config, origin, referer: url, cookie };
+    } catch (error) {
+      if (error instanceof UnsafeOutboundUrlError) throw error;
+      continue;
+    }
+  }
+  return null;
+}
+
+async function fetchPhenomWidgetsBoard(
+  origin: string,
+  config: PhenomSiteConfig,
+  companyHint: string,
+  referer: string,
+  cookie: string | undefined,
+  maxPages: number,
+  maxJobs: number
+): Promise<AtsBoardFetchResult | null> {
+  if (!config.refNum) return null;
+  const allRows: AtsBoardJobRow[] = [];
+  let from = 0;
+  let totalHits = Infinity;
+  let pages = 0;
+  const size = PHENOM_WIDGETS_PAGE_SIZE;
+
+  while (from < totalHits && pages < maxPages && allRows.length < maxJobs) {
+    const body = buildPhenomWidgetsRequest(config, from, size);
+    const res = await httpClient.post(`${origin}/widgets`, body, {
+      headers: {
+        ...phenomJsonRequestHeaders(origin, referer, cookie),
+        'Content-Type': 'application/json',
+      },
+    });
+    if (res.status >= 400 || !res.data) break;
+    const { jobs, totalHits: reportedTotal } = phenomWidgetsJobs(res.data);
+    totalHits = reportedTotal;
+    const batch = mapPhenomWidgetsJobs(jobs, companyHint, origin);
+    allRows.push(...batch);
+    pages += 1;
+    if (jobs.length === 0) {
+      if (from >= totalHits) break;
+      break;
+    }
+    if (jobs.length < size && from + jobs.length >= totalHits) break;
+    from += size;
+    if (pages < maxPages && from < totalHits && allRows.length < maxJobs) {
+      await sleepMs(boardPageDelayMs());
+    }
+  }
+
+  const rows = dedupePhenomRows(allRows).slice(0, maxJobs);
+  if (!rows.length) return null;
+  return { provider: 'phenom', companyHint, rows };
+}
+
+function applyPhenomPcsxSearchParams(api: URL, pageUrl: string, domain: string, start: number): void {
+  api.searchParams.set('domain', domain);
+  api.searchParams.set('query', '');
+  api.searchParams.set('location', '');
+  api.searchParams.set('start', String(start));
+  try {
+    const src = new URL(pageUrl);
+    const query = (src.searchParams.get('query') || src.searchParams.get('q') || '').trim();
+    if (query) api.searchParams.set('query', query);
+    const location = (src.searchParams.get('location') || '').trim();
+    if (location) api.searchParams.set('location', location);
+    const sortBy = (src.searchParams.get('sort_by') || '').trim();
+    if (sortBy && !/^distance$/i.test(sortBy)) api.searchParams.set('sort_by', sortBy);
+    for (const [key, value] of src.searchParams.entries()) {
+      if (!key.startsWith('filter_') || !value.trim()) continue;
+      for (const part of value.split(',').map((item) => item.trim()).filter(Boolean)) {
+        api.searchParams.append(key, part);
+      }
+    }
+  } catch {
+    /* keep domain/start defaults */
+  }
+}
+
+function phenomStartUrlHasPcsxFilters(pageUrl: string): boolean {
+  try {
+    const src = new URL(pageUrl);
+    if ((src.searchParams.get('location') || '').trim()) return true;
+    return [...src.searchParams.keys()].some((key) => key.startsWith('filter_'));
+  } catch {
+    return false;
+  }
+}
+
+async function collectPhenomPcsxPages(
+  origin: string,
+  domain: string,
+  companyHint: string,
+  referer: string,
+  cookie: string | undefined,
+  maxPages: number,
+  maxJobs: number,
+  pageUrl: string
+): Promise<AtsBoardJobRow[]> {
+  const allRows: AtsBoardJobRow[] = [];
+  let start = 0;
+  let total = Infinity;
+  let pages = 0;
+  const pageSize = PHENOM_PCSX_PAGE_SIZE;
+
+  while (start < total && pages < maxPages && allRows.length < maxJobs) {
+    const api = new URL(`${origin}/api/pcsx/search`);
+    applyPhenomPcsxSearchParams(api, pageUrl, domain, start);
+    const res = await httpClient.get(api.toString(), {
+      headers: phenomJsonRequestHeaders(origin, referer, cookie),
+    });
+    if (res.status >= 400 || !res.data?.data) break;
+    const positions = Array.isArray(res.data.data.positions) ? res.data.data.positions : [];
+    const reportedTotal = res.data.data.count;
+    if (typeof reportedTotal === 'number' && Number.isFinite(reportedTotal)) {
+      total = reportedTotal;
+    }
+    allRows.push(...mapPhenomPcsxPositions(positions, companyHint, origin));
+    pages += 1;
+    if (positions.length === 0) break;
+    start += positions.length || pageSize;
+    if (pages < maxPages && start < total && allRows.length < maxJobs) {
+      await sleepMs(boardPageDelayMs());
+    }
+  }
+  return dedupePhenomRows(allRows).slice(0, maxJobs);
+}
+
+async function fetchPhenomPcsxBoard(
+  origin: string,
+  config: PhenomSiteConfig,
+  companyHint: string,
+  referer: string,
+  cookie: string | undefined,
+  maxPages: number,
+  maxJobs: number,
+  pageUrl = ''
+): Promise<AtsBoardFetchResult | null> {
+  const domain = String(config.domain || '').trim();
+  if (!domain) return null;
+  const searchUrl = pageUrl || referer;
+  let rows = await collectPhenomPcsxPages(
+    origin,
+    domain,
+    companyHint,
+    referer,
+    cookie,
+    maxPages,
+    maxJobs,
+    searchUrl
+  );
+  if (!rows.length && phenomStartUrlHasPcsxFilters(searchUrl)) {
+    const unfiltered = new URL(searchUrl);
+    unfiltered.search = '';
+    rows = await collectPhenomPcsxPages(
+      origin,
+      domain,
+      companyHint,
+      referer,
+      cookie,
+      maxPages,
+      maxJobs,
+      unfiltered.toString()
+    );
+  }
+  if (!rows.length) return null;
+  return { provider: 'phenom', companyHint, rows };
+}
+
+async function fetchPhenomBoardJobs(
+  pageUrl: string,
+  companyHint: string,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  const discovered = await discoverPhenomSiteConfig(pageUrl);
+  if (!discovered) return null;
+
+  const { config, origin, referer, cookie } = discovered;
+  const hint = firstString(config.companyHint, companyHint);
+  const maxPages = limitedPages(options);
+  const maxJobs = boardMaxJobs();
+
+  if (config.kind === 'widgets' && config.refNum) {
+    const widgets = await fetchPhenomWidgetsBoard(
+      origin,
+      config,
+      hint,
+      referer,
+      cookie,
+      maxPages,
+      maxJobs
+    );
+    if (widgets?.rows.length) return widgets;
+  }
+
+  if (config.kind === 'pcsx' && config.domain) {
+    const pcsx = await fetchPhenomPcsxBoard(origin, config, hint, referer, cookie, maxPages, maxJobs, pageUrl);
+    if (pcsx?.rows.length) return pcsx;
+  }
+
+  if (config.kind === 'pcsx' && config.refNum) {
+    return fetchPhenomWidgetsBoard(origin, config, hint, referer, cookie, maxPages, maxJobs);
+  }
+
+  return null;
 }
 
 const SF_DEFAULT_PAGE_SIZE = 25;
@@ -1684,6 +2709,14 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
     };
   }
 
+  if (looksLikePhenomBoard(url)) {
+    return {
+      provider: 'phenom',
+      companyHint: phenomCompanyHintFromHost(host),
+      listApiUrl: PHENOM_WIDGETS_MARKER,
+    };
+  }
+
   return null;
 }
 
@@ -1695,10 +2728,12 @@ function rowFromParts(opts: {
   employmentType?: string;
   date?: string;
   department?: string;
+  jobDescription?: string;
 }): AtsBoardJobRow {
   const jobUrl = String(opts.jobUrl || '').trim();
   const title = String(opts.title || '').trim();
   const company = companyOrEmpty(opts.company);
+  const jobDescription = String(opts.jobDescription || '').trim();
   return {
     jobUrl,
     url: jobUrl,
@@ -1710,6 +2745,7 @@ function rowFromParts(opts: {
     employmentType: opts.employmentType ? String(opts.employmentType).trim() : undefined,
     date: opts.date ? String(opts.date).trim() : undefined,
     department: opts.department ? String(opts.department).trim() : undefined,
+    ...(jobDescription ? { jobDescription, description: jobDescription } : {}),
   };
 }
 
@@ -1729,6 +2765,7 @@ function mapGreenhouseBoardJobs(data: any, companyHint: string): AtsBoardJobRow[
         department: Array.isArray(job.departments)
           ? job.departments.map((d: any) => d?.name).filter(Boolean).join(', ')
           : '',
+        jobDescription: stripHtmlTags(job.content || job.description || ''),
       });
     })
     .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
@@ -1746,6 +2783,7 @@ function mapLeverBoardJobs(data: any, companyHint: string): AtsBoardJobRow[] {
         employmentType: job.categories?.commitment || '',
         date: job.createdAt ? new Date(job.createdAt).toISOString() : '',
         department: job.categories?.team || job.categories?.department || '',
+        jobDescription: stripHtmlTags(job.descriptionPlain || job.description || ''),
       })
     )
     .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
@@ -1767,6 +2805,7 @@ function mapAshbyBoardJobs(data: any, companyHint: string): AtsBoardJobRow[] {
             : ''),
         employmentType: job.employmentType || '',
         department: job.departmentName || job.teamName || '',
+        jobDescription: stripHtmlTags(job.descriptionHtml || job.descriptionPlain || job.description || ''),
       })
     )
     .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
@@ -2225,6 +3264,9 @@ export async function fetchAtsBoardJobs(
         detected.listApiUrl,
         options
       );
+    }
+    if (detected.provider === 'phenom') {
+      return await fetchPhenomBoardJobs(pageUrl, detected.companyHint, options);
     }
 
     let data: any;

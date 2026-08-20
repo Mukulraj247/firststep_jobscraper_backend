@@ -55,6 +55,13 @@ import {
   type DigitalOceanDashboard,
   type OpsDigestStatus,
 } from '../api/admin';
+import { webhookFieldCopy } from '../features/admin/adminPageBehavior';
+import {
+  digestAlertSeverity,
+  digestSendDisabled,
+  digestSentMessage,
+  digestStatusCaption,
+} from '../features/communication/communicationPageBehavior';
 
 const STATUS_COLORS: Record<string, 'default' | 'success' | 'error' | 'warning' | 'info'> = {
   success: 'success',
@@ -617,12 +624,7 @@ export const AdminPage = () => {
     setDigestMessage(null);
     try {
       const result = await sendAdminDigestTest();
-      const s = result.summary?.last6h;
-      setDigestMessage(
-        s
-          ? `Digest sent. Last 6h: ${s.total} runs, ${s.passed} passed, ${s.failed} failed.`
-          : 'Digest sent.'
-      );
+      setDigestMessage(digestSentMessage(result.summary));
       const status = await getAdminDigestStatus().catch(() => null);
       if (status) setDigestStatus(status);
     } catch (error: any) {
@@ -710,6 +712,7 @@ export const AdminPage = () => {
   }
 
   const compute = overview?.compute;
+  const webhookCopy = webhookFieldCopy(editAutomation);
 
   return (
     <Box sx={{ px: { xs: 1.5, md: 3 }, py: 2, maxWidth: 1400, mx: 'auto' }}>
@@ -859,26 +862,20 @@ export const AdminPage = () => {
               size="small"
               variant="outlined"
               onClick={handleSendDigest}
-              disabled={digestSending || digestStatus?.canSend === false}
+              disabled={digestSendDisabled(digestSending, digestStatus?.canSend)}
             >
               {digestSending ? 'Sending…' : 'Send test digest'}
             </Button>
           </Stack>
         </Stack>
 
-        {digestStatus ? (
+        {digestStatusCaption(digestStatus) ? (
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            Ops digest: {digestStatus.enabled ? 'enabled' : 'disabled'} · every{' '}
-            {digestStatus.interval || '6 hours'} · ZeptoMail{' '}
-            {digestStatus.zeptoConfigured ? 'configured' : 'not configured'}
-            {digestStatus.recipients?.length
-              ? ` · to ${digestStatus.recipients.join(', ')}`
-              : ' · no recipients'}
-            {!digestStatus.canSend && digestStatus.reason ? ` — ${digestStatus.reason}` : ''}
+            {digestStatusCaption(digestStatus)}
           </Typography>
         ) : null}
         {digestMessage ? (
-          <Alert severity={digestMessage.startsWith('Digest sent') ? 'success' : 'warning'} sx={{ mb: 1.5 }}>
+          <Alert severity={digestAlertSeverity(digestMessage)} sx={{ mb: 1.5 }}>
             {digestMessage}
           </Alert>
         ) : null}
@@ -1678,12 +1675,8 @@ export const AdminPage = () => {
               label="Webhook URL"
               value={editWebhook}
               onChange={(e) => setEditWebhook(e.target.value)}
-              placeholder={editAutomation.webhookConfigured ? 'Leave blank to keep existing webhook' : 'https://'}
-              helperText={
-                editAutomation.webhookConfigured
-                  ? 'A webhook is already configured. Leave blank to keep it, or enter a new URL.'
-                  : 'Optional. Enter a URL to enable a webhook.'
-              }
+              placeholder={webhookCopy.placeholder}
+              helperText={webhookCopy.helperText}
               fullWidth
             />
             <Divider />

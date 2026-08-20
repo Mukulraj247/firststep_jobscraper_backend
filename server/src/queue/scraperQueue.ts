@@ -20,6 +20,10 @@ export interface ScraperJobData {
   config: Record<string, any>;
   /** Optional retry counter — set by the worker when re-enqueuing after a recoverable failure. */
   _attemptsMade?: number;
+  /** Proxies that already failed CONNECT; skipped on later attempts. */
+  _failedProxyServers?: string[];
+  _lastFailureWasProxyTunnel?: boolean;
+  _retryReason?: 'captcha' | 'proxy-tunnel';
 }
 
 export interface ScheduleTriggerData {

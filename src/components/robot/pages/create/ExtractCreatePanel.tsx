@@ -70,7 +70,7 @@ export const ExtractCreatePanel: React.FC<ExtractCreatePanelProps> = ({
       window.sessionStorage.setItem('nextTabIsRecording', 'true');
 
       setIsLoading(false);
-      navigate('/robots');
+      navigate('/scrapers');
     } catch (error) {
       console.error('Error starting recording:', error);
       notify('error', 'Failed to start recording. Please try again.');

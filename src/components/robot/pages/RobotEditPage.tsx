@@ -1170,7 +1170,7 @@ export const RobotEditPage = ({ handleStart }: RobotSettingsProps) => {
         setRerenderRobots(true);
         notify("success", t("robot_edit.notifications.update_success"));
         handleStart(robot);
-        const basePath = "/robots";
+        const basePath = "/scrapers";
         navigate(basePath);
       } else {
         notify("error", t("robot_edit.notifications.update_failed"));
@@ -1188,7 +1188,7 @@ export const RobotEditPage = ({ handleStart }: RobotSettingsProps) => {
   };
 
   const handleCancel = () => {
-    const basePath = "/robots";
+    const basePath = "/scrapers";
     navigate(basePath);
   };
 

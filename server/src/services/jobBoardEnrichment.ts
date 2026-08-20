@@ -5,6 +5,7 @@ import JobBoardListing, {
 } from '../models/JobBoardListing';
 import { makeDescriptionSnippet, sanitizeCompanyName, decodeHtmlEntities, normalizeJobDescription, normalizeLocation, normalizeSalaryRange } from './jobPageParser';
 import { jobUrlKey, normalizeJobUrl } from './jobUrlNormalize';
+import { detectAts } from './atsAdapters';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import logger from '../logger';
 
@@ -76,6 +77,45 @@ export function isListRowComplete(snapshot: IJobBoardListSnapshot): boolean {
   );
 }
 
+function rowCandidateUrls(data: Record<string, any>): string[] {
+  const raw = [
+    data.jobUrl,
+    data.job_url,
+    data.applyUrl,
+    data.apply_url,
+    data.url,
+    data.link,
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of raw) {
+    const normalized = normalizeJobUrl(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+/**
+ * Prefer an ATS-detectable apply URL as the board identity so the same
+ * requisition from an aggregator and from Greenhouse/Lever shares a key.
+ */
+export function pickCanonicalJobUrl(data: Record<string, any>): {
+  jobUrl: string | null;
+  applyUrl: string | null;
+} {
+  const urls = rowCandidateUrls(data);
+  if (urls.length === 0) return { jobUrl: null, applyUrl: null };
+  const atsUrl = urls.find((url) => Boolean(detectAts(url))) || null;
+  const jobUrl = atsUrl || urls[0];
+  const applyUrl =
+    urls.find((url) => url !== jobUrl && Boolean(detectAts(url))) ||
+    urls.find((url) => url !== jobUrl) ||
+    jobUrl;
+  return { jobUrl, applyUrl };
+}
+
 export function contentHashFromFields(fields: {
   jobTitle?: string;
   companyName?: string;
@@ -102,9 +142,11 @@ export function contentHashFromFields(fields: {
 function applySnapshotToDoc(
   snapshot: IJobBoardListSnapshot,
   jobUrl: string,
-  jobId: string
+  jobId: string,
+  applyUrl?: string
 ): Partial<IJobBoardListing> {
   const desc = snapshot.jobDescription || '';
+  const apply = normalizeJobUrl(applyUrl) || jobUrl;
   return {
     jobTitle: snapshot.jobTitle || '',
     companyName: snapshot.companyName || '',
@@ -119,7 +161,7 @@ function applySnapshotToDoc(
     sectorIndustry: snapshot.sectorIndustry || '',
     f500: snapshot.f500 || '',
     date: snapshot.date ? new Date(snapshot.date) : null,
-    applyUrl: jobUrl,
+    applyUrl: apply,
     jobId: jobId || '',
     contentHash: contentHashFromFields({
       jobTitle: snapshot.jobTitle,
@@ -129,26 +171,25 @@ function applySnapshotToDoc(
       salaryRange: snapshot.salaryRange,
       employmentType: snapshot.employmentType,
       remoteType: snapshot.remoteType,
-      applyUrl: jobUrl,
+      applyUrl: apply,
     }),
   };
 }
 
-function isFreshReady(doc: any, now: number): boolean {
-  if (doc.status !== 'ready' && doc.status !== 'partial') return false;
-  const enrichedAt = doc.enrichment?.lastEnrichedAt
-    ? new Date(doc.enrichment.lastEnrichedAt).getTime()
-    : doc.updatedAt
-      ? new Date(doc.updatedAt).getTime()
-      : 0;
-  if (!enrichedAt) return false;
-  const ageDays = (now - enrichedAt) / (1000 * 60 * 60 * 24);
-  return ageDays <= JOB_BOARD_STALE_DAYS;
+function keepExistingEnrichment(prev: any): boolean {
+  const method = String(prev?.enrichment?.method || '');
+  return Boolean(
+    prev &&
+      (prev.status === 'ready' || prev.status === 'partial') &&
+      method &&
+      method !== 'none' &&
+      method !== 'list'
+  );
 }
 
 /**
  * Upsert board stubs / ready rows from a scraper run. Dedupes by jobUrlKey and
- * skips scrape.do spend when the list row is already complete or the board doc is fresh.
+ * skips scrape.do when the URL is already on the board or the list row is complete.
  */
 export async function enqueueJobBoardEnrichments(opts: {
   ownerId: unknown;
@@ -175,20 +216,20 @@ export async function enqueueJobBoardEnrichments(opts: {
   // Dedupe within the batch by jobUrlKey (last row wins for snapshot richness).
   const byKey = new Map<
     string,
-    { jobUrl: string; snapshot: IJobBoardListSnapshot; jobId: string }
+    { jobUrl: string; applyUrl: string; snapshot: IJobBoardListSnapshot; jobId: string }
   >();
   for (const row of opts.rows || []) {
     stats.considered += 1;
     const data = row?.data || {};
-    const rawUrl = data.jobUrl || data.job_url || data.url || data.link || '';
-    const normalized = normalizeJobUrl(rawUrl);
-    const key = jobUrlKey(normalized);
-    if (!normalized || !key) {
+    const picked = pickCanonicalJobUrl(data);
+    const key = jobUrlKey(picked.jobUrl);
+    if (!picked.jobUrl || !key) {
       stats.skippedNoUrl += 1;
       continue;
     }
     byKey.set(key, {
-      jobUrl: normalized,
+      jobUrl: picked.jobUrl,
+      applyUrl: picked.applyUrl || picked.jobUrl,
       snapshot: buildListSnapshot(data),
       jobId: asText(data.jobId),
     });
@@ -201,58 +242,53 @@ export async function enqueueJobBoardEnrichments(opts: {
     .select('jobUrlKey status enrichment updatedAt')
     .lean();
   const existingByKey = new Map(existing.map((d: any) => [d.jobUrlKey, d]));
-  const now = Date.now();
   const nowDate = new Date();
   const ops: any[] = [];
+
+  const touchSeen = (key: string, extraSet?: Record<string, unknown>) => ({
+    updateOne: {
+      filter: { jobUrlKey: key },
+      update: {
+        $addToSet: { robotMetaIds: opts.robotMetaId, runIds: String(opts.runId) },
+        $set: { lastSeenAt: nowDate, ownerId, ...(extraSet || {}) },
+      },
+    },
+  });
 
   for (const [key, item] of byKey) {
     const prev = existingByKey.get(key);
 
     if (prev?.status === 'expired') {
       stats.expiredSkipped += 1;
-      ops.push({
-        updateOne: {
-          filter: { jobUrlKey: key },
-          update: {
-            $addToSet: { robotMetaIds: opts.robotMetaId, runIds: String(opts.runId) },
-            $set: { lastSeenAt: nowDate, ownerId },
-          },
-        },
-      });
+      ops.push(touchSeen(key));
       continue;
     }
 
-    if (prev && (prev.status === 'queued' || prev.status === 'enriching')) {
+    const acceptList = isListRowComplete(item.snapshot);
+
+    // Duplicate URL already on the board: never re-queue scrape.do.
+    if (prev && !acceptList) {
       stats.skippedDedup += 1;
-      ops.push({
-        updateOne: {
-          filter: { jobUrlKey: key },
-          update: {
-            $addToSet: { robotMetaIds: opts.robotMetaId, runIds: String(opts.runId) },
-            $set: { lastSeenAt: nowDate, ownerId, listSnapshot: item.snapshot },
-          },
-        },
-      });
+      ops.push(
+        touchSeen(
+          key,
+          prev.status === 'queued' || prev.status === 'enriching'
+            ? { listSnapshot: item.snapshot, applyUrl: item.applyUrl }
+            : undefined
+        )
+      );
       continue;
     }
 
-    if (prev && isFreshReady(prev, now)) {
+    if (prev && keepExistingEnrichment(prev)) {
       stats.skippedDedup += 1;
-      ops.push({
-        updateOne: {
-          filter: { jobUrlKey: key },
-          update: {
-            $addToSet: { robotMetaIds: opts.robotMetaId, runIds: String(opts.runId) },
-            $set: { lastSeenAt: nowDate, ownerId },
-          },
-        },
-      });
+      ops.push(touchSeen(key));
       continue;
     }
 
-    const fields = applySnapshotToDoc(item.snapshot, item.jobUrl, item.jobId);
+    const fields = applySnapshotToDoc(item.snapshot, item.jobUrl, item.jobId, item.applyUrl);
 
-    if (isListRowComplete(item.snapshot)) {
+    if (acceptList) {
       stats.readyFromList += 1;
       stats.skippedComplete += 1;
       ops.push({

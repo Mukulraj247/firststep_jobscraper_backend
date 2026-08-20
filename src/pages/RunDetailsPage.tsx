@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Chip, LinearProgress, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   AUTOMATION_ROW_CONTEXT_KEYS,
   getSaasRun,
@@ -13,6 +13,7 @@ import {
   nextTrackedRunStatus,
   shouldRefreshRunDetails,
 } from '../utils/runDetailsPolling';
+import { popReturnNavigateOptions, pushReturnState, runDetailsBackLabel } from '../features/navigation/inAppReturn';
 
 const RUN_DETAIL_COLUMN_LABELS: Record<string, string> = {
   sectorIndustry: 'Sector / industry',
@@ -25,6 +26,9 @@ const ACTIVE_STATUSES = new Set(['running', 'pending', 'queued']);
 export const RunDetailsPage = () => {
   const { id = '' } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backNav = popReturnNavigateOptions(location.state, '');
+  const returnTo = backNav.href;
   const { notify } = useGlobalInfoStore();
   const [data, setData] = useState<any>(null);
   const [rows, setRows] = useState<any[]>([]);
@@ -148,9 +152,15 @@ export const RunDetailsPage = () => {
         <Button
           variant="outlined"
           startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/dashboard')}
+          onClick={() => {
+            if (backNav.href) {
+              navigate(backNav.href, backNav.state ? { state: backNav.state } : undefined);
+            } else {
+              navigate(-1);
+            }
+          }}
         >
-          Back to Dashboard
+          {runDetailsBackLabel(returnTo || '/')}
         </Button>
       </Box>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} spacing={2} mb={3}>
@@ -163,7 +173,12 @@ export const RunDetailsPage = () => {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
-          <Button variant="outlined" onClick={() => navigate(`/automation/${data.automation.id}/data`)}>View Data</Button>
+          <Button
+            variant="outlined"
+            onClick={() => navigate(`/automation/${data.automation.id}/data`, { state: pushReturnState(location) })}
+          >
+            View Data
+          </Button>
         </Stack>
       </Stack>
 

@@ -648,6 +648,15 @@ export function configShowsRawListExtractionEditor(): boolean {
   return false;
 }
 
+/** Max items / max pages only — does not unlock selector JSON. */
+export function configShowsPaginationLimits(): boolean {
+  return true;
+}
+
+export function proxySavedChipLabel(configured: boolean): string | null {
+  return configured ? 'Saved (hidden after reload)' : null;
+}
+
 export function statusMarkerColor(status: string): string {
   switch (status) {
     case 'completed':

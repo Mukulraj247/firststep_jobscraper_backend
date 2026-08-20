@@ -12,10 +12,12 @@ import {
   PrecisionManufacturing,
   ChevronLeft,
   ChevronRight,
+  MailOutline,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import { FIRSTSTEP, tint } from './ops/dashboardTokens';
 import { sidebarIconAriaHidden, sidebarNavButtonA11y } from './appShellBehavior';
+import { SIDEBAR_NAV_VALUES } from './sidebarNav';
 
 export interface SidebarContentProps {
   value: string;
@@ -27,7 +29,7 @@ export interface SidebarContentProps {
 }
 
 export const SidebarContent = ({
-  value = 'robots',
+  value = 'scrapers',
   handleChangeContent,
   collapsed = false,
   onToggleCollapsed,
@@ -39,15 +41,33 @@ export const SidebarContent = ({
   const navigate = useNavigate();
   const location = useLocation();
 
-  const items = [
-    { value: 'dashboard', label: 'Dashboard', icon: <Dashboard aria-hidden={sidebarIconAriaHidden} /> },
-    { value: 'automations', label: 'Automations', icon: <PrecisionManufacturing aria-hidden={sidebarIconAriaHidden} /> },
-    { value: 'jobs', label: t('mainmenu.jobs'), icon: <WorkOutline aria-hidden={sidebarIconAriaHidden} /> },
-    { value: 'robots', label: t('mainmenu.recordings'), icon: <AutoAwesome aria-hidden={sidebarIconAriaHidden} /> },
-    { value: 'runs', label: t('mainmenu.runs'), icon: <PlayArrow aria-hidden={sidebarIconAriaHidden} /> },
-    { value: 'failures', label: 'Failure Dashboard', icon: <ErrorOutline aria-hidden={sidebarIconAriaHidden} /> },
-    { value: 'proxy', label: t('mainmenu.proxy'), icon: <Usb aria-hidden={sidebarIconAriaHidden} /> },
-  ];
+  const itemMeta: Record<
+    (typeof SIDEBAR_NAV_VALUES)[number],
+    { label: string; icon: React.ReactNode }
+  > = {
+    dashboard: { label: 'Dashboard', icon: <Dashboard aria-hidden={sidebarIconAriaHidden} /> },
+    automations: {
+      label: 'Automations',
+      icon: <PrecisionManufacturing aria-hidden={sidebarIconAriaHidden} />,
+    },
+    jobs: { label: t('mainmenu.jobs'), icon: <WorkOutline aria-hidden={sidebarIconAriaHidden} /> },
+    scrapers: { label: t('mainmenu.recordings'), icon: <AutoAwesome aria-hidden={sidebarIconAriaHidden} /> },
+    runs: { label: t('mainmenu.runs'), icon: <PlayArrow aria-hidden={sidebarIconAriaHidden} /> },
+    failures: {
+      label: 'Failure Dashboard',
+      icon: <ErrorOutline aria-hidden={sidebarIconAriaHidden} />,
+    },
+    communication: {
+      label: t('mainmenu.communication', 'Communication'),
+      icon: <MailOutline aria-hidden={sidebarIconAriaHidden} />,
+    },
+    proxy: { label: t('mainmenu.proxy'), icon: <Usb aria-hidden={sidebarIconAriaHidden} /> },
+  };
+
+  const items = SIDEBAR_NAV_VALUES.map((navValue) => ({
+    value: navValue,
+    ...itemMeta[navValue],
+  }));
 
   const activeColor =
     theme.palette.mode === 'light' ? theme.palette.primary.main : theme.palette.secondary.main;

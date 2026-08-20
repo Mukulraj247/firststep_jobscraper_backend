@@ -1,3 +1,4 @@
+import net from 'net';
 import logger from '../logger';
 import { getDecryptedProxyConfig, normalizeProxyServer } from './proxyConfig';
 
@@ -7,7 +8,7 @@ export interface ProxyProfile {
   password?: string;
 }
 
-/** When false, scrapers ignore env/user/robot proxy config (credentials can stay in .env). */
+/** When false, account / env proxies are skipped. A per-automation proxy still applies. */
 export const isScraperProxyEnabled = (): boolean => {
   const raw = String(process.env.SCRAPER_PROXY_ENABLED ?? 'true').trim().toLowerCase();
   return !(raw === 'false' || raw === '0' || raw === 'no' || raw === 'off');
@@ -19,17 +20,7 @@ export const resolveProxyPool = async (
   userId: string,
   runtimeConfig?: Record<string, any>
 ): Promise<ProxyProfile[]> => {
-  if (!isScraperProxyEnabled()) {
-    if (!loggedProxyDisabled) {
-      loggedProxyDisabled = true;
-      logger.log(
-        'info',
-        'SCRAPER_PROXY_ENABLED=false — scraper will not use proxies (env / user / robot pool ignored)'
-      );
-    }
-    return [];
-  }
-
+  const scraperProxyEnabled = isScraperProxyEnabled();
   const browserLocation = runtimeConfig?.browserLocation || {};
   const configuredPool = Array.isArray(browserLocation.proxyPool) ? browserLocation.proxyPool : [];
 
@@ -51,18 +42,28 @@ export const resolveProxyPool = async (
     });
   }
 
-  try {
-    const userProxy = await getDecryptedProxyConfig(userId);
-    const userProxyServer = normalizeProxyServer(userProxy.proxy_url);
-    if (userProxyServer) {
-      pool.push({
-        server: userProxyServer,
-        username: userProxy.proxy_username || undefined,
-        password: userProxy.proxy_password || undefined,
-      });
+  if (scraperProxyEnabled) {
+    try {
+      const userProxy = await getDecryptedProxyConfig(userId);
+      const userProxyServer = normalizeProxyServer(userProxy.proxy_url);
+      if (userProxyServer) {
+        pool.push({
+          server: userProxyServer,
+          username: userProxy.proxy_username || undefined,
+          password: userProxy.proxy_password || undefined,
+        });
+      }
+    } catch (error: any) {
+      logger.log('warn', `Unable to resolve stored proxy config for user ${userId}: ${error.message}`);
     }
-  } catch (error: any) {
-    logger.log('warn', `Unable to resolve stored proxy config for user ${userId}: ${error.message}`);
+  } else if (!loggedProxyDisabled) {
+    loggedProxyDisabled = true;
+    logger.log(
+      'info',
+      pool.length
+        ? 'SCRAPER_PROXY_ENABLED=false — using per-automation proxy only (account / env proxies skipped)'
+        : 'SCRAPER_PROXY_ENABLED=false — account / env proxies skipped; set a per-automation proxy to test one robot'
+    );
   }
 
   const unique = new Map<string, ProxyProfile>();
@@ -70,9 +71,76 @@ export const resolveProxyPool = async (
   return Array.from(unique.values());
 };
 
-export const selectRotatedProxy = (pool: ProxyProfile[], attempt: number): ProxyProfile | null => {
-  if (pool.length === 0) return null;
-  const selected = pool[attempt % pool.length];
+export const parseProxyEndpoint = (
+  server?: string | null
+): { host: string; port: number } | null => {
+  const normalized = normalizeProxyServer(server);
+  if (!normalized) return null;
+  try {
+    const parsed = new URL(normalized);
+    const port = parsed.port
+      ? Number.parseInt(parsed.port, 10)
+      : parsed.protocol === 'https:'
+        ? 443
+        : 80;
+    if (!parsed.hostname || !Number.isFinite(port) || port <= 0) return null;
+    return { host: parsed.hostname, port };
+  } catch {
+    return null;
+  }
+};
+
+const failedProxyKeySet = (excludeServers: string[] = []): Set<string> => {
+  const keys = new Set<string>();
+  for (const server of excludeServers) {
+    const key = normalizeProxyServer(server);
+    if (key) keys.add(key);
+  }
+  return keys;
+};
+
+export const selectRotatedProxy = (
+  pool: ProxyProfile[],
+  attempt: number,
+  excludeServers: string[] = []
+): ProxyProfile | null => {
+  const exclude = failedProxyKeySet(excludeServers);
+  const usable =
+    exclude.size === 0
+      ? pool
+      : pool.filter((proxy) => {
+          const key = normalizeProxyServer(proxy.server);
+          return !!key && !exclude.has(key);
+        });
+  if (usable.length === 0) return null;
+  const selected = usable[attempt % usable.length];
   logger.log('info', `Selected rotated proxy ${selected.server} for attempt ${attempt + 1}`);
   return selected;
+};
+
+/** Cheap TCP check before sending a scrape through an HTTP/SOCKS proxy. */
+export const probeProxyTcp = async (server: string, timeoutMs = 2500): Promise<boolean> => {
+  const endpoint = parseProxyEndpoint(server);
+  if (!endpoint) return false;
+  const budget = Math.max(200, timeoutMs);
+
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: endpoint.host, port: endpoint.port });
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), budget);
+    socket.once('connect', () => {
+      clearTimeout(timer);
+      finish(true);
+    });
+    socket.once('error', () => {
+      clearTimeout(timer);
+      finish(false);
+    });
+  });
 };

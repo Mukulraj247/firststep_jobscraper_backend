@@ -13,8 +13,23 @@ type PinnedLookupCallback = (error: NodeJS.ErrnoException | null, address: strin
 type LookupAddress = { address: string; family: number };
 
 export function createPinnedLookup(address: string, family: number) {
-  return (_hostname: string, _options: unknown, callback: PinnedLookupCallback): void => {
-    callback(null, address, family);
+  return (_hostname: string, options: unknown, callback?: PinnedLookupCallback): void => {
+    // Node http.Agent may call lookup(hostname, cb) or lookup(hostname, options, cb).
+    const cb = (typeof options === 'function' ? options : callback) as
+      | PinnedLookupCallback
+      | ((error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void)
+      | undefined;
+    if (typeof cb !== 'function') {
+      throw new Error('Pinned lookup callback missing');
+    }
+    const opts = typeof options === 'object' && options ? (options as { all?: boolean }) : null;
+    if (opts?.all) {
+      (cb as (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void)(null, [
+        { address, family },
+      ]);
+      return;
+    }
+    (cb as PinnedLookupCallback)(null, address, family);
   };
 }
 
@@ -23,6 +38,14 @@ const canonicalAddress = (address: string): string =>
 
 export function assertPinnedPeerAddress(expected: string, actual: string | undefined): void {
   if (!actual || canonicalAddress(expected) !== canonicalAddress(actual)) {
+    throw new UnsafeOutboundUrlError('Outbound connection peer did not match the validated address');
+  }
+}
+
+/** SSRF check when a host resolves to several CDN IPs — any validated answer is allowed. */
+export function assertPinnedPeerInAllowlist(expected: string[], actual: string | undefined): void {
+  const peer = actual ? canonicalAddress(actual) : '';
+  if (!peer || !expected.some((address) => canonicalAddress(address) === peer)) {
     throw new UnsafeOutboundUrlError('Outbound connection peer did not match the validated address');
   }
 }

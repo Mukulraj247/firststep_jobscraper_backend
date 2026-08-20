@@ -31,10 +31,8 @@ import {
   getDigitalOceanDashboard,
   parseMetricsWindow,
 } from '../services/digitalOceanMetrics';
-import {
-  getOpsDigestConfigStatus,
-  sendOpsDigest,
-} from '../services/opsDigest';
+import { sendOpsDigest } from '../services/opsDigest';
+import { mapOpsDigestSendResult, opsDigestStatusBody } from '../services/opsDigestHttp';
 import { ownerIdFilter, ownerIdVariants } from '../utils/ownerId';
 import { normalizeAutomationUrl } from '../utils/automationUrl';
 import { intervalMsFromCron, validateAutomationScheduleCron } from '../utils/schedule';
@@ -979,11 +977,7 @@ router.delete('/admin/automations/:id', requireAdmin, async (req: Request, res: 
  */
 router.get('/admin/digest/status', requireAdmin, async (_req: Request, res: Response) => {
   try {
-    const status = getOpsDigestConfigStatus();
-    return res.json({
-      ...status,
-      interval: '6 hours',
-    });
+    return res.json(opsDigestStatusBody());
   } catch (error: any) {
     logger.log('error', `Admin digest status failed: ${error.message}`);
     return res.status(500).json({ error: 'Failed to load digest status' });
@@ -995,34 +989,8 @@ router.get('/admin/digest/status', requireAdmin, async (_req: Request, res: Resp
  */
 router.post('/admin/digest/test', requireAdmin, async (_req: Request, res: Response) => {
   try {
-    const result = await sendOpsDigest({ force: true });
-    if (result.skipped) {
-      return res.status(400).json({
-        success: false,
-        skipped: true,
-        reason: result.reason,
-      });
-    }
-    if (!result.ok) {
-      return res.status(502).json({
-        success: false,
-        error: result.error || 'Failed to send digest',
-      });
-    }
-    return res.json({
-      success: true,
-      requestId: result.requestId || null,
-      summary: result.payload
-        ? {
-            generatedAt: result.payload.generatedAt,
-            last6h: {
-              total: result.payload.windows.last6h.total,
-              passed: result.payload.windows.last6h.passed,
-              failed: result.payload.windows.last6h.failed,
-            },
-          }
-        : null,
-    });
+    const mapped = mapOpsDigestSendResult(await sendOpsDigest({ force: true }));
+    return res.status(mapped.httpStatus).json(mapped.body);
   } catch (error: any) {
     logger.log('error', `Admin digest test failed: ${error.message}`);
     return res.status(500).json({ error: 'Failed to send ops digest' });

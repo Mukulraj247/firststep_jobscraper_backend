@@ -259,6 +259,37 @@ export const getDashboardDigitalOcean = async (
   return response.data;
 };
 
+export type DashboardDigestStatus = {
+  enabled: boolean;
+  zeptoConfigured: boolean;
+  recipients: string[];
+  canSend: boolean;
+  reason?: string;
+  interval?: string;
+};
+
+export const getDashboardDigestStatus = async (
+  signal?: AbortSignal,
+): Promise<DashboardDigestStatus> => {
+  const response = await axios.get(`${apiUrl}/api/dashboard/digest/status`, {
+    withCredentials: true,
+    signal,
+  });
+  return response.data;
+};
+
+export const sendDashboardDigestTest = async (): Promise<{
+  success: boolean;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+  requestId?: string | null;
+  summary?: { generatedAt: string; last6h: { total: number; passed: number; failed: number } } | null;
+}> => {
+  const response = await axios.post(`${apiUrl}/api/dashboard/digest/test`, {}, { withCredentials: true });
+  return response.data;
+};
+
 export type ScheduleHeatmapFire = {
   hour: number;
   minute: number;

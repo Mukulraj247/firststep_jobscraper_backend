@@ -120,7 +120,7 @@ export const ScheduleSettingsPage = ({
       await handleStart(settings);
       const basePath = location.pathname.includes("/prebuilt-robots")
         ? "/prebuilt-robots"
-        : "/robots";
+        : "/scrapers";
       navigate(basePath);
     } catch (error) {
       notify("error", "Failed to save schedule");
@@ -132,7 +132,7 @@ export const ScheduleSettingsPage = ({
   const handleCancel = () => {
     const basePath = location.pathname.includes("/prebuilt-robots")
       ? "/prebuilt-robots"
-      : "/robots";
+      : "/scrapers";
     navigate(basePath);
   };
 

@@ -85,14 +85,14 @@ const RobotCreate: React.FC = () => {
     );
     window.open(`/recording-setup?session=${sessionId}`, '_blank');
     window.sessionStorage.setItem('nextTabIsRecording', 'true');
-    navigate('/robots');
+    navigate('/scrapers');
   };
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Box display="flex" alignItems="center" mb={2}>
         <IconButton
-          onClick={() => navigate('/robots')}
+          onClick={() => navigate('/scrapers')}
           sx={{
             ml: -1,
             mr: 1,

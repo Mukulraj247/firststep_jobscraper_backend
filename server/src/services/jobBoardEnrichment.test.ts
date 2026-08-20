@@ -3,6 +3,7 @@ import {
   buildListSnapshot,
   contentHashFromFields,
   isListRowComplete,
+  pickCanonicalJobUrl,
 } from './jobBoardEnrichment';
 
 describe('jobBoardEnrichment helpers', () => {
@@ -36,5 +37,14 @@ describe('jobBoardEnrichment helpers', () => {
     const c = contentHashFromFields({ jobTitle: 'T', companyName: 'C', jobDescription: 'E' });
     expect(a).toBe(b);
     expect(a).not.toBe(c);
+  });
+
+  it('pickCanonicalJobUrl prefers an ATS apply URL over an aggregator URL', () => {
+    const picked = pickCanonicalJobUrl({
+      jobUrl: 'https://jobs.example.com/posting/abc?utm_source=x',
+      applyUrl: 'https://boards.greenhouse.io/stripe/jobs/12345',
+    });
+    expect(picked.jobUrl).toBe('https://boards.greenhouse.io/stripe/jobs/12345');
+    expect(picked.applyUrl).toBe('https://jobs.example.com/posting/abc');
   });
 });

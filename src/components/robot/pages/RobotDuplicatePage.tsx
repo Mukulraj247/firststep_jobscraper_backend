@@ -75,7 +75,7 @@ export const RobotDuplicatePage = ({ handleStart }: RobotDuplicatePageProps) => 
         setRerenderRobots(true);
         notify("success", t("robot_duplication.notifications.duplicate_success"));
         handleStart(robot);
-        navigate("/robots");
+        navigate("/scrapers");
       } else {
         notify("error", t("robot_duplication.notifications.duplicate_error"));
       }

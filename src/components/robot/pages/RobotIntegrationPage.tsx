@@ -74,7 +74,7 @@ export const RobotIntegrationPage = ({
   const location = useLocation();
 
   const pathSegments = location.pathname.split('/');
-  const robotsIndex = pathSegments.findIndex(segment => segment === 'robots' || segment === 'prebuilt-robots');
+  const robotsIndex = pathSegments.findIndex(segment => segment === 'scrapers' || segment === 'robots' || segment === 'prebuilt-robots');
   const integrateIndex = pathSegments.findIndex(segment => segment === 'integrate');
 
   const robotIdFromUrl = robotsIndex !== -1 && robotsIndex + 1 < pathSegments.length
@@ -135,7 +135,7 @@ export const RobotIntegrationPage = ({
       console.error("Cannot authenticate: recordingId is null");
       return;
     }
-    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
     const redirectUrl = `${window.location.origin}${basePath}/${recordingId}/integrate/googleSheets`;
     window.location.href = `${apiUrl}/auth/google?robotId=${recordingId}&redirectUrl=${encodeURIComponent(redirectUrl)}`;
   };
@@ -145,7 +145,7 @@ export const RobotIntegrationPage = ({
       console.error("Cannot authenticate: recordingId is null");
       return;
     }
-    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
     const redirectUrl = `${window.location.origin}${basePath}/${recordingId}/integrate/airtable`;
     window.location.href = `${apiUrl}/auth/airtable?robotId=${recordingId}&redirectUrl=${encodeURIComponent(redirectUrl)}`;
   };
@@ -317,7 +317,7 @@ export const RobotIntegrationPage = ({
   }, [recordingId, selectedIntegrationType]);
 
   const handleCancel = () => {
-    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
     navigate(basePath);
   };
 
@@ -687,7 +687,7 @@ export const RobotIntegrationPage = ({
 
     setSelectedIntegrationType(null);
     setSettings({ ...settings, integrationType: "airtable" });
-    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
     navigate(`${basePath}/${recordingId}/integrate`);
   };
 
@@ -738,7 +738,7 @@ export const RobotIntegrationPage = ({
                     if (!recordingId) return;
                     setSelectedIntegrationType("googleSheets");
                     setSettings({ ...settings, integrationType: "googleSheets" });
-                    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+                    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
                     navigate(`${basePath}/${recordingId}/integrate/googleSheets`);
                   }}
                   style={{
@@ -765,7 +765,7 @@ export const RobotIntegrationPage = ({
                     if (!recordingId) return;
                     setSelectedIntegrationType("airtable");
                     setSettings({ ...settings, integrationType: "airtable" });
-                    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+                    const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
                     navigate(`${basePath}/${recordingId}/integrate/airtable`);
                   }}
                   style={{
@@ -790,7 +790,7 @@ export const RobotIntegrationPage = ({
                 if (!recordingId) return;
                 setSelectedIntegrationType("webhook");
                 setSettings({ ...settings, integrationType: "webhook" });
-                const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/robots";
+                const basePath = robotPath === "prebuilt-robots" ? "/prebuilt-robots" : "/scrapers";
                 navigate(`${basePath}/${recordingId}/integrate/webhook`);
               }} style={{ display: "flex", flexDirection: "column", alignItems: "center", background: 'white', color: '#ff00c3' }}>
                 <img src="/svg/webhook.svg" alt="Webhooks" style={{ margin: "6px" }} />

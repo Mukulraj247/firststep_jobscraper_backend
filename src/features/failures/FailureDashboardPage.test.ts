@@ -65,6 +65,9 @@ import {
   retrySuccessHref,
   retrySuccessMessage,
   rowStatusLabel,
+  runDetailsBackHref,
+  runDetailsBackLabel,
+  serializeFailureListSearch,
   shouldFadeUp,
   shouldLiftOnHover,
   shouldShowBackgroundRefreshBar,
@@ -259,7 +262,13 @@ describe('retry idempotency and active-run conflict', () => {
 
 describe('parseFailureDashboardSearch', () => {
   it('reads window and IST day bounds from the dashboard Failed link', () => {
-    expect(parseFailureDashboardSearch('window=6h')).toEqual({ timeWindow: '6h' });
+    expect(parseFailureDashboardSearch('window=6h')).toEqual({
+      timeWindow: '6h',
+      q: '',
+      status: DEFAULT_FAILURE_STATUS_FILTER,
+      reason: '',
+      anomaly: '',
+    });
     expect(
       parseFailureDashboardSearch(
         'from=2026-08-10T18:30:00.000Z&to=2026-08-11T18:29:59.999Z',
@@ -268,7 +277,33 @@ describe('parseFailureDashboardSearch', () => {
       timeWindow: '1h',
       from: '2026-08-10T18:30:00.000Z',
       to: '2026-08-11T18:29:59.999Z',
+      q: '',
+      status: DEFAULT_FAILURE_STATUS_FILTER,
+      reason: '',
+      anomaly: '',
     });
+    expect(parseFailureDashboardSearch('reason=captcha&q=jhu')).toMatchObject({
+      reason: 'captcha',
+      q: 'jhu',
+      timeWindow: '1h',
+    });
+  });
+
+  it('keeps run-details back on the filtered failures list instead of dashboard', () => {
+    expect(serializeFailureListSearch({
+      q: 'jhu',
+      status: DEFAULT_FAILURE_STATUS_FILTER,
+      reason: 'captcha',
+      anomaly: '',
+      timeWindow: '24h',
+    })).toBe('?q=jhu&reason=captcha&window=24h');
+    expect(runDetailsBackHref('/failures?reason=captcha', '/failures')).toBe(
+      '/failures?reason=captcha',
+    );
+    expect(runDetailsBackHref('/dashboard', '/failures')).toBe('/dashboard');
+    expect(runDetailsBackHref('https://evil.example', '/failures')).toBe('/failures');
+    expect(runDetailsBackHref('//evil.example', '/failures')).toBe('/failures');
+    expect(runDetailsBackLabel('/failures?reason=captcha')).toBe('Back to Failures');
   });
 });
 

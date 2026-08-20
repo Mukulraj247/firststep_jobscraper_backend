@@ -34,7 +34,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import TuneIcon from '@mui/icons-material/Tune';
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
+import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ColumnOverride,
   ColumnOverridesMap,
@@ -49,15 +49,17 @@ import {
   RADIUS,
   heroGlassGhostButtonSx,
   heroGlassPrimaryButtonSx,
-  hiddenScrollbarSx,
   tint,
 } from '../components/dashboard/ops/dashboardTokens';
 import { formatRunJobAddedAt } from '../features/jobs/jobBoardPageBehavior';
+import { popReturnNavigateOptions, pushReturnState } from '../features/navigation/inAppReturn';
 import {
   dataColumnLabel,
   dataColumnMinWidthPx,
   extractedDataTableHeaderCellSx,
+  extractedDataTableMinWidthPx,
   extractedDataTableRowHoverSx,
+  extractedDataTableScrollSx,
   formatExtractedCellDisplay,
   formatSourceLabel,
   isTitleColumn,
@@ -188,9 +190,18 @@ export const AutomationDataPage = ({
   const { id: routeId = '' } = useParams();
   const id = automationId || routeId;
   const navigate = useNavigate();
+  const location = useLocation();
   const close = () => {
-    if (onClose) onClose();
-    else navigate('/automations');
+    if (onClose) {
+      onClose();
+      return;
+    }
+    const back = popReturnNavigateOptions(location.state, '/automations');
+    if (back.href) {
+      navigate(back.href, back.state ? { state: back.state } : undefined);
+    } else {
+      navigate('/automations');
+    }
   };
   const { notify } = useGlobalInfoStore();
   const [page, setPage] = useState(0);
@@ -435,8 +446,8 @@ export const AutomationDataPage = ({
                 </Typography>
               </Box>
             </Stack>
-            <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted, maxWidth: 520 }}>
-              Jobs this scraper collected. Scroll the table; titles wrap, links open the posting.
+            <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted, maxWidth: 560 }}>
+              Jobs this scraper collected. Use the scrollbar at the bottom to see columns on the right.
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -491,26 +502,14 @@ export const AutomationDataPage = ({
         </Stack>
       </Box>
 
-      <TableContainer
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          overflow: 'auto',
-          ...hiddenScrollbarSx,
-          '&::-webkit-scrollbar': { width: 8, height: 8 },
-          '&::-webkit-scrollbar-thumb': {
-            bgcolor: 'rgba(79, 179, 169, 0.45)',
-            borderRadius: 8,
-          },
-        }}
-      >
+      <TableContainer sx={extractedDataTableScrollSx()}>
         {isLoading ? (
           <Stack alignItems="center" justifyContent="center" sx={{ py: 10 }} spacing={1.5}>
             <CircularProgress size={28} sx={{ color: FIRSTSTEP.teal }} />
             <Typography color="text.secondary">Loading extracted rows…</Typography>
           </Stack>
         ) : (
-          <Table stickyHeader size="small" sx={{ minWidth: 960 }}>
+          <Table stickyHeader size="small" sx={{ minWidth: extractedDataTableMinWidthPx(visibleColumns.length) }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={extractedDataTableHeaderCellSx()}>Run</TableCell>
@@ -551,7 +550,7 @@ export const AutomationDataPage = ({
                   <TableCell sx={{ whiteSpace: 'nowrap', px: 1.5, py: 1.25, verticalAlign: 'top' }}>
                     <Button
                       size="small"
-                      onClick={() => navigate(`/run/${row.runId}`)}
+                      onClick={() => navigate(`/run/${row.runId}`, { state: pushReturnState(location) })}
                       sx={{
                         fontWeight: 700,
                         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -742,7 +741,7 @@ export const AutomationDataPage = ({
           {editableColumns.length > 0 && databaseTargetColumns.length === 0 ? (
             <Alert severity="info" sx={{ mb: 2 }}>
               Add your database column names under{' '}
-              <Link component={RouterLink} to={`/automation/${id}/config`}>
+              <Link component={RouterLink} to={`/automation/${id}/config`} state={pushReturnState(location)}>
                 Scraper Configuration → Database column names
               </Link>{' '}
               to map with a dropdown instead of typing free text.

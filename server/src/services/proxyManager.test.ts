@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isScraperProxyEnabled, resolveProxyPool } from './proxyManager';
+import {
+  isScraperProxyEnabled,
+  parseProxyEndpoint,
+  probeProxyTcp,
+  resolveProxyPool,
+  selectRotatedProxy,
+} from './proxyManager';
 
 describe('isScraperProxyEnabled', () => {
   afterEach(() => {
@@ -30,16 +36,60 @@ describe('resolveProxyPool', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns an empty pool when SCRAPER_PROXY_ENABLED=false even if robot config has proxies', async () => {
+  it('still uses a per-automation proxy when SCRAPER_PROXY_ENABLED=false', async () => {
     process.env.SCRAPER_PROXY_ENABLED = 'false';
     const pool = await resolveProxyPool('user-1', {
       browserLocation: {
-        proxyServer: 'http://31.59.20.176:6754',
-        proxyUsername: 'nlmjdqpe',
+        proxyServer: 'http://gate.decodo.com:7000',
+        proxyUsername: 'user-trial',
         proxyPassword: 'secret',
-        proxyPool: ['http://other.proxy:8080'],
       },
     });
+    expect(pool).toEqual([
+      {
+        server: 'http://gate.decodo.com:7000',
+        username: 'user-trial',
+        password: 'secret',
+      },
+    ]);
+  });
+
+  it('skips account-wide proxy when SCRAPER_PROXY_ENABLED=false and the robot has none', async () => {
+    process.env.SCRAPER_PROXY_ENABLED = 'false';
+    const pool = await resolveProxyPool('user-1', { browserLocation: {} });
     expect(pool).toEqual([]);
+  });
+});
+
+describe('selectRotatedProxy', () => {
+  const pool = [
+    { server: 'http://31.59.20.176:6754' },
+    { server: 'http://gate.decodo.com:7000' },
+  ];
+
+  it('skips proxies that already failed CONNECT and uses the next one', () => {
+    const selected = selectRotatedProxy(pool, 0, ['http://31.59.20.176:6754']);
+    expect(selected?.server).toBe('http://gate.decodo.com:7000');
+  });
+
+  it('returns null when every proxy in the pool already failed', () => {
+    expect(
+      selectRotatedProxy(pool, 1, ['http://31.59.20.176:6754', 'http://gate.decodo.com:7000'])
+    ).toBeNull();
+  });
+});
+
+describe('parseProxyEndpoint', () => {
+  it('reads host and port from an HTTP proxy URL', () => {
+    expect(parseProxyEndpoint('http://31.59.20.176:6754')).toEqual({
+      host: '31.59.20.176',
+      port: 6754,
+    });
+  });
+});
+
+describe('probeProxyTcp', () => {
+  it('returns false when nothing accepts CONNECT on that host:port', async () => {
+    await expect(probeProxyTcp('http://127.0.0.1:1', 400)).resolves.toBe(false);
   });
 });

@@ -8,7 +8,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   createAutomation,
   deleteAutomation,
@@ -48,6 +48,7 @@ import {
   extractedDataDialogBackdropSx,
   extractedDataDialogPaperSx,
 } from '../features/automations/automationDataPageBehavior';
+import { pushReturnState } from '../features/navigation/inAppReturn';
 import {
   SOCKET_INVALIDATE_DEBOUNCE_MS,
   applyFilterChange,
@@ -76,6 +77,7 @@ const EMPTY_FORM: CreateAutomationForm = { ...EMPTY_CREATE_AUTOMATION_FORM };
 
 export const AutomationsPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
@@ -389,7 +391,7 @@ export const AutomationsPage = () => {
       notify('info', 'Automation queued — check Run History for status');
       await loadAutomations();
       if (result.runId) {
-        navigate(`/run/${result.runId}`);
+        navigate(`/run/${result.runId}`, { state: pushReturnState(location) });
       }
     }, 'Failed to run automation');
   };
@@ -537,7 +539,7 @@ export const AutomationsPage = () => {
     onConfigure: (automation) => setConfigTargetId(automation.id),
     onDelete: setDeleteTarget,
     onOpenLastRun: (automation) => {
-      if (automation.latestRunId) navigate(`/run/${automation.latestRunId}`);
+      if (automation.latestRunId) navigate(`/run/${automation.latestRunId}`, { state: pushReturnState(location) });
     },
     onCopyScoutId: (scoutId) => { void copyScoutId(scoutId); },
     onCopyTargetUrl: (url) => { void copyTargetUrl(url); },

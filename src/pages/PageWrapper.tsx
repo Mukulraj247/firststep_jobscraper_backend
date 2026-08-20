@@ -121,7 +121,7 @@ export const PageWrapper = () => {
         notify('warning', t('browser_recording.notifications.timeout_discarded'));
         const originPage = window.sessionStorage.getItem('recordingOriginPage');
         window.sessionStorage.removeItem('recordingOriginPage');
-        navigate(originPage || '/robots');
+        navigate(originPage || '/scrapers');
       }
     };
     return () => {
@@ -197,10 +197,16 @@ export const PageWrapper = () => {
                   <Route path="/dashboard" element={<MainPage handleEditRecording={handleEditRecording} initialContent="dashboard" />} />
                   <Route path="/automations" element={<MainPage handleEditRecording={handleEditRecording} initialContent="automations" />} />
                   <Route path="/jobs" element={<MainPage handleEditRecording={handleEditRecording} initialContent="jobs" />} />
-                  <Route path="/robots/create" element={<PageMain><RobotCreate /></PageMain>} />
-                  <Route path="/robots/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="robots" />} />
+                  <Route path="/scrapers/create" element={<PageMain><RobotCreate /></PageMain>} />
+                  <Route path="/scrapers/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="scrapers" />} />
+                  <Route path="/robots" element={<Navigate to="/scrapers" replace />} />
+                  <Route
+                    path="/robots/*"
+                    element={<Navigate to={`${location.pathname.replace(/^\/robots/, '/scrapers')}${location.search}`} replace />}
+                  />
                   <Route path="/runs/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="runs" />} />
                   <Route path="/failures" element={<MainPage handleEditRecording={handleEditRecording} initialContent="failures" />} />
+                  <Route path="/communication" element={<MainPage handleEditRecording={handleEditRecording} initialContent="communication" />} />
                   <Route path="/proxy" element={<MainPage handleEditRecording={handleEditRecording} initialContent="proxy" />} />
                   <Route path="/automation/:id/data" element={<PageMain><AutomationDataPage /></PageMain>} />
                   <Route path="/automation/:id/config" element={<PageMain><AutomationConfigPage /></PageMain>} />

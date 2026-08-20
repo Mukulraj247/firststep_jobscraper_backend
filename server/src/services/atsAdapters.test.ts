@@ -2,6 +2,8 @@
 import {
   detectAts,
   detectAtsBoard,
+  shouldSkipScrapeDoUrl,
+  shouldNeverScrapeDoUrl,
   fetchAtsBoardJobs,
   atsHttpClient,
   parseFindlyConfigFromHtml,
@@ -18,6 +20,9 @@ import {
   looksLikeOracleVanityHashBoard,
   resolveOracleHashVanityFusionHost,
   assertSafeFindlyApiBase,
+  looksLikePhenomBoard,
+  parsePhenomConfigFromHtml,
+  buildPhenomWidgetsRequest,
 } from './atsAdapters';
 import fs from 'fs';
 import path from 'path';
@@ -138,6 +143,119 @@ describe('detectAts', () => {
     expect(
       detectAts('https://careers.ibm.com/en_US/careers/SearchJobs?jobId=119566')
     ).toBeNull();
+  });
+
+  it('detects Greenhouse job-boards host URLs', () => {
+    const d = detectAts('https://job-boards.greenhouse.io/acme/jobs/555');
+    expect(d?.provider).toBe('greenhouse');
+    expect(d?.apiUrl).toContain('boards-api.greenhouse.io/v1/boards/acme/jobs/555');
+  });
+
+  it('detects generic Workday myworkdayjobs URLs', () => {
+    const d = detectAts(
+      'https://intel.wd1.myworkdayjobs.com/en-US/External/job/Santa-Clara/Software-Engineer_JR0245678'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Intel');
+    expect(d?.apiUrl).toBe('https://intel.wd1.myworkdayjobs.com/wday/cxs/intel/External');
+  });
+
+  it('detects Workday R-requisition URLs without a locale prefix', () => {
+    const d = detectAts(
+      'https://td.wd3.myworkdayjobs.com/TD_Bank_Careers/job/Toronto/Analyst_R12345'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.apiUrl).toContain('/wday/cxs/td/TD_Bank_Careers');
+  });
+
+  it('detects Oracle requisition preview URLs as HCM details', () => {
+    const d = detectAts(
+      'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/requisitions/preview/210686668'
+    );
+    expect(d?.provider).toBe('oraclecloud');
+    expect(decodeURIComponent(d?.apiUrl || '')).toContain('Id="210686668"');
+  });
+
+  it('detects Eightfold position URLs', () => {
+    const d = detectAts('https://paypal.eightfold.ai/careers?pid=18812&domain=paypal.com');
+    expect(d?.provider).toBe('eightfold');
+    expect(d?.apiUrl).toContain('paypal.eightfold.ai/api/apply/v2/jobs/18812');
+  });
+
+  it('detects iCIMS job URLs', () => {
+    const d = detectAts('https://staff-emory.icims.com/jobs/12345/registered-nurse/job');
+    expect(d?.provider).toBe('icims');
+    expect(d?.companyHint).toBe('Emory');
+  });
+
+  it('detects Taleo jobdetail URLs', () => {
+    const d = detectAts(
+      'https://zionsbancorp.taleo.net/careersection/2/jobdetail.ftl?job=1602214'
+    );
+    expect(d?.provider).toBe('taleo');
+    expect(d?.apiUrl).toContain('zionsbancorp.taleo.net');
+  });
+
+  it('detects Njoyn job listing URLs', () => {
+    const d = detectAts(
+      'https://cgi.njoyn.com/CGI/xweb/Xweb.asp?CLID=21001&page=joblisting&JobID=J021234'
+    );
+    expect(d?.provider).toBe('njoyn');
+  });
+
+  it('skips scrape.do for Workday, Taleo, and LinkedIn CDN hosts', () => {
+    expect(shouldSkipScrapeDoUrl('https://intel.wd1.myworkdayjobs.com/en-US/External/job/x_JR1')).toBe(
+      true
+    );
+    expect(
+      shouldSkipScrapeDoUrl('https://zionsbancorp.taleo.net/careersection/2/jobdetail.ftl?job=1')
+    ).toBe(true);
+    expect(shouldSkipScrapeDoUrl('https://media.licdn.com/dms/image/foo')).toBe(true);
+    expect(shouldSkipScrapeDoUrl('https://careers.example.com/job/1')).toBe(false);
+  });
+
+  it('never-scrape list is only junk/CDN, not career ATS hosts', () => {
+    expect(shouldNeverScrapeDoUrl('https://media.licdn.com/dms/image/foo')).toBe(true);
+    expect(shouldNeverScrapeDoUrl('https://careers.ford.com/us/en/job/JR123')).toBe(false);
+    expect(shouldNeverScrapeDoUrl('https://hiringcafe.com/job/abc')).toBe(false);
+  });
+
+  it('detects Apple job detail URLs', () => {
+    const d = detectAts('https://jobs.apple.com/en-us/details/200612345/software-engineer');
+    expect(d?.provider).toBe('careerhtml');
+    expect(d?.companyHint).toBe('Apple');
+  });
+
+  it('detects Amazon.jobs posting URLs', () => {
+    const d = detectAts('https://www.amazon.jobs/en/jobs/1234567/sde');
+    expect(d?.provider).toBe('careerhtml');
+    expect(d?.companyHint).toBe('Amazon');
+  });
+
+  it('detects Paylocity, Jobvite, and JazzHR applytojob URLs', () => {
+    expect(detectAts('https://recruiting.paylocity.com/Recruiting/Jobs/Details/12345')?.provider).toBe(
+      'careerhtml'
+    );
+    expect(detectAts('https://jobs.jobvite.com/acme/job/abc123')?.provider).toBe('careerhtml');
+    expect(detectAts('https://rockymountainprep.applytojob.com/apply/xyz')?.provider).toBe(
+      'careerhtml'
+    );
+  });
+
+  it('detects Phenom-style Ford / Truist / PwC job URLs', () => {
+    expect(detectAts('https://careers.ford.com/us/en/job/JR123/software-engineer')?.provider).toBe(
+      'careerhtml'
+    );
+    expect(detectAts('https://careers.truist.com/us/en/job/R01234/teller')?.companyHint).toBe(
+      'Truist'
+    );
+    expect(detectAts('https://jobs-us.pwc.com/us/en/job/12345/consultant')?.companyHint).toBe('PwC');
+  });
+
+  it('does not treat HiringCafe as ATS', () => {
+    expect(detectAts('https://hiringcafe.com/job/abc')).toBeNull();
+    expect(detectAts('https://hiring.cafe/job/abc')).toBeNull();
+    expect(shouldSkipScrapeDoUrl('https://hiringcafe.com/job/abc')).toBe(false);
   });
 });
 
@@ -465,6 +583,7 @@ describe('fetchAtsBoardJobs', () => {
           {
             title: 'Engineer',
             absolute_url: 'https://boards.greenhouse.io/stripe/jobs/1',
+            content: '<p>' + 'Build payments infrastructure. '.repeat(20) + '</p>',
             location: { name: 'Remote' },
             updated_at: '2026-01-01',
           },
@@ -477,6 +596,7 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.rows[0].jobTitle).toBe('Engineer');
     expect(result?.rows[0].jobUrl).toContain('/jobs/1');
     expect(result?.rows[0].url).toBe(result?.rows[0].jobUrl);
+    expect(result?.rows[0].jobDescription).toContain('Build payments infrastructure');
   });
 
   it('maps Lever postings array', async () => {
@@ -890,6 +1010,281 @@ describe('fetchAtsBoardJobs', () => {
         'https://careers.ey.com/search-3?optionsFacetsDD_country=US&startrow=0'
       )
     ).toBeNull();
+  });
+});
+
+describe('Phenom board adapter', () => {
+  const pcsxHtml = fs.readFileSync(
+    path.join(__dirname, 'fixtures/phenom-pcsx-home.html'),
+    'utf8'
+  );
+  const widgetsHtml = fs.readFileSync(
+    path.join(__dirname, 'fixtures/phenom-widgets-home.html'),
+    'utf8'
+  );
+
+  it('detects Phenom career hosts in detectAtsBoard', () => {
+    const board = detectAtsBoard('https://hiring.jhu.edu/careers');
+    expect(board?.provider).toBe('phenom');
+    expect(board?.listApiUrl).toBe('phenom-widgets://resolve');
+    expect(detectAtsBoard('https://boards.greenhouse.io/stripe')?.provider).toBe('greenhouse');
+  });
+
+  it('looksLikePhenomBoard matches hiring hosts and pid query without treating pid as refNum', () => {
+    expect(looksLikePhenomBoard('https://hiring.jhu.edu/careers?pid=1133910207165')).toBe(true);
+    expect(looksLikePhenomBoard('https://careers.acme.phenompeople.com/us/en/search-results')).toBe(
+      true
+    );
+    expect(looksLikePhenomBoard('https://boards.greenhouse.io/stripe')).toBe(false);
+    const cfg = parsePhenomConfigFromHtml(
+      widgetsHtml,
+      'https://careers.acme.com/search?pid=1133910207165'
+    );
+    expect(cfg?.refNum).toBe('REF-ACME-99');
+    expect(cfg?.refNum).not.toBe('1133910207165');
+  });
+
+  it('detects Qualcomm / NVIDIA-style careers.brand.com/careers PCS URLs', () => {
+    const qualcomm =
+      'https://careers.qualcomm.com/careers?start=0&location=usa&pid=446719744020&sort_by=distance&filter_include_remote=0&filter_job_family=software+engineering';
+    expect(looksLikePhenomBoard(qualcomm)).toBe(true);
+    expect(detectAtsBoard(qualcomm)?.provider).toBe('phenom');
+    expect(detectAtsBoard(qualcomm)?.companyHint).toBe('Qualcomm');
+    expect(looksLikePhenomBoard('https://careers.nvidia.com/careers?pid=123456789012')).toBe(true);
+  });
+
+  it('parsePhenomConfigFromHtml discovers PCSX domain from embedded JSON', () => {
+    const cfg = parsePhenomConfigFromHtml(pcsxHtml, 'https://hiring.acme.example/careers');
+    expect(cfg?.kind).toBe('pcsx');
+    expect(cfg?.domain).toBe('acme.example');
+    expect(cfg?.refNum).toBeUndefined();
+  });
+
+  it('buildPhenomWidgetsRequest includes refNum and pagination offset', () => {
+    const body = buildPhenomWidgetsRequest(
+      {
+        kind: 'widgets',
+        companyHint: 'Acme',
+        refNum: 'REF-ACME-99',
+        ddoKey: 'refineSearch',
+        pageName: 'search-results',
+      },
+      40,
+      20
+    );
+    expect(body).toMatchObject({
+      ddoKey: 'refineSearch',
+      pageName: 'search-results',
+      from: 40,
+      size: 20,
+      refNum: 'REF-ACME-99',
+    });
+  });
+
+  describe('fetchAtsBoardJobs', () => {
+    let getSpy: ReturnType<typeof vi.spyOn>;
+    let postSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      getSpy = vi.spyOn(atsHttpClient, 'get');
+      postSpy = vi.spyOn(atsHttpClient, 'post');
+      process.env.ATS_BOARD_PAGE_DELAY_MS = '0';
+    });
+
+    afterEach(() => {
+      getSpy.mockRestore();
+      postSpy.mockRestore();
+    });
+
+    it('maps PCSX search positions with absolute job URLs', async () => {
+      getSpy.mockImplementation(async (url: string) => {
+        if (String(url).includes('/api/pcsx/search')) {
+          return {
+            status: 200,
+            data: {
+              data: {
+                count: 1,
+                positions: [
+                  {
+                    id: 1133915268883,
+                    name: 'Neuropsychometrist',
+                    locations: ['Baltimore, MD, United States'],
+                    positionUrl: '/careers/job/1133915268883',
+                    postedTs: 1787176050,
+                    workLocationOption: 'onsite',
+                  },
+                ],
+              },
+            },
+          } as any;
+        }
+        return { status: 200, data: pcsxHtml } as any;
+      });
+      const result = await fetchAtsBoardJobs('https://hiring.acme.example/careers');
+      expect(result?.provider).toBe('phenom');
+      expect(result?.rows).toHaveLength(1);
+      expect(result?.rows[0].jobTitle).toBe('Neuropsychometrist');
+      expect(result?.rows[0].jobUrl).toBe('https://hiring.acme.example/careers/job/1133915268883');
+    });
+
+    it('forwards PCSX location and filter_* query params from the start URL', async () => {
+      getSpy.mockImplementation(async (url: string) => {
+        if (String(url).includes('/api/pcsx/search')) {
+          const parsed = new URL(String(url));
+          expect(parsed.searchParams.get('location')).toBe('usa');
+          expect(parsed.searchParams.get('filter_job_family')).toBe('software engineering');
+          expect(parsed.searchParams.get('pid')).toBeNull();
+          return {
+            status: 200,
+            data: {
+              data: {
+                count: 1,
+                positions: [{ id: 1, name: 'SWE', positionUrl: '/careers/job/1', locations: ['US'] }],
+              },
+            },
+          } as any;
+        }
+        return { status: 200, data: pcsxHtml } as any;
+      });
+      const result = await fetchAtsBoardJobs(
+        'https://careers.qualcomm.com/careers?location=usa&pid=446719744020&filter_job_family=software+engineering'
+      );
+      expect(result?.rows[0].jobTitle).toBe('SWE');
+    });
+
+    it('retries PCSX search without filters when the filtered query is empty', async () => {
+      getSpy.mockImplementation(async (url: string) => {
+        if (String(url).includes('/api/pcsx/search')) {
+          const parsed = new URL(String(url));
+          const filtered = parsed.searchParams.has('filter_job_family');
+          return {
+            status: 200,
+            data: {
+              data: {
+                count: filtered ? 0 : 1,
+                positions: filtered
+                  ? []
+                  : [{ id: 9, name: 'Fallback SWE', positionUrl: '/careers/job/9', locations: ['US'] }],
+              },
+            },
+          } as any;
+        }
+        return { status: 200, data: pcsxHtml } as any;
+      });
+      const result = await fetchAtsBoardJobs(
+        'https://careers.qualcomm.com/careers?location=usa&filter_job_family=software+engineering,hardware+engineering'
+      );
+      expect(result?.rows[0].jobTitle).toBe('Fallback SWE');
+    });
+
+    it('paginates PCSX search by start offset', async () => {
+      getSpy.mockImplementation(async (url: string) => {
+        if (String(url).includes('start=0')) {
+          return {
+            status: 200,
+            data: {
+              data: {
+                count: 2,
+                positions: [
+                  { id: 1, name: 'Job A', positionUrl: '/careers/job/1', locations: ['NY'] },
+                ],
+              },
+            },
+          } as any;
+        }
+        if (String(url).includes('start=1')) {
+          return {
+            status: 200,
+            data: {
+              data: {
+                count: 2,
+                positions: [
+                  { id: 2, name: 'Job B', positionUrl: '/careers/job/2', locations: ['LA'] },
+                ],
+              },
+            },
+          } as any;
+        }
+        return { status: 200, data: pcsxHtml } as any;
+      });
+      const result = await fetchAtsBoardJobs('https://hiring.acme.example/careers', { maxPages: 5 });
+      expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Job A', 'Job B']);
+    });
+
+    it('maps classic Phenom /widgets refineSearch jobs', async () => {
+      getSpy.mockResolvedValue({ status: 200, data: widgetsHtml } as any);
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          refineSearch: {
+            data: {
+              totalHits: 1,
+              jobs: [
+                {
+                  title: 'Engineer',
+                  applyUrl: '/us/en/job/12345/engineer',
+                  location: 'Remote',
+                },
+              ],
+            },
+          },
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs('https://careers.acme.phenompeople.com/us/en/search-results');
+      expect(postSpy).toHaveBeenCalled();
+      const [, body] = postSpy.mock.calls[0];
+      expect(body).toMatchObject({ refNum: 'REF-ACME-99', from: 0 });
+      expect(result?.rows[0].jobTitle).toBe('Engineer');
+      expect(result?.rows[0].jobUrl).toContain('/us/en/job/12345/engineer');
+    });
+
+    it('dedupes duplicate job URLs from widgets responses', async () => {
+      getSpy.mockResolvedValue({ status: 200, data: widgetsHtml } as any);
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          refineSearch: {
+            data: {
+              totalHits: 2,
+              jobs: [
+                { title: 'Dup', applyUrl: 'https://careers.acme.com/job/1' },
+                { title: 'Dup copy', applyUrl: 'https://careers.acme.com/job/1' },
+              ],
+            },
+          },
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs('https://careers.acme.phenompeople.com/search');
+      expect(result?.rows).toHaveLength(1);
+    });
+
+    it('returns null when widgets API responds with HTTP 403', async () => {
+      getSpy.mockResolvedValue({ status: 200, data: widgetsHtml } as any);
+      postSpy.mockResolvedValue({ status: 403, data: { message: 'blocked' } } as any);
+      expect(
+        await fetchAtsBoardJobs('https://careers.acme.phenompeople.com/us/en/search-results')
+      ).toBeNull();
+    });
+
+    it('returns null when PCSX HTML lacks Phenom config', async () => {
+      getSpy.mockResolvedValue({ status: 200, data: '<html><body>hello</body></html>' } as any);
+      expect(await fetchAtsBoardJobs('https://hiring.jhu.edu/careers')).toBeNull();
+    });
+
+    it('stops widgets pagination on empty page even when totalHits exceeds from', async () => {
+      getSpy.mockResolvedValue({ status: 200, data: widgetsHtml } as any);
+      postSpy
+        .mockResolvedValueOnce({
+          status: 200,
+          data: {
+            refineSearch: { data: { totalHits: 100, jobs: [] } },
+          },
+        } as any);
+      expect(
+        await fetchAtsBoardJobs('https://careers.acme.phenompeople.com/search')
+      ).toBeNull();
+      expect(postSpy).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

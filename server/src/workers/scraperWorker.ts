@@ -25,10 +25,18 @@ import { detectCaptcha, detectCloudflareChallenge, waitForCloudflareToClear, app
 import { CaptchaEncounteredError, describe as describeCaptcha } from '../services/scraping/captchaGate';
 import {
   isScraperProxyEnabled,
+  probeProxyTcp,
   resolveProxyPool,
   selectRotatedProxy,
   type ProxyProfile,
 } from '../services/proxyManager';
+import {
+  blockRetryIdentity,
+  captchaRetryIdentity,
+  isProxyTunnelFailure,
+  normalizeFailedProxyServers,
+  rememberFailedProxy,
+} from '../services/scraperIdentity';
 import { normalizeProxyServer } from '../services/proxyConfig';
 import { selectRotatedUserAgent } from '../services/userAgentManager';
 import { getSessionStatePath, sessionStateExists } from '../storage/sessionState';
@@ -427,18 +435,46 @@ async function tryAtsBoardCollection(
   } catch (fetchErr: any) {
     await appendRunLog(
       run,
-      `ATS board fetch threw for ${detected.provider}: ${fetchErr?.message || fetchErr}; falling back to browser`,
+      detected.provider === 'phenom'
+        ? `ATS board fetch threw for phenom: ${fetchErr?.message || fetchErr}; skipping browser extraction because Phenom list pages are CAPTCHA-gated`
+        : `ATS board fetch threw for ${detected.provider}: ${fetchErr?.message || fetchErr}; falling back to browser`,
       { flush: true }
     );
+    if (detected.provider === 'phenom') {
+      await finalizeExtractedListRows({
+        run,
+        automation,
+        userId,
+        rows: [],
+        extractionMethod: 'ats_board',
+        atsProvider: 'phenom',
+        zeroRowsHint: `Phenom API failed: ${fetchErr?.message || fetchErr}`,
+      });
+      return true;
+    }
     return false;
   }
 
   if (!board || !board.rows.length) {
     await appendRunLog(
       run,
-      `ATS board fetch returned no rows for ${detected.provider}; falling back to browser extraction`,
+      detected.provider === 'phenom'
+        ? `ATS board fetch returned no rows for phenom; skipping browser extraction because Phenom list pages are CAPTCHA-gated`
+        : `ATS board fetch returned no rows for ${detected.provider}; falling back to browser extraction`,
       { flush: true }
     );
+    if (detected.provider === 'phenom') {
+      await finalizeExtractedListRows({
+        run,
+        automation,
+        userId,
+        rows: [],
+        extractionMethod: 'ats_board',
+        atsProvider: 'phenom',
+        zeroRowsHint: 'Phenom PCSX/widgets API returned zero jobs.',
+      });
+      return true;
+    }
     return false;
   }
 
@@ -627,9 +663,22 @@ async function persistSessionStateForRun(userId: string, automationId: string, b
   await page.context().storageState({ path: storageStatePath });
 }
 
-async function buildIdentityProfile(userId: string, automationId: string, config: Record<string, any>, attemptsMade: number) {
+const PROXY_TUNNEL_RETRY_DELAY_MS = 5_000;
+
+async function buildIdentityProfile(
+  userId: string,
+  automationId: string,
+  config: Record<string, any>,
+  attemptsMade: number,
+  opts?: {
+    failedProxyServers?: string[];
+    lastFailureWasProxyTunnel?: boolean;
+    retryReason?: 'captcha' | 'proxy-tunnel';
+  }
+) {
+  let failedProxyServers = normalizeFailedProxyServers(opts?.failedProxyServers);
   const proxyPool = await resolveProxyPool(String(userId), config);
-  let selectedProxy = selectRotatedProxy(proxyPool, attemptsMade);
+  let selectedProxy = selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers);
   const userAgent = config?.userAgent || selectRotatedUserAgent(attemptsMade, config?.userAgentPool);
   const shouldReuseSession = config?.reuseSession !== false;
   const targetUrl = config?.targetUrl;
@@ -644,29 +693,52 @@ async function buildIdentityProfile(userId: string, automationId: string, config
   let identityStrategy = antiBotTarget ? 'baseline-antibot' : 'baseline';
   let poolIsolationKey: string | undefined;
   const disableHttp2 = shouldDisableChromiumHttp2(targetUrl);
+  const envFallbackProxy = getEnvFallbackProxy();
+  const sidecarProxyServer = normalizeProxyServer(process.env.CAMOUFOX_PROXY_SERVER);
+  let sidecarProxyReachable: boolean | undefined;
 
-  // Attempt 0: keep DEFAULT_BROWSER_TYPE / config (usually Playwright).
-  // Attempt 1+: always escalate to Camoufox so CAPTCHA / soft-blocks don't
-  // repeat the same Playwright + datacenter fingerprint (was previously only
-  // applied for a small hardcoded anti-bot host list — e.g. JHU never switched).
-  if (attemptsMade >= 1) {
-    browserType = 'camoufox';
-    // Always headless via Camoufox sidecar — visible/local launches OOM small hosts
-    // and `headless:false` forces a non-sidecar path in browserConnection.
-    headless = true;
-    useStealth = true;
-    identityStrategy =
-      attemptsMade === 1 ? 'retry-camoufox-after-block' : 'retry-camoufox-rotated';
-    poolIsolationKey = `camoufox-escalate-${attemptsMade}`;
-    if (!selectedProxy) {
-      selectedProxy = getEnvFallbackProxy();
-      if (selectedProxy) {
-        logger.log(
-          'info',
-          `CAPTCHA/block escalate: using env proxy ${selectedProxy.server} for Camoufox attempt ${attemptsMade + 1}`
-        );
-      }
+  // Probe before Camoufox escalate. A dead CAMOUFOX_PROXY_SERVER used to burn
+  // every remaining attempt with ERR_TUNNEL_CONNECTION_FAILED.
+  if (attemptsMade >= 1 && sidecarProxyServer && !failedProxyServers.includes(sidecarProxyServer)) {
+    sidecarProxyReachable = await probeProxyTcp(sidecarProxyServer);
+    if (!sidecarProxyReachable) {
+      failedProxyServers = rememberFailedProxy(failedProxyServers, sidecarProxyServer);
+      logger.log(
+        'warn',
+        `Camoufox sidecar proxy ${sidecarProxyServer} is unreachable; retrying without it`
+      );
+      selectedProxy = selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers);
     }
+  }
+
+  const retryPlan =
+    opts?.retryReason === 'captcha'
+      ? captchaRetryIdentity({
+          attemptsMade,
+          selectedProxy,
+          envFallbackProxy,
+          configBrowserType: config?.browserType,
+          failedProxyServers,
+        })
+      : blockRetryIdentity({
+          attemptsMade,
+          selectedProxy,
+          envFallbackProxy,
+          configBrowserType: config?.browserType,
+          failedProxyServers,
+          sidecarProxyServer,
+          sidecarProxyReachable,
+          lastFailureWasProxyTunnel:
+            opts?.lastFailureWasProxyTunnel || opts?.retryReason === 'proxy-tunnel',
+        });
+
+  if (retryPlan) {
+    browserType = retryPlan.browserType;
+    headless = retryPlan.headless;
+    useStealth = retryPlan.useStealth;
+    identityStrategy = retryPlan.identityStrategy;
+    poolIsolationKey = retryPlan.poolIsolationKey;
+    selectedProxy = retryPlan.proxy;
   }
 
   // Known Chromium HTTP/2 breakage (e.g. Persistent): force HTTP/1.1 from attempt 0
@@ -692,6 +764,7 @@ async function buildIdentityProfile(userId: string, automationId: string, config
     identityStrategy,
     poolIsolationKey,
     disableHttp2,
+    failedProxyServers,
   };
 }
 
@@ -716,6 +789,11 @@ export async function runScraperJobPayload(
   const { automationId, runId, userId, config: queuedConfig } = data;
   logger.log('info', `Processing scraper job: runId=${runId}, automationId=${automationId}`);
   const attemptsMade = data._attemptsMade || 0;
+  let failedProxyServers = normalizeFailedProxyServers(data._failedProxyServers);
+  let identityProfile: Omit<
+    Awaited<ReturnType<typeof buildIdentityProfile>>,
+    'failedProxyServers'
+  > | null = null;
   const queueJobId = data.queueJobId || 'unknown';
   const agendaJob = options?.agendaJob;
   let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -832,6 +910,9 @@ export async function runScraperJobPayload(
           userId: String(userId),
           config: retryConfig,
           _attemptsMade: attemptsMade,
+          _failedProxyServers: failedProxyServers,
+          _lastFailureWasProxyTunnel: data._lastFailureWasProxyTunnel,
+          _retryReason: data._retryReason,
         },
         { force: true, delayMs: parkMs }
       );
@@ -897,19 +978,27 @@ export async function runScraperJobPayload(
       }
     }
 
-    const identityProfile = await buildIdentityProfile(
+    const builtIdentity = await buildIdentityProfile(
       String(userId),
       automationId,
       { ...config, targetUrl: automation?.recording_meta?.url },
-      attemptsMade
+      attemptsMade,
+      {
+        failedProxyServers,
+        lastFailureWasProxyTunnel: data._lastFailureWasProxyTunnel,
+        retryReason: data._retryReason,
+      }
     );
+    const { failedProxyServers: probedFailed, ...selectedIdentity } = builtIdentity;
+    identityProfile = selectedIdentity;
+    failedProxyServers = probedFailed;
     await appendRunLog(
       run,
-      `Identity selected: strategy=${identityProfile.identityStrategy || 'baseline'}, browser=${identityProfile.browserType || 'playwright-default'}, proxy ${identityProfile.contextProxy?.server || 'none'}, headless=${identityProfile.headless}${identityProfile.disableHttp2 ? ', http2=disabled' : ''}`
+      `Identity selected: strategy=${selectedIdentity.identityStrategy || 'baseline'}, browser=${selectedIdentity.browserType || 'playwright-default'}, proxy ${selectedIdentity.contextProxy?.server || 'none'}, headless=${selectedIdentity.headless}${selectedIdentity.disableHttp2 ? ', http2=disabled' : ''}`
     );
 
     if (!useListExtraction) {
-      browserId = createRemoteBrowserForRun(String(userId), identityProfile);
+      browserId = createRemoteBrowserForRun(String(userId), selectedIdentity);
       run.browserId = browserId;
       await run.save();
       await appendRunLog(run, `Allocated browser ${browserId}`);
@@ -932,7 +1021,7 @@ export async function runScraperJobPayload(
               automation,
               String(userId),
               config,
-              identityProfile,
+              selectedIdentity,
               { onPoolKey: rememberPoolKey }
             );
             executionResult = result;
@@ -940,6 +1029,17 @@ export async function runScraperJobPayload(
           } catch (firstError: any) {
             const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
             if (!isNavigationNetworkFailure(firstMessage)) {
+              throw firstError;
+            }
+
+            // Same identity through a dead CONNECT tunnel cannot recover. Let the
+            // attempt/retry path drop that proxy instead of launching another browser.
+            if (isProxyTunnelFailure(firstMessage)) {
+              await appendRunLog(
+                run,
+                'Detected proxy tunnel failure. Skipping isolated-browser fallback; next attempt will drop this proxy.',
+                { flush: true }
+              );
               throw firstError;
             }
 
@@ -971,7 +1071,7 @@ export async function runScraperJobPayload(
               automation,
               String(userId),
               config,
-              identityProfile,
+              selectedIdentity,
               {
                 isolatedBrowserKey: isolatedKey,
                 blockResources: false,
@@ -1201,7 +1301,7 @@ export async function runScraperJobPayload(
         const delaySec = Math.round(delayMs / 1000);
         await appendRunLog(
           latestRun,
-          `CAPTCHA encountered — retrying with Camoufox (+ residential proxy if configured) (${attemptsMade + 2}/${MAX_ATTEMPTS}); Retry scheduled in ${delaySec}s`
+          `CAPTCHA encountered — retrying Playwright with residential proxy if configured (${attemptsMade + 2}/${MAX_ATTEMPTS}); Retry scheduled in ${delaySec}s`
         );
         latestRun.status = 'pending';
         latestRun.errorMessage = `CAPTCHA on attempt ${attemptsMade + 1}; retry in ${delaySec}s`;
@@ -1223,6 +1323,8 @@ export async function runScraperJobPayload(
               userId: String(userId),
               config: retryConfig,
               _attemptsMade: attemptsMade + 1,
+              _failedProxyServers: failedProxyServers,
+              _retryReason: 'captcha',
             },
             { force: true, delayMs }
           );
@@ -1277,12 +1379,29 @@ export async function runScraperJobPayload(
         }
       }
 
-      const delayMs = hasRemainingAttempts ? computeScrapeRetryDelayMs(attemptsMade) : 0;
+      const tunnelFailure = isProxyTunnelFailure(message);
+      if (tunnelFailure) {
+        failedProxyServers = rememberFailedProxy(
+          failedProxyServers,
+          identityProfile?.contextProxy?.server
+        );
+        failedProxyServers = rememberFailedProxy(
+          failedProxyServers,
+          process.env.CAMOUFOX_PROXY_SERVER
+        );
+      }
+      const delayMs = hasRemainingAttempts
+        ? tunnelFailure
+          ? Math.min(computeScrapeRetryDelayMs(attemptsMade), PROXY_TUNNEL_RETRY_DELAY_MS)
+          : computeScrapeRetryDelayMs(attemptsMade)
+        : 0;
       const delaySec = Math.round(delayMs / 1000);
       await markFailed(
         latestRun,
         hasRemainingAttempts
-          ? `${message} - retrying with a new identity profile in ${delaySec}s`
+          ? tunnelFailure
+            ? `${message} - retrying without the failed proxy in ${delaySec}s`
+            : `${message} - retrying with a new identity profile in ${delaySec}s`
           : `Dead letter: attempts exhausted (${MAX_ATTEMPTS}/${MAX_ATTEMPTS}). ${message}`,
         hasRemainingAttempts ? 'pending' : 'dead'
       );
@@ -1298,6 +1417,9 @@ export async function runScraperJobPayload(
               userId: String(userId),
               config: retryConfig,
               _attemptsMade: attemptsMade + 1,
+              _failedProxyServers: failedProxyServers,
+              _lastFailureWasProxyTunnel: tunnelFailure,
+              _retryReason: tunnelFailure ? 'proxy-tunnel' : undefined,
             },
             { force: true, delayMs }
           );

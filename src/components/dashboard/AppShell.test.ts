@@ -186,10 +186,11 @@ describe('skip link and main landmark', () => {
       '/dashboard',
       '/automations',
       '/jobs',
-      '/robots',
-      '/robots/create',
+      '/scrapers',
+      '/scrapers/create',
       '/runs',
       '/failures',
+      '/communication',
       '/proxy',
       '/automation/abc/data',
       '/automation/abc/config',
@@ -207,7 +208,7 @@ describe('skip link and main landmark', () => {
     expect(shouldShowSkipLink('/dashboard', true)).toBe(true);
     expect(shouldShowSkipLink('/', true)).toBe(false);
     expect(shouldShowSkipLink('/login', true)).toBe(false);
-    expect(shouldShowSkipLink('/robots/create', true)).toBe(true);
+    expect(shouldShowSkipLink('/scrapers/create', true)).toBe(true);
   });
 });
 
@@ -240,7 +241,7 @@ describe('focus on route change', () => {
   });
 
   it('moves focus when returning from a PageMain route onto a remounted AppShell', () => {
-    const nav = providerPathAfterNavigation('/robots/create', '/dashboard');
+    const nav = providerPathAfterNavigation('/scrapers/create', '/dashboard');
     expect(nav.shouldFocus).toBe(true);
     expect(shouldMoveFocusToMain(nav.previousPath, nav.nextPath)).toBe(true);
   });

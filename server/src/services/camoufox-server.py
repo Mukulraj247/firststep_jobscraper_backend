@@ -128,6 +128,12 @@ def launch_camoufox():
 
         # Build proxy config from environment variables
         proxy_server = os.environ.get("CAMOUFOX_PROXY_SERVER", "").strip()
+        scraper_proxy_raw = os.environ.get("SCRAPER_PROXY_ENABLED", "true").strip().lower()
+        scraper_proxy_enabled = scraper_proxy_raw not in ("false", "0", "no", "off")
+        if not scraper_proxy_enabled:
+            proxy_server = ""
+            print("[Camoufox] SCRAPER_PROXY_ENABLED=false — launching without CAMOUFOX_PROXY_SERVER")
+
         proxy_config = None
         if proxy_server:
             proxy_config = {"server": proxy_server}

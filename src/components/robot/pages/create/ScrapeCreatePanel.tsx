@@ -41,7 +41,7 @@ export const ScrapeCreatePanel: React.FC = () => {
       if (result) {
         invalidateRecordings();
         notify('success', `${name.trim()} created successfully!`);
-        navigate('/robots');
+        navigate('/scrapers');
       } else {
         notify('error', 'Failed to create scrape scraper');
       }

@@ -24,16 +24,19 @@ import {
   FlashOff,
   Today,
 } from '@mui/icons-material';
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
+import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { getAutomation, updateAutomationConfig } from '../api/automation';
 import { useGlobalInfoStore } from '../context/globalInfo';
 import { SCHEDULE_OPTIONS } from '../constants/scheduleOptions';
 import { DEFAULT_JOB_DATABASE_TARGET_COLUMNS } from '../constants/defaultJobDatabaseColumns';
 import { TagPicker } from '../components/automation/TagPicker';
 import {
+  configShowsPaginationLimits,
   configShowsRawListExtractionEditor,
   configStartUrlLocked,
+  proxySavedChipLabel,
 } from '../features/automations/automationsPageBehavior';
+import { popReturnNavigateOptions, pushReturnState } from '../features/navigation/inAppReturn';
 
 const DB_TARGET_COL_MAX = 100;
 const DB_TARGET_NAME_MAX = 120;
@@ -130,10 +133,19 @@ export const AutomationConfigPage = ({
   const { id: routeId = '' } = useParams();
   const id = automationId || routeId;
   const navigate = useNavigate();
+  const location = useLocation();
   const { notify } = useGlobalInfoStore();
   const close = () => {
-    if (onClose) onClose();
-    else navigate('/automations');
+    if (onClose) {
+      onClose();
+      return;
+    }
+    const back = popReturnNavigateOptions(location.state, '/automations');
+    if (back.href) {
+      navigate(back.href, back.state ? { state: back.state } : undefined);
+    } else {
+      navigate('/automations');
+    }
   };
   const [name, setName] = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -601,7 +613,12 @@ export const AutomationConfigPage = ({
             </Stack>
             {!embedded ? (
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-              <Link component={RouterLink} to={`/automation/${id}/data`} underline="hover">
+              <Link
+                component={RouterLink}
+                to={`/automation/${id}/data`}
+                state={pushReturnState(location)}
+                underline="hover"
+              >
                 Extracted data
               </Link>
               <Link component={RouterLink} to="/automations" underline="hover">
@@ -675,6 +692,38 @@ export const AutomationConfigPage = ({
                         ))}
                       </Box>
                     ) : null}
+                    {configShowsPaginationLimits() ? (
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 0.5 }}>
+                        <TextField
+                          label="Max items"
+                          type="number"
+                          size="small"
+                          value={config.listExtraction?.maxItems ?? 100}
+                          onChange={(event) => {
+                            markExtractionDirty();
+                            updateNested(
+                              ['listExtraction', 'maxItems'],
+                              parseInt(event.target.value || '100', 10)
+                            );
+                          }}
+                          helperText="Stop after this many job URLs"
+                        />
+                        <TextField
+                          label="Max pages"
+                          type="number"
+                          size="small"
+                          value={config.listExtraction?.pagination?.maxPages ?? 10}
+                          onChange={(event) => {
+                            markExtractionDirty();
+                            updateNested(
+                              ['listExtraction', 'pagination', 'maxPages'],
+                              parseInt(event.target.value || '10', 10)
+                            );
+                          }}
+                          helperText="How many list pages to click through"
+                        />
+                      </Stack>
+                    ) : null}
                   </Stack>
                 )}
 
@@ -707,7 +756,12 @@ export const AutomationConfigPage = ({
               placeholder={'posted_date\njob_url\ncompany_name'}
               helperText="Match your warehouse / BigQuery / API field names exactly. Leave empty to type renames manually in Edit columns."
             />
-            <Link component={RouterLink} to={`/automation/${id}/data`} underline="hover">
+            <Link
+              component={RouterLink}
+              to={`/automation/${id}/data`}
+              state={pushReturnState(location)}
+              underline="hover"
+            >
               Open Extracted Data → Edit columns
             </Link>
           </SectionPaper>
@@ -1051,24 +1105,45 @@ export const AutomationConfigPage = ({
             />
           </SectionPaper>
 
-          <SectionPaper title="Proxy">
+          <SectionPaper
+            title="Proxy"
+            action={
+              proxySavedChipLabel(proxyConfigured) ? (
+                <Chip size="small" color="success" label={proxySavedChipLabel(proxyConfigured)} />
+              ) : undefined
+            }
+          >
             <Typography variant="body2" color="text.secondary">
-              Optional per-automation proxy. If empty, Scout-X falls back to your{' '}
-              <Link component={RouterLink} to="/proxy" underline="hover">
-                account proxy settings
-              </Link>
-              {proxyConfigured ? '. Stored credentials are kept unless you enter replacements.' : '.'}
+              Optional per-automation proxy. Values are not shown again after save (that is
+              intentional). If you see the green Saved chip, Decodo is stored — leave the boxes
+              empty and click Run. Only fill them again to replace credentials.{' '}
+              {!proxyConfigured ? (
+                <>
+                  If empty, Scout-X falls back to your{' '}
+                  <Link component={RouterLink} to="/proxy" underline="hover">
+                    account proxy settings
+                  </Link>
+                  .
+                </>
+              ) : null}
             </Typography>
+            {proxyConfigured ? (
+              <Alert severity="success" sx={{ mb: 1 }}>
+                Proxy is on this automation. Empty fields after refresh does not mean it was lost.
+              </Alert>
+            ) : null}
             <TextField
               label="Proxy server"
               fullWidth
               value={config.browserLocation?.proxyServer || ''}
+              placeholder={proxyConfigured ? 'Leave blank to keep saved server' : 'http://gate.decodo.com:7000'}
               onChange={(event) => updateNested(['browserLocation', 'proxyServer'], event.target.value)}
             />
             <TextField
               label="Proxy username"
               fullWidth
               value={config.browserLocation?.proxyUsername || ''}
+              placeholder={proxyConfigured ? 'Leave blank to keep saved username' : ''}
               onChange={(event) => updateNested(['browserLocation', 'proxyUsername'], event.target.value)}
             />
             <TextField

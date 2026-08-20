@@ -61,7 +61,7 @@ export const RecordingPage = ({ recordingName }: RecordingPageProps) => {
       channel.close();
       window.close();
       // Fallback: if window.close() is blocked by the browser, navigate away
-      setTimeout(() => navigate('/robots'), 300);
+      setTimeout(() => navigate('/scrapers'), 300);
     };
     socket?.on('recording-timeout', handleRecordingTimeout);
     return () => {

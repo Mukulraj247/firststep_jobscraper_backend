@@ -7,6 +7,7 @@ import ProxyForm from '../components/proxy/ProxyForm';
 import { DashboardPage } from './DashboardPage';
 import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
+import { CommunicationPage } from './CommunicationPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
 import { jobBoardHidesScrollbar, jobBoardScrollSx } from '../features/jobs/jobBoardPageBehavior';
 import { useGlobalInfoStore, useCacheInvalidation } from "../context/globalInfo";
@@ -311,7 +312,7 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
 
   const DisplayContent = () => {
     switch (content) {
-      case 'robots':
+      case 'scrapers':
         return <Recordings
           handleRunRecording={handleRunRecording}
           setRecordingInfo={setRecordingInfo}
@@ -328,6 +329,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
         />;
       case 'failures':
         return <FailureDashboardPage />;
+      case 'communication':
+        return <CommunicationPage />;
       case 'proxy':
         return <ProxyForm />;
       case 'dashboard':

@@ -69,7 +69,9 @@ import {
   automationsPageRootOverflow,
   automationsTableScrollSx,
   configShowsRawListExtractionEditor,
+  configShowsPaginationLimits,
   configStartUrlLocked,
+  proxySavedChipLabel,
   overflowMenuActions,
   workspaceAriaBusy,
   workspaceNoLiftHover,
@@ -539,5 +541,8 @@ describe('automations configure and overflow', () => {
   it('locks start URL and hides raw list-extraction editors so recorded selectors cannot break', () => {
     expect(configStartUrlLocked()).toBe(true);
     expect(configShowsRawListExtractionEditor()).toBe(false);
+    expect(configShowsPaginationLimits()).toBe(true);
+    expect(proxySavedChipLabel(true)).toBe('Saved (hidden after reload)');
+    expect(proxySavedChipLabel(false)).toBeNull();
   });
 });
