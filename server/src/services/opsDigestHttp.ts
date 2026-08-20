@@ -1,4 +1,10 @@
-import { getOpsDigestConfigStatus } from './opsDigest';
+export type OpsDigestConfigStatus = {
+  enabled: boolean;
+  zeptoConfigured: boolean;
+  recipients: string[];
+  canSend: boolean;
+  reason?: string;
+};
 
 export type OpsDigestSendResult = {
   ok: boolean;
@@ -14,9 +20,7 @@ export type OpsDigestSendResult = {
   };
 };
 
-export function opsDigestStatusBody(
-  status: ReturnType<typeof getOpsDigestConfigStatus> = getOpsDigestConfigStatus(),
-) {
+export function opsDigestStatusBody(status: OpsDigestConfigStatus) {
   return {
     ...status,
     interval: '6 hours',

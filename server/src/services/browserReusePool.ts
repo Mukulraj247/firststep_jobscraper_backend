@@ -126,13 +126,25 @@ const ensureCleanupLoop = () => {
     const now = Date.now();
     const rss = process.memoryUsage().rss;
     if (shouldRetirePoolForRss(rss, RSS_LIMIT_BYTES) && pooledBrowsers.size > 0) {
-      logger.log(
-        'warn',
-        `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit ${Math.round(RSS_LIMIT_BYTES / 1048576)}MiB — retiring all ${pooledBrowsers.size} pooled browser(s)`
+      const idle = [...pooledBrowsers.entries()].filter(
+        ([, entry]) => !entry.closing && entry.activePages === 0
       );
-      for (const [key, entry] of [...pooledBrowsers.entries()]) {
-        if (entry.closing) continue;
-        await retireEntry(key, entry, `rss-limit rss=${rss}`);
+      const inUse = [...pooledBrowsers.values()].filter(
+        (entry) => !entry.closing && entry.activePages > 0
+      ).length;
+      if (idle.length > 0) {
+        logger.log(
+          'warn',
+          `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit ${Math.round(RSS_LIMIT_BYTES / 1048576)}MiB — retiring ${idle.length} idle pooled browser(s)${inUse ? ` (deferring ${inUse} in-use)` : ''}`
+        );
+        for (const [key, entry] of idle) {
+          await retireEntry(key, entry, `rss-limit rss=${rss}`);
+        }
+      } else if (inUse > 0) {
+        logger.log(
+          'warn',
+          `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit ${Math.round(RSS_LIMIT_BYTES / 1048576)}MiB — deferring retire for ${inUse} in-use browser(s)`
+        );
       }
     }
 
@@ -190,11 +202,17 @@ async function getOrCreateBrowser(options: AcquirePooledPageOptions): Promise<Po
       if (shouldRetirePoolForRss(rss, RSS_LIMIT_BYTES)) {
         logger.log(
           'warn',
-          `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit before reuse — retiring pooled browsers`
+          `Process RSS ${Math.round(rss / 1048576)}MiB >= pool limit before reuse — retiring idle pooled browsers`
         );
         for (const [k, e] of [...pooledBrowsers.entries()]) {
-          if (e.closing) continue;
+          if (e.closing || e.activePages > 0) continue;
           await retireEntry(k, e, `rss-limit-before-reuse rss=${rss}`);
+        }
+        // Prefer reusing an in-use browser over spawning another Chromium under pressure.
+        const still = pooledBrowsers.get(key);
+        if (still && !still.closing && still.activePages < still.maxPages) {
+          still.lastUsedAt = Date.now();
+          return still;
         }
       } else if (
         shouldRetirePooledBrowser({
@@ -309,12 +327,13 @@ export async function releasePooledPage(lease: PooledPageLease | null | undefine
         await evictBrowserFromPool(lease.key);
       } else if (
         entry.activePages === 0 &&
-        shouldRetirePooledBrowser({
-          jobsServed: entry.jobsServed,
-          createdAt: entry.createdAt,
-          maxJobs: MAX_JOBS,
-          maxAgeMs: MAX_AGE_MS,
-        })
+        (shouldRetirePoolForRss(process.memoryUsage().rss, RSS_LIMIT_BYTES) ||
+          shouldRetirePooledBrowser({
+            jobsServed: entry.jobsServed,
+            createdAt: entry.createdAt,
+            maxJobs: MAX_JOBS,
+            maxAgeMs: MAX_AGE_MS,
+          }))
       ) {
         await evictBrowserFromPool(lease.key);
       }

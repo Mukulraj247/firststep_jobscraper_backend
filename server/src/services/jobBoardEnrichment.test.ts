@@ -5,6 +5,7 @@ import {
   isListRowComplete,
   pickCanonicalJobUrl,
 } from './jobBoardEnrichment';
+import { jobUrlKey } from './jobUrlNormalize';
 
 describe('jobBoardEnrichment helpers', () => {
   it('buildListSnapshot maps canonical fields', () => {
@@ -45,6 +46,61 @@ describe('jobBoardEnrichment helpers', () => {
       applyUrl: 'https://boards.greenhouse.io/stripe/jobs/12345',
     });
     expect(picked.jobUrl).toBe('https://boards.greenhouse.io/stripe/jobs/12345');
-    expect(picked.applyUrl).toBe('https://jobs.example.com/posting/abc');
+    expect(picked.applyUrl).toBe('https://boards.greenhouse.io/stripe/jobs/12345');
+  });
+
+  it('pickCanonicalJobUrl prefers explicit applyUrl over hiring cafe jobUrl', () => {
+    const picked = pickCanonicalJobUrl({
+      jobUrl: 'https://hiring.cafe/job/abc123',
+      applyUrl: 'https://boards.greenhouse.io/acme/jobs/999',
+    });
+    expect(picked.jobUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
+    expect(picked.applyUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
+  });
+
+  it('pickCanonicalJobUrl never uses hiring cafe as board identity', () => {
+    const picked = pickCanonicalJobUrl({
+      jobUrl: 'https://hiringcafe.com/job/only-hc-posting',
+    });
+    expect(picked.jobUrl).toBeNull();
+    expect(picked.applyUrl).toBeNull();
+  });
+
+  it('pickCanonicalJobUrl dedupes two Hiring Cafe rows that share one employer apply URL', () => {
+    const a = pickCanonicalJobUrl({
+      jobUrl: 'https://hiringcafe.com/job/posting-a',
+      applyUrl:
+        'https://wilhelmsen.wd3.myworkdayjobs.com/wilhelmsen/job/Chennai/Software-Engineer_JOBREQ_12579-1?utm_source=hc&utm_medium=a',
+    });
+    const b = pickCanonicalJobUrl({
+      jobUrl: 'https://hiringcafe.com/job/posting-b',
+      applyUrl:
+        'https://wilhelmsen.wd3.myworkdayjobs.com/wilhelmsen/job/Chennai/Software-Engineer_JOBREQ_12579-1?utm_source=hc&utm_medium=b',
+    });
+    expect(a.jobUrl).toBeTruthy();
+    expect(jobUrlKey(a.jobUrl)).toBe(jobUrlKey(b.jobUrl));
+    expect(String(a.jobUrl)).not.toMatch(/hiringcafe/i);
+  });
+
+  it('isListRowComplete accepts hiring_cafe rows without location when description is long', () => {
+    expect(
+      isListRowComplete(
+        {
+          jobTitle: 'Engineer',
+          companyName: 'Acme',
+          jobDescription: 'x'.repeat(450),
+          location: '',
+        },
+        { source: 'hiring_cafe' }
+      )
+    ).toBe(true);
+    expect(
+      isListRowComplete({
+        jobTitle: 'Engineer',
+        companyName: 'Acme',
+        jobDescription: 'x'.repeat(450),
+        location: '',
+      })
+    ).toBe(false);
   });
 });

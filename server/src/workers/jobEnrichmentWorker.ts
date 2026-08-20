@@ -3,6 +3,7 @@ import JobBoardListing, { IJobBoardListing } from '../models/JobBoardListing';
 import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import { getLlmUsageToday, addLlmUsage } from '../models/LlmUsageBudget';
 import { fetchAtsJob, shouldNeverScrapeDoUrl } from '../services/atsAdapters';
+import { isHiringCafeUrl } from '../services/aggregatorIdentity';
 import {
   fetchBrowserJobFallback,
   shouldTryBrowserJobFallback,
@@ -472,7 +473,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   }
 
   // List already complete: do not spend scrape.do credits.
-  if (isListRowComplete(doc.listSnapshot || {})) {
+  if (isListRowComplete(doc.listSnapshot || {}, { source: doc.source })) {
     const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
       status,
@@ -524,7 +525,32 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  const result = await scrapeJobPage(doc.jobUrl, {
+  const applyUrl = String(doc.applyUrl || '').trim();
+  const jobUrl = String(doc.jobUrl || '').trim();
+  const scrapeTargetUrl =
+    applyUrl && !isHiringCafeUrl(applyUrl)
+      ? applyUrl
+      : isHiringCafeUrl(jobUrl)
+        ? ''
+        : jobUrl;
+
+  if (!scrapeTargetUrl) {
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      error: isHiringCafeUrl(jobUrl) ? 'hiring_cafe_skip_scrape_do' : 'no_scrape_target',
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
+  const result = await scrapeJobPage(scrapeTargetUrl, {
     startTier: 1,
     maxTier: 2,
     useLearnedTier: false,

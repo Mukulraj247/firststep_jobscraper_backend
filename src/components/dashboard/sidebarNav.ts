@@ -6,6 +6,7 @@ export const SIDEBAR_NAV_VALUES = [
   'runs',
   'failures',
   'communication',
+  'aggregators',
   'proxy',
 ] as const;
 

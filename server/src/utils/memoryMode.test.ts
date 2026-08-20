@@ -74,7 +74,7 @@ describe('shouldRetirePooledBrowser', () => {
 });
 
 describe('shouldRetirePoolForRss', () => {
-  const limit = 1_288_490_188;
+  const limit = 3_221_225_472;
 
   it('does not retire under the RSS limit', () => {
     expect(shouldRetirePoolForRss(limit - 1, limit)).toBe(false);

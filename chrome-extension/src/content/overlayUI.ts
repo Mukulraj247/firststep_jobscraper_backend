@@ -28,8 +28,10 @@ export function ensureBadge(): HTMLDivElement {
 export function showOverlay(rect: DOMRect) {
   const el = ensureOverlay();
   el.style.display = 'block';
-  el.style.left = `${rect.left + window.scrollX}px`;
-  el.style.top = `${rect.top + window.scrollY}px`;
+  // fixed + client coords — avoids scroll-offset drift on long job grids
+  el.style.position = 'fixed';
+  el.style.left = `${rect.left}px`;
+  el.style.top = `${rect.top}px`;
   el.style.width = `${rect.width}px`;
   el.style.height = `${rect.height}px`;
 }
@@ -57,9 +59,9 @@ export function showTooltip(text: string, x: number, y: number) {
   el.classList.add('__maxun_tooltip');
   el.style.display = 'block';
 
-  // Position 16px below-right of cursor, in page (document) coordinates
-  el.style.top = `${y + window.scrollY + 18}px`;
-  el.style.left = `${x + window.scrollX + 14}px`;
+  // Badge uses position:fixed — use client coordinates only (no scroll offset)
+  el.style.top = `${y + 18}px`;
+  el.style.left = `${x + 14}px`;
   el.style.right = 'auto';
 }
 
@@ -81,7 +83,7 @@ export function showFirstPickOverlay(rect: DOMRect) {
     firstPickOverlay = document.createElement('div');
     firstPickOverlay.id = '__maxun_first_pick_overlay';
     Object.assign(firstPickOverlay.style, {
-      position: 'absolute',
+      position: 'fixed',
       pointerEvents: 'none',
       zIndex: '2147483646',
       border: '3px solid #ff00c3',
@@ -93,8 +95,9 @@ export function showFirstPickOverlay(rect: DOMRect) {
   }
 
   firstPickOverlay.style.display = 'block';
-  firstPickOverlay.style.left = `${rect.left + window.scrollX}px`;
-  firstPickOverlay.style.top = `${rect.top + window.scrollY}px`;
+  firstPickOverlay.style.position = 'fixed';
+  firstPickOverlay.style.left = `${rect.left}px`;
+  firstPickOverlay.style.top = `${rect.top}px`;
   firstPickOverlay.style.width = `${rect.width}px`;
   firstPickOverlay.style.height = `${rect.height}px`;
 }

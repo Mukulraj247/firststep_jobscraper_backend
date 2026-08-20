@@ -1034,31 +1034,53 @@ function addPageCompanyFallback(doc: Document, fields: DetectedField[]): Detecte
 
 /**
  * Add a best-effort job URL field when semantic URL was not detected.
+ * Scores all anchors in the card so `/job/{slug}` beats `/jobs`.
  */
 function addUrlFallback(firstItem: Element, fields: DetectedField[]): DetectedField[] {
-  const candidateSelectors = [
-    'h1 a[href]',
-    'h2 a[href]',
-    'h3 a[href]',
-    'a[href*="/job"]',
-    'a[href*="/jobs"]',
-    'a[href]',
-  ];
+  const baseUrl = window.location.href;
+  const anchors = Array.from(firstItem.querySelectorAll('a[href]'));
+  const ranked: { el: Element; href: string; score: number }[] = [];
 
-  for (const selector of candidateSelectors) {
-    const hit = firstItem.querySelector(selector);
-    if (!hit) continue;
-    const href = hit.getAttribute('href') || '';
+  for (const el of anchors) {
+    const href = el.getAttribute('href') || '';
     if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+    let abs = href;
+    try {
+      abs = new URL(href, baseUrl).href;
+    } catch {
+      continue;
+    }
+    let path = '';
+    try {
+      path = new URL(abs).pathname;
+    } catch {
+      path = abs;
+    }
+    const p = path.toLowerCase().replace(/\/+$/, '') || '/';
+    let score = 12 + Math.min(path.length, 120) / 40;
+    const listingOnly =
+      p === '/jobs' ||
+      p === '/job' ||
+      p === '/careers' ||
+      p === '/search' ||
+      (p.endsWith('/jobs') && !/\/jobs\/.+/i.test(p));
+    const posting = /\/job\/[^/]+/i.test(p);
+    if (listingOnly) score -= 120;
+    if (posting) score += 220;
+    ranked.push({ el, href, score });
+  }
 
-    const relativeSelector = generateRelativeSelector(hit, firstItem) || selector;
+  ranked.sort((a, b) => b.score - a.score);
+  const best = ranked[0];
+  if (best) {
+    const relativeSelector = generateRelativeSelector(best.el as HTMLElement, firstItem) || 'a[href]';
     fields.push({
       semanticType: 'url',
       label: 'url',
       selector: relativeSelector,
       attribute: 'href',
-      previewValue: href,
-      tag: hit.tagName.toLowerCase(),
+      previewValue: best.href,
+      tag: best.el.tagName.toLowerCase(),
     });
     return fields;
   }

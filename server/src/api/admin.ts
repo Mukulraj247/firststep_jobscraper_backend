@@ -977,7 +977,8 @@ router.delete('/admin/automations/:id', requireAdmin, async (req: Request, res: 
  */
 router.get('/admin/digest/status', requireAdmin, async (_req: Request, res: Response) => {
   try {
-    return res.json(opsDigestStatusBody());
+    const { getOpsDigestConfigStatus } = await import('../services/opsDigest');
+    return res.json(opsDigestStatusBody(await getOpsDigestConfigStatus()));
   } catch (error: any) {
     logger.log('error', `Admin digest status failed: ${error.message}`);
     return res.status(500).json({ error: 'Failed to load digest status' });

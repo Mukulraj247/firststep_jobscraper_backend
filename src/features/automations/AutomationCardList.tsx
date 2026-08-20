@@ -23,6 +23,7 @@ export function AutomationCardList({
   copiedScoutId,
   copiedTargetUrl,
   handlers,
+  showJobBoard = false,
 }: {
   automations: AutomationSummary[];
   pending: PendingActions;
@@ -30,6 +31,7 @@ export function AutomationCardList({
   copiedScoutId: string | null;
   copiedTargetUrl: string | null;
   handlers: AutomationRowHandlers;
+  showJobBoard?: boolean;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -37,7 +39,11 @@ export function AutomationCardList({
     <Stack spacing={1.5} sx={{ p: 1.5 }}>
       {automations.map((automation) => {
         const open = expandedId === automation.id;
-        const meta = mobileCardDefinitionItems(automation);
+        const meta = mobileCardDefinitionItems({
+          ...automation,
+          showJobBoard,
+          jobsAddedToBoard: automation.jobsAddedToBoard,
+        });
         return (
           <Paper
             key={automation.id}

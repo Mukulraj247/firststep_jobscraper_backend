@@ -11,7 +11,8 @@ import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import logger from '../logger';
 import { getAgenda, SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
 import { getDigitalOceanDashboard, DropletComputeSnapshot } from './digitalOceanMetrics';
-import { isZeptoMailConfigured, parseDigestRecipients, sendZeptoMail } from './zeptoMail';
+import { resolveDigestRecipients } from './digestRecipients';
+import { isZeptoMailConfigured, sendZeptoMail } from './zeptoMail';
 
 const OPS_DIGEST_JOB = 'ops-digest';
 const PASSED_STATUSES = new Set(['success', 'completed']);
@@ -258,16 +259,16 @@ export function isOpsDigestEnabled(): boolean {
   return true;
 }
 
-export function getOpsDigestConfigStatus(): {
+export async function getOpsDigestConfigStatus(): Promise<{
   enabled: boolean;
   zeptoConfigured: boolean;
   recipients: string[];
   canSend: boolean;
   reason?: string;
-} {
+}> {
   const enabled = isOpsDigestEnabled();
   const zeptoConfigured = isZeptoMailConfigured();
-  const recipients = parseDigestRecipients();
+  const recipients = await resolveDigestRecipients();
   if (!enabled) {
     return {
       enabled,
@@ -292,7 +293,7 @@ export function getOpsDigestConfigStatus(): {
       zeptoConfigured,
       recipients,
       canSend: false,
-      reason: 'OPS_DIGEST_EMAIL_TO has no valid addresses.',
+      reason: 'No digest recipients configured.',
     };
   }
   return { enabled, zeptoConfigured, recipients, canSend: true };
@@ -554,7 +555,7 @@ export async function sendOpsDigest(options?: { force?: boolean }): Promise<{
   error?: string;
   payload?: OpsDigestPayload;
 }> {
-  const status = getOpsDigestConfigStatus();
+  const status = await getOpsDigestConfigStatus();
   if (!options?.force && !status.canSend) {
     return { ok: false, skipped: true, reason: status.reason };
   }
@@ -563,7 +564,7 @@ export async function sendOpsDigest(options?: { force?: boolean }): Promise<{
       return { ok: false, skipped: true, reason: 'ZeptoMail is not configured.' };
     }
     if (!status.recipients.length) {
-      return { ok: false, skipped: true, reason: 'OPS_DIGEST_EMAIL_TO has no valid addresses.' };
+      return { ok: false, skipped: true, reason: 'No digest recipients configured.' };
     }
   }
 

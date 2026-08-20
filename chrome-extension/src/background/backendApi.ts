@@ -4,6 +4,15 @@
 
 import { getState } from './stateManager';
 
+function isHiringCafeUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
+  } catch {
+    return false;
+  }
+}
+
 function buildAuthHeaders(state: { apiKey?: string }): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (state.apiKey && state.apiKey.trim()) {
@@ -25,7 +34,7 @@ export async function saveConfigToBackend(payload: {
   startUrl?: string;
   webhookUrl?: string;
   listSelector: string;
-  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[] }>;
+  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[]; semanticType?: string; label?: string }>;
   pagination?: {
     type: string;
     selector?: string | null;
@@ -67,10 +76,13 @@ export async function saveConfigToBackend(payload: {
     paginationType === 'scrollUp' ||
     paginationType === 'clickLoadMore';
 
+  const startUrl = payload.startUrl || payload.previewUrl || '';
+  const hiringCafe = isHiringCafeUrl(startUrl) || isHiringCafeUrl(payload.previewUrl || '');
+
   const listExtraction = {
     itemSelector: payload.listSelector,
     fields: buildFieldMap(payload.fields),
-    uniqueKey: getSuggestedUniqueKey(payload.fields),
+    uniqueKey: getSuggestedUniqueKey(payload.fields) || (hiringCafe ? 'url' : undefined),
     maxItems:
       typeof payload.maxItems === 'number' && payload.maxItems > 0
         ? payload.maxItems
@@ -97,7 +109,7 @@ export async function saveConfigToBackend(payload: {
 
   const body: Record<string, unknown> = {
     name: (payload.automationName && String(payload.automationName).trim()) || defaultName,
-    startUrl: payload.startUrl || payload.previewUrl || '',
+    startUrl,
     webhookUrl: payload.webhookUrl || '',
     ...(companyName !== undefined ? { companyName } : {}),
     ...(tags !== undefined ? { tags } : {}),
@@ -111,6 +123,9 @@ export async function saveConfigToBackend(payload: {
       ...(payload.schedule && !payload.elementsOnly ? { schedule: payload.schedule } : {}),
       ...(companyName !== undefined ? { companyName } : {}),
       ...(tags !== undefined ? { tags } : {}),
+      ...(hiringCafe
+        ? { aggregatorProvider: 'hiring_cafe', preferAtsCollection: false, enrichHiringCafeDetails: true }
+        : {}),
     },
   };
 
@@ -353,30 +368,70 @@ function generateBackendSelectorVariants(selector: string): string[] {
   }
   // Attribute-ish job link fallback when selector looks like a link container.
   if (/a[\s.#\[:]/i.test(selector) || selector.includes('href')) {
-    variants.push('a[href*="job"]', 'a[href*="/jobs/"]');
+    variants.push('a[href*="/job/"]', 'a[href*="/jobs/"]');
   }
   return [...new Set(variants.filter(Boolean))];
 }
 
+const SEMANTIC_BACKEND_FIELD: Record<string, string> = {
+  title: 'title',
+  company: 'company',
+  description: 'description',
+  url: 'url',
+  location: 'location',
+  date: 'date',
+  image: 'image',
+  companyUrl: 'companyUrl',
+  employmentType: 'employmentType',
+};
+
+function backendFieldKey(
+  name: string,
+  field: { semanticType?: string; label?: string }
+): string {
+  const sem = String(field.semanticType || '').trim();
+  if (sem && sem !== 'unknown' && SEMANTIC_BACKEND_FIELD[sem]) {
+    return SEMANTIC_BACKEND_FIELD[sem];
+  }
+  const label = String(field.label || name || '').trim();
+  return label || name;
+}
+
 function buildFieldMap(
-  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[] }>
+  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[]; semanticType?: string; label?: string }>
 ): Record<string, string | string[]> {
   const result: Record<string, string | string[]> = {};
-  for (const [name, { selector, attribute, fallbackSelectors }] of Object.entries(fields)) {
+  for (const [name, field] of Object.entries(fields)) {
+    const key = backendFieldKey(name, field);
+    const { selector, attribute, fallbackSelectors } = field;
     const primary = withAttr(selector, attribute);
     const extras = [
       ...(Array.isArray(fallbackSelectors) ? fallbackSelectors : []),
       ...generateBackendSelectorVariants(selector).slice(1),
     ].map((s) => withAttr(s, attribute));
     const ranked = [...new Set([primary, ...extras].filter(Boolean))];
-    result[name] = ranked.length === 1 ? ranked[0] : ranked;
+    const existing = result[key];
+    if (existing) {
+      const merged = [
+        ...new Set([
+          ...(Array.isArray(existing) ? existing : [existing]),
+          ...(ranked.length === 1 ? [ranked[0]!] : ranked),
+        ]),
+      ];
+      result[key] = merged.length === 1 ? merged[0]! : merged;
+    } else {
+      result[key] = ranked.length === 1 ? ranked[0]! : ranked;
+    }
   }
   return result;
 }
 
 function getSuggestedUniqueKey(
-  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[] }>
+  fields: Record<string, { selector: string; attribute: string; fallbackSelectors?: string[]; semanticType?: string; label?: string }>
 ): string {
+  for (const field of Object.values(fields)) {
+    if (field.semanticType === 'url' && field.attribute === 'href') return 'url';
+  }
   if (fields.url) return 'url';
   if (fields.link) return 'link';
   if (fields.image) return 'image';

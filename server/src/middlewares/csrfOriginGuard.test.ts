@@ -7,12 +7,16 @@ const invoke = async ({
   origin,
   cookie = 'token=session-token',
   apiKey,
+  isProduction = true,
+  allowedExtensionOrigins,
   verifyApiKey = vi.fn().mockResolvedValue(false),
 }: {
   method?: string;
   origin?: string;
   cookie?: string;
   apiKey?: string;
+  isProduction?: boolean;
+  allowedExtensionOrigins?: string;
   verifyApiKey?: (apiKey: string) => Promise<boolean>;
 }) => {
   const req = {
@@ -31,6 +35,8 @@ const invoke = async ({
   const next = vi.fn() as NextFunction;
   const guard = createCsrfOriginGuard({
     publicUrl: 'https://app.example.com/dashboard',
+    allowedExtensionOrigins,
+    isProduction,
     verifyApiKey,
   });
 
@@ -109,5 +115,42 @@ describe('csrfOriginGuard', () => {
 
     expect(res.status).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  const extensionOrigin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+
+  it('permits a Chrome extension origin in local development', async () => {
+    const { res, next } = await invoke({ origin: extensionOrigin, isProduction: false });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a Chrome extension origin in production without an allowlist', async () => {
+    const { res, next } = await invoke({ origin: extensionOrigin, isProduction: true });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('permits an allowlisted Chrome extension origin in production', async () => {
+    const { res, next } = await invoke({
+      origin: extensionOrigin,
+      isProduction: true,
+      allowedExtensionOrigins: `${extensionOrigin}/`,
+    });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an invalid Chrome extension origin even in local development', async () => {
+    const { res, next } = await invoke({
+      origin: 'chrome-extension://not-an-extension-id',
+      isProduction: false,
+    });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,8 @@
  * Handles XPath, CSS selectors, iframe combinators, shadow DOM traversal.
  */
 
+import { scoreJobHrefPath } from '../shared/jobHrefScore';
+
 interface ExtractedListData {
   [key: string]: string;
 }
@@ -353,17 +355,8 @@ export class ClientListExtractor {
         return raw;
       }
     };
-    const scorePath = (pathname: string, absLower: string): number => {
-      const p = pathname.toLowerCase();
-      let score = 12 + Math.min(pathname.length, 120) / 40;
-      if (p.includes('/job')) score += 110;
-      if (p.includes('/jobs')) score += 90;
-      if (p.includes('/content/en/jobs')) score += 95;
-      if (p.includes('job-detail') || p.includes('jobdetail')) score += 75;
-      if (p.includes('/career')) score += 38;
-      if (absLower.includes('amazon.jobs') && p.length > 15) score += 15;
-      return score;
-    };
+    const scorePath = (pathname: string, absLower: string): number =>
+      scoreJobHrefPath(pathname, absLower);
     const scored: { href: string; score: number }[] = [];
     const gather = (row: Element, depthPenalty: number) => {
       const seen = new Set<Element>();

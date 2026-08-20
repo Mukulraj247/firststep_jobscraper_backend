@@ -191,6 +191,7 @@ describe('skip link and main landmark', () => {
       '/runs',
       '/failures',
       '/communication',
+      '/aggregators',
       '/proxy',
       '/automation/abc/data',
       '/automation/abc/config',

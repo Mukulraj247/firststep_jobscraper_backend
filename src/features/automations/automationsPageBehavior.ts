@@ -682,11 +682,17 @@ export function mobileCardDefinitionItems(input: {
   companyName?: string | null;
   lastRunTime?: string | null;
   rowsExtracted?: number | null;
+  jobsAddedToBoard?: number | null;
+  showJobBoard?: boolean;
 }): Array<{ term: string; value: string }> {
-  return [
+  const items = [
     { term: 'Scout ID', value: input.scoutId?.trim() || 'No Scout ID' },
     { term: 'Company', value: input.companyName?.trim() || '—' },
     { term: 'Last run', value: formatLastRunActivity(input.lastRunTime) },
     { term: 'Rows', value: String(input.rowsExtracted || 0) },
   ];
+  if (input.showJobBoard) {
+    items.push({ term: 'Job board', value: String(input.jobsAddedToBoard || 0) });
+  }
+  return items;
 }

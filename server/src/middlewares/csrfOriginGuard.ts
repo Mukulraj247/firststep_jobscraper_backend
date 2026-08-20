@@ -22,9 +22,30 @@ const normalizeRequestOrigin = (value: string): string | undefined => {
   }
 };
 
+const normalizedExtensionOrigin = (origin: string): string | undefined => {
+  const match = origin.trim().match(/^chrome-extension:\/\/([a-p]{32})\/?$/i);
+  return match ? `chrome-extension://${match[1].toLowerCase()}` : undefined;
+};
+
+const isLocalDevelopmentOrigin = (origin: string): boolean => {
+  try {
+    const url = new URL(origin);
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1' ||
+        url.hostname === '[::1]')
+    );
+  } catch {
+    return false;
+  }
+};
+
 type CsrfOriginGuardOptions = {
   publicUrl?: string;
   allowedOrigins?: string[];
+  allowedExtensionOrigins?: string;
+  isProduction?: boolean;
   verifyApiKey?: (apiKey: string) => Promise<boolean>;
 };
 
@@ -40,6 +61,8 @@ const defaultVerifyApiKey = async (apiKey: string): Promise<boolean> =>
 export const createCsrfOriginGuard = ({
   publicUrl,
   allowedOrigins = [],
+  allowedExtensionOrigins = '',
+  isProduction = process.env.NODE_ENV === 'production',
   verifyApiKey = defaultVerifyApiKey,
 }: CsrfOriginGuardOptions = {}): RequestHandler => {
   const origins = new Set(
@@ -47,6 +70,12 @@ export const createCsrfOriginGuard = ({
       normalizePublicOrigin(publicUrl ?? process.env.PUBLIC_URL),
       ...allowedOrigins.map(normalizeRequestOrigin).filter((value): value is string => Boolean(value)),
     ]
+  );
+  const allowedExtensions = new Set(
+    allowedExtensionOrigins
+      .split(',')
+      .map(normalizedExtensionOrigin)
+      .filter((origin): origin is string => Boolean(origin))
   );
 
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -64,9 +93,23 @@ export const createCsrfOriginGuard = ({
       }
     }
 
-    const origin = req.headers.origin;
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+    const extensionOrigin = origin ? normalizedExtensionOrigin(origin) : undefined;
+    if (origin?.toLowerCase().startsWith('chrome-extension:')) {
+      const allowed =
+        extensionOrigin !== undefined &&
+        (allowedExtensions.has(extensionOrigin) || !isProduction);
+      if (!allowed) {
+        return res.status(403).json({ error: 'Origin is not allowed for cookie-authenticated mutations' });
+      }
+      return next();
+    }
+
     const normalizedOrigin = origin ? normalizeRequestOrigin(origin) : undefined;
-    if (!normalizedOrigin || !origins.has(normalizedOrigin)) {
+    const allowed =
+      normalizedOrigin !== undefined &&
+      (origins.has(normalizedOrigin) || (!isProduction && isLocalDevelopmentOrigin(normalizedOrigin)));
+    if (!allowed) {
       return res.status(403).json({ error: 'Origin is not allowed for cookie-authenticated mutations' });
     }
 

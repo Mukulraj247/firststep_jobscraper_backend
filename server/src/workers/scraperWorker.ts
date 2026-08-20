@@ -3,7 +3,7 @@ import logger from '../logger';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
 import { createRemoteBrowserForRun, destroyRemoteBrowser } from '../browser-management/controller';
-import { getAgenda, SCRAPER_JOB_CONCURRENCY, ScraperJobData, requeueScraperRun, computeScraperLockLifetimeMs } from '../queue/scraperQueue';
+import { getAgenda, SCRAPER_JOB_CONCURRENCY, ScraperJobData, requeueScraperRun, requeueAggregatorRun, computeScraperLockLifetimeMs } from '../queue/scraperQueue';
 import { processRunExecution } from './execution';
 import {
   applyAutomationRuntimeConfig,
@@ -13,6 +13,9 @@ import {
   persistExtractedDataForRun,
 } from '../services/automation';
 import { runListExtraction, applySelectorPromotions, primaryItemSelector } from '../services/listExtractor';
+import { isAggregatorRobot, shouldEnrichHiringCafeDetails } from '../services/aggregatorIdentity';
+import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
+import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
 import {
   evaluateRunDrift,
   fetchRecentFinishedRuns,
@@ -588,7 +591,7 @@ async function processConfiguredListExtraction(
     }
 
     const extractionResult = await runListExtraction(page, automation.recording_meta.url, extractionConfig);
-    const rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
+    let rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
     const promotions = Array.isArray(extractionResult?.selectorPromotions)
       ? extractionResult.selectorPromotions
       : [];
@@ -597,6 +600,17 @@ async function processConfiguredListExtraction(
         { present: true, kind: 'text-marker', evidence: 'post-extraction body text' },
         page.url() || ''
       );
+    }
+
+    if (shouldEnrichHiringCafeDetails(automation) && rows.length > 0) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 40;
+      rows = (await enrichHiringCafeListRows(page, rows, {
+        maxJobs: cap,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
     }
 
     if (promotions.length > 0) {
@@ -878,6 +892,23 @@ export async function runScraperJobPayload(
   }
   const config = resolveAutomationExecutionConfig(automation, queuedConfig);
   const retryConfig = toOperationalRunConfig(config);
+  const aggregatorRun = isAggregatorRobot(automation);
+  const listMaxItems =
+    typeof config?.listExtraction?.maxItems === 'number' && config.listExtraction.maxItems > 0
+      ? config.listExtraction.maxItems
+      : 40;
+  const executionTimeoutMs = resolveExecutionTimeoutMs(aggregatorRun, listMaxItems);
+
+  const requeueRun = async (
+    payload: Parameters<typeof requeueScraperRun>[0],
+    opts?: Parameters<typeof requeueScraperRun>[1]
+  ) => {
+    if (aggregatorRun) {
+      await requeueAggregatorRun(payload, opts);
+    } else {
+      await requeueScraperRun(payload, opts);
+    }
+  };
 
   if (run.status === 'aborted' || run.status === 'aborting') {
     throw new ScraperJobCancelledError(runId, 'Run aborted');
@@ -903,7 +934,7 @@ export async function runScraperJobPayload(
         `Host circuit OPEN for ${targetHost}; parked ${parkSec}s (attempt unchanged ${attemptsMade + 1}/${MAX_ATTEMPTS})`,
         { flush: true }
       );
-      await requeueScraperRun(
+      await requeueRun(
         {
           automationId,
           runId,
@@ -1100,8 +1131,8 @@ export async function runScraperJobPayload(
       let timeoutHandle: NodeJS.Timeout | null = null;
       const timeoutPromise = new Promise((_, reject) => {
         timeoutHandle = setTimeout(
-          () => reject(new Error(`Scraper job timed out after ${EXECUTION_TIMEOUT_MS}ms`)),
-          EXECUTION_TIMEOUT_MS
+          () => reject(new Error(`Scraper job timed out after ${executionTimeoutMs}ms`)),
+          executionTimeoutMs
         );
       });
 
@@ -1316,7 +1347,7 @@ export async function runScraperJobPayload(
         await latestRun.save();
 
         try {
-          await requeueScraperRun(
+          await requeueRun(
             {
               automationId,
               runId,
@@ -1410,7 +1441,7 @@ export async function runScraperJobPayload(
 
       if (hasRemainingAttempts) {
         try {
-          await requeueScraperRun(
+          await requeueRun(
             {
               automationId,
               runId,
@@ -1542,6 +1573,51 @@ export async function startScraperWorker() {
   );
   scraperWorkerRegistered = true;
   logger.log('info', `Scraper job processor registered with Agenda (lockLifetime=${lockLifetime}ms)`);
+}
+
+let aggregatorWorkerRegistered = false;
+
+/** Dedicated processor for Hiring Cafe / aggregator runs — does not share scraper-jobs concurrency. */
+export async function startAggregatorWorker() {
+  if (aggregatorWorkerRegistered) return;
+  const agenda = await getAgenda();
+  const {
+    AGGREGATOR_JOB_CONCURRENCY,
+    AGGREGATOR_JOB_NAME,
+  } = await import('../queue/scraperQueue');
+  const { defaultAggregatorTimeoutMs } = await import('../services/hiringCafeRuntime');
+  const lockLifetime = computeScraperLockLifetimeMs(defaultAggregatorTimeoutMs());
+  (agenda as any).define(
+    AGGREGATOR_JOB_NAME,
+    { concurrency: AGGREGATOR_JOB_CONCURRENCY, lockLifetime },
+    async (job: AgendaJob<ScraperJobData>) => {
+      if (scraperShuttingDown) {
+        throw new Error('Worker draining — job aborted for reclaim');
+      }
+      try {
+        // Aggregators always run in-process list extraction (same processScraperJob path).
+        await processScraperJob(job);
+        logger.log('info', `Aggregator job ${job.attrs._id?.toString() || 'unknown'} completed`);
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          error instanceof ScraperJobCancelledError ||
+          error?.name === 'ScraperJobCancelledError' ||
+          isRunCancelledError(error)
+        ) {
+          logger.log('info', `Aggregator job cancelled: ${message}`);
+          return;
+        }
+        logger.log('error', `Aggregator job failed: ${message}`);
+        throw error;
+      }
+    }
+  );
+  aggregatorWorkerRegistered = true;
+  logger.log(
+    'info',
+    `Aggregator job processor registered (concurrency=${AGGREGATOR_JOB_CONCURRENCY}, lockLifetime=${lockLifetime}ms)`
+  );
 }
 
 export async function stopScraperWorker() {

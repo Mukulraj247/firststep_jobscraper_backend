@@ -23,6 +23,8 @@ import {
   isGenericJobTitle,
   isKnownPhenomCareersHost,
 } from './jobPageParser';
+import { isHiringCafeUrl } from './aggregatorIdentity';
+import { isHiringCafeJobPostingUrl } from './hiringCafeDetail';
 import { toPublicRunDto } from './automationConfigView';
 
 export interface AutomationRuntimeConfig {
@@ -657,6 +659,9 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
 
     // Ford / Carrier / Toyota careers hosts: only keep real job-detail URLs.
     if (isKnownPhenomCareersHost(url) && !isCareersJobDetailUrl(url)) return false;
+
+    // Hiring Cafe search/index URLs are not job postings.
+    if (isHiringCafeUrl(url) && !isHiringCafeJobPostingUrl(url)) return false;
   }
 
   return true;
@@ -702,12 +707,14 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
     // Non-blocking board enrichment enqueue (dedup + completeness gate).
     try {
       const { enqueueJobBoardEnrichments } = await import('./jobBoardEnrichment');
+      const { aggregatorSourceForRobot } = await import('./aggregatorIdentity');
       const ownerId = run.runByUserId ?? robot.userId;
       const boardStats = await enqueueJobBoardEnrichments({
         ownerId,
         robotMetaId: run.robotMetaId,
         runId: run.runId,
         rows: canonicalRows,
+        source: aggregatorSourceForRobot(robot),
       });
       const jobsAddedToBoard =
         (Number(boardStats.queued) || 0) + (Number(boardStats.readyFromList) || 0);

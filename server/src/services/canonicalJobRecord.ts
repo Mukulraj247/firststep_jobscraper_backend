@@ -7,6 +7,7 @@ export const CANONICAL_JOB_CREATION_TYPE = 'automation' as const;
 export const CANONICAL_JOB_FIELD_ORDER = [
   'jobId',
   'jobUrl',
+  'applyUrl',
   'jobTitle',
   'companyName',
   'jobDescription',
@@ -22,9 +23,19 @@ export const CANONICAL_JOB_FIELD_ORDER = [
   'salaryRange',
   'employmentType',
   'remoteType',
+  'companyLogoUrl',
+  'about',
+  'skills',
+  'responsibilities',
+  'minimumQualifications',
+  'preferredQualifications',
+  'benefits',
 ] as const;
 
-export type CanonicalJobData = Record<(typeof CANONICAL_JOB_FIELD_ORDER)[number], string | Date | boolean | number>;
+export type CanonicalJobData = Record<
+  (typeof CANONICAL_JOB_FIELD_ORDER)[number],
+  string | Date | boolean | number | string[]
+>;
 
 const str = (v: unknown): string => {
   if (v === null || v === undefined) return '';
@@ -51,7 +62,8 @@ export const applyLegacyJobAliases = (data: Record<string, unknown>): Record<str
     }
   };
 
-  fill('jobUrl', ['url', 'link', 'href', 'job_url', 'application_url']);
+  fill('jobUrl', ['url', 'link', 'href', 'job_url']);
+  fill('applyUrl', ['apply_url', 'application_url', 'applicationUrl']);
   fill('jobTitle', ['title', 'name', 'job_title']);
   fill('companyName', ['company', 'employer', 'company_name']);
   fill('jobDescription', ['description', 'summary', 'job_description']);
@@ -93,11 +105,12 @@ export const pickPostedDateFromRow = (
 export const buildCanonicalJobDataSync = (
   data: Record<string, unknown>,
   opts: { createdAt: Date; jobId: string; status?: string; insertDefaults?: boolean }
-): Record<string, string | Date | boolean | number> => {
+): Record<string, string | Date | boolean | number | string[]> => {
   const { createdAt, jobId, status = 'pending', insertDefaults } = opts;
 
-  const jobUrl = str(
-    data.jobUrl ?? data.job_url ?? data.url ?? data.link ?? data.href ?? data.application_url
+  const jobUrl = str(data.jobUrl ?? data.job_url ?? data.url ?? data.link ?? data.href);
+  const applyUrl = str(
+    data.applyUrl ?? data.apply_url ?? data.application_url ?? data.applicationUrl
   );
   const jobTitle = str(data.jobTitle ?? data.title ?? data.name ?? data.job_title);
   const companyName = str(data.companyName ?? data.company ?? data.employer ?? data.company_name);
@@ -137,9 +150,13 @@ export const buildCanonicalJobDataSync = (
 
   const outStatus = insertDefaults ? 'pending' : str(data.status) || status;
 
+  const asList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean) : [];
+
   return {
     jobId,
     jobUrl,
+    applyUrl,
     jobTitle,
     companyName,
     jobDescription,
@@ -155,6 +172,13 @@ export const buildCanonicalJobDataSync = (
     salaryRange,
     employmentType,
     remoteType,
+    companyLogoUrl: str(data.companyLogoUrl),
+    about: str(data.about),
+    skills: asList(data.skills),
+    responsibilities: asList(data.responsibilities),
+    minimumQualifications: asList(data.minimumQualifications),
+    preferredQualifications: asList(data.preferredQualifications),
+    benefits: asList(data.benefits),
   };
 };
 
@@ -192,7 +216,7 @@ export const hasCanonicalExtractedShape = (data: Record<string, unknown> | null 
 export const buildCanonicalViewFromStoredData = (
   data: Record<string, unknown>,
   opts: { createdAt: Date; jobId?: string }
-): Record<string, string | Date | boolean | number> => {
+): Record<string, string | Date | boolean | number | string[]> => {
   const jobId = str(opts.jobId ?? data.jobId);
   const status = str(data.status) || 'pending';
   return buildCanonicalJobDataSync(data, { createdAt: opts.createdAt, jobId, status });

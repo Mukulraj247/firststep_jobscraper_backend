@@ -6,6 +6,7 @@ import JobBoardListing, {
 import { makeDescriptionSnippet, sanitizeCompanyName, decodeHtmlEntities, normalizeJobDescription, normalizeLocation, normalizeSalaryRange } from './jobPageParser';
 import { jobUrlKey, normalizeJobUrl } from './jobUrlNormalize';
 import { detectAts } from './atsAdapters';
+import { isHiringCafeUrl } from './aggregatorIdentity';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import logger from '../logger';
 
@@ -50,31 +51,54 @@ function parseDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((x) => String(x || '').trim()).filter(Boolean);
+}
+
 export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnapshot {
   const location = normalizeLocation(asText(data.location));
+  const rawSalary = asText(data.salaryRange);
+  // Preserve Hiring Cafe chip style ($33-$49/hr, $57k-$98k/yr).
+  const salaryRange = /\/(?:hr|yr|mo|wk|day|biweekly)\b/i.test(rawSalary)
+    ? rawSalary
+    : normalizeSalaryRange(rawSalary, { location });
   return {
     jobTitle: decodeHtmlEntities(asText(data.jobTitle)),
     companyName: sanitizeCompanyName(asText(data.companyName)),
     jobDescription: normalizeJobDescription(asText(data.jobDescription)),
     jobCategory: decodeHtmlEntities(asText(data.jobCategory)),
     location,
-    salaryRange: normalizeSalaryRange(asText(data.salaryRange), { location }),
+    salaryRange,
     employmentType: decodeHtmlEntities(asText(data.employmentType)),
     remoteType: decodeHtmlEntities(asText(data.remoteType)),
     jobExperience: asExperience(data.jobExperience),
     sectorIndustry: decodeHtmlEntities(asText(data.sectorIndustry)),
     f500: asText(data.f500),
     date: parseDate(data.date),
+    about: decodeHtmlEntities(asText(data.about)),
+    companyLogoUrl: asText(data.companyLogoUrl),
+    skills: asStringList(data.skills),
+    responsibilities: asStringList(data.responsibilities),
+    minimumQualifications: asStringList(data.minimumQualifications),
+    preferredQualifications: asStringList(data.preferredQualifications),
+    benefits: asStringList(data.benefits),
   };
 }
 
-export function isListRowComplete(snapshot: IJobBoardListSnapshot): boolean {
-  return Boolean(
-    snapshot.jobTitle &&
-      snapshot.companyName &&
-      snapshot.location &&
-      (snapshot.jobDescription || '').length >= JOB_BOARD_MIN_DESC_CHARS
-  );
+export function isListRowComplete(
+  snapshot: IJobBoardListSnapshot,
+  opts?: { source?: string | null }
+): boolean {
+  const descOk = (snapshot.jobDescription || '').length >= JOB_BOARD_MIN_DESC_CHARS;
+  const hasCore = Boolean(snapshot.jobTitle && snapshot.companyName && descOk);
+  if (!hasCore) return false;
+
+  const source = String(opts?.source || '').trim().toLowerCase();
+  if (source === 'hiring_cafe') {
+    return true;
+  }
+  return Boolean(snapshot.location);
 }
 
 function rowCandidateUrls(data: Record<string, any>): string[] {
@@ -98,21 +122,31 @@ function rowCandidateUrls(data: Record<string, any>): string[] {
 }
 
 /**
- * Prefer an ATS-detectable apply URL as the board identity so the same
- * requisition from an aggregator and from Greenhouse/Lever shares a key.
+ * Prefer an ATS / company apply URL as the board identity.
+ * Never key the board on a Hiring Cafe (aggregator) page when a real apply URL exists.
+ * Dedup identity = normalized employer/ATS URL only.
  */
 export function pickCanonicalJobUrl(data: Record<string, any>): {
   jobUrl: string | null;
   applyUrl: string | null;
 } {
+  const explicitApply = normalizeJobUrl(
+    data.applyUrl || data.apply_url || data.applicationUrl || data.application_url
+  );
+  const companyApply =
+    explicitApply && !isHiringCafeUrl(explicitApply) ? explicitApply : null;
+
   const urls = rowCandidateUrls(data);
-  if (urls.length === 0) return { jobUrl: null, applyUrl: null };
-  const atsUrl = urls.find((url) => Boolean(detectAts(url))) || null;
-  const jobUrl = atsUrl || urls[0];
-  const applyUrl =
-    urls.find((url) => url !== jobUrl && Boolean(detectAts(url))) ||
-    urls.find((url) => url !== jobUrl) ||
-    jobUrl;
+  const companyUrls = urls.filter((url) => !isHiringCafeUrl(url));
+  const atsUrl =
+    (companyApply && detectAts(companyApply) ? companyApply : null) ||
+    companyUrls.find((url) => Boolean(detectAts(url))) ||
+    null;
+
+  // Board identity must be the employer/ATS URL — never Hiring Cafe.
+  const jobUrl = atsUrl || companyApply || companyUrls[0] || null;
+  const applyUrl = companyApply || atsUrl || companyUrls.find((url) => url !== jobUrl) || companyUrls[0] || null;
+
   return { jobUrl, applyUrl };
 }
 
@@ -146,7 +180,13 @@ function applySnapshotToDoc(
   applyUrl?: string
 ): Partial<IJobBoardListing> {
   const desc = snapshot.jobDescription || '';
-  const apply = normalizeJobUrl(applyUrl) || jobUrl;
+  const normalizedApply = normalizeJobUrl(applyUrl);
+  const normalizedJob = normalizeJobUrl(jobUrl) || jobUrl;
+  // Never store Hiring Cafe as the Apply target when no employer URL was found.
+  const apply =
+    (normalizedApply && !isHiringCafeUrl(normalizedApply) ? normalizedApply : '') ||
+    (normalizedJob && !isHiringCafeUrl(normalizedJob) ? normalizedJob : '') ||
+    '';
   return {
     jobTitle: snapshot.jobTitle || '',
     companyName: snapshot.companyName || '',
@@ -163,6 +203,13 @@ function applySnapshotToDoc(
     date: snapshot.date ? new Date(snapshot.date) : null,
     applyUrl: apply,
     jobId: jobId || '',
+    companyLogoUrl: snapshot.companyLogoUrl || '',
+    about: snapshot.about || '',
+    skills: snapshot.skills || [],
+    responsibilities: snapshot.responsibilities || [],
+    minimumQualifications: snapshot.minimumQualifications || [],
+    preferredQualifications: snapshot.preferredQualifications || [],
+    benefits: snapshot.benefits || [],
     contentHash: contentHashFromFields({
       jobTitle: snapshot.jobTitle,
       companyName: snapshot.companyName,
@@ -196,6 +243,8 @@ export async function enqueueJobBoardEnrichments(opts: {
   robotMetaId: string;
   runId: string;
   rows: EnrichmentEnqueueRow[];
+  /** e.g. hiring_cafe — empty for company scrapers */
+  source?: string | null;
 }): Promise<EnrichmentEnqueueStats> {
   const stats: EnrichmentEnqueueStats = {
     considered: 0,
@@ -213,6 +262,8 @@ export async function enqueueJobBoardEnrichments(opts: {
     return stats;
   }
 
+  const listingSource = String(opts.source || '').trim();
+
   // Dedupe within the batch by jobUrlKey (last row wins for snapshot richness).
   const byKey = new Map<
     string,
@@ -222,14 +273,21 @@ export async function enqueueJobBoardEnrichments(opts: {
     stats.considered += 1;
     const data = row?.data || {};
     const picked = pickCanonicalJobUrl(data);
-    const key = jobUrlKey(picked.jobUrl);
-    if (!picked.jobUrl || !key) {
+    // Aggregator rows must dedupe on the employer apply URL — never store Hiring Cafe as identity.
+    if (!picked.jobUrl || isHiringCafeUrl(picked.jobUrl)) {
       stats.skippedNoUrl += 1;
       continue;
     }
+    const key = jobUrlKey(picked.jobUrl);
+    if (!key) {
+      stats.skippedNoUrl += 1;
+      continue;
+    }
+    const employerApply =
+      (picked.applyUrl && !isHiringCafeUrl(picked.applyUrl) ? picked.applyUrl : '') || picked.jobUrl;
     byKey.set(key, {
       jobUrl: picked.jobUrl,
-      applyUrl: picked.applyUrl || picked.jobUrl,
+      applyUrl: employerApply,
       snapshot: buildListSnapshot(data),
       jobId: asText(data.jobId),
     });
@@ -264,7 +322,7 @@ export async function enqueueJobBoardEnrichments(opts: {
       continue;
     }
 
-    const acceptList = isListRowComplete(item.snapshot);
+    const acceptList = isListRowComplete(item.snapshot, { source: listingSource });
 
     // Duplicate URL already on the board: never re-queue scrape.do.
     if (prev && !acceptList) {
@@ -307,6 +365,7 @@ export async function enqueueJobBoardEnrichments(opts: {
               status: 'ready',
               lastSeenAt: nowDate,
               listSnapshot: item.snapshot,
+              ...(listingSource ? { source: listingSource } : {}),
               enrichment: {
                 method: 'list',
                 tier: 0,
@@ -344,6 +403,7 @@ export async function enqueueJobBoardEnrichments(opts: {
             status: 'queued',
             lastSeenAt: nowDate,
             listSnapshot: item.snapshot,
+            ...(listingSource ? { source: listingSource } : {}),
             priority: 0,
             leaseUntil: null,
             claimedBy: null,

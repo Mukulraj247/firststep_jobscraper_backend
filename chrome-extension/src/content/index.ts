@@ -288,6 +288,21 @@ function init() {
 
     document.addEventListener('mousemove', onMouseMove, true);
     document.addEventListener('click', onPickClick, true);
+    // Hiring Cafe (and similar SPAs) select/open cards on mousedown before click.
+    // Block those early events so the second pick is not stolen by the page.
+    document.addEventListener('pointerdown', onPickSuppress, true);
+    document.addEventListener('mousedown', onPickSuppress, true);
+    document.addEventListener('mouseup', onPickSuppress, true);
+  }
+
+  function onPickSuppress(event: Event) {
+    if (mode !== 'pick-first' && mode !== 'pick-second') return;
+    const t = event.target;
+    if (t instanceof Element && isOurElement(t)) return;
+    // Do NOT preventDefault — that can suppress the subsequent click in Chromium.
+    // Stopping propagation is enough to keep Hiring Cafe from selecting/opening cards.
+    event.stopPropagation();
+    event.stopImmediatePropagation();
   }
 
   function onMouseMove(event: MouseEvent) {
@@ -295,12 +310,11 @@ function init() {
 
     const mx = event.clientX;
     const my = event.clientY;
-    const target = document.elementFromPoint(mx, my) as HTMLElement | null;
-    if (!target || isOurElement(target)) return;
+    const raw = document.elementFromPoint(mx, my) as HTMLElement | null;
+    if (!raw || isOurElement(raw)) return;
 
-    // Pick the "meaningful" ancestor - walk up past inline containers
-    // (span/strong/em) that are probably inside a bigger card.
-    // We still highlight whatever the user hovers on, so they get feedback.
+    // Highlight the list-item card, not Save/Share/icon chrome inside it.
+    const target = resolveListItemCandidate(raw);
     showOverlay(target.getBoundingClientRect());
 
     if (mode === 'pick-first') {
@@ -319,22 +333,25 @@ function init() {
 
     // Use elementFromPoint to get the actual visible element (bypasses our
     // pointer-events:none overlays and gets what the user actually sees).
-    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+    const raw = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
 
-    console.log('[Maxun] Click target:', target, 'mode:', mode);
+    console.log('[Maxun] Click raw target:', raw, 'mode:', mode);
 
-    if (!target || !(target instanceof HTMLElement)) {
+    if (!raw || !(raw instanceof HTMLElement)) {
       console.log('[Maxun] Invalid click target');
       return;
     }
-    if (isOurElement(target)) {
+    if (isOurElement(raw)) {
       console.log('[Maxun] Ignoring click on extension UI');
       return;
     }
-    if (!document.body.contains(target)) {
+    if (!document.body.contains(raw)) {
       console.log('[Maxun] Target not in document');
       return;
     }
+
+    const target = resolveListItemCandidate(raw);
+    console.log('[Maxun] Resolved list item:', target);
 
     if (mode === 'pick-first') {
       firstPick = target;
@@ -357,15 +374,22 @@ function init() {
     // Re-find the first pick using the stored signature, in case React re-rendered.
     let liveFirstPick: HTMLElement | null = null;
     if (firstPick && document.body.contains(firstPick)) {
-      liveFirstPick = firstPick;
+      liveFirstPick = resolveListItemCandidate(firstPick);
       console.log('[Maxun] First pick still live');
     } else if (firstPickSignature) {
       try {
         const candidates = Array.from(
           document.querySelectorAll(firstPickSignature)
         ) as HTMLElement[];
-        // Pick any candidate that's different from the second pick
-        liveFirstPick = candidates.find((c) => c !== secondPick && !c.contains(secondPick) && !secondPick.contains(c)) || candidates[0] || null;
+        // Never fall back to a candidate that contains the second pick —
+        // that made "Pick a DIFFERENT item" stick forever on Hiring Cafe.
+        liveFirstPick =
+          candidates.find(
+            (c) => c !== secondPick && !c.contains(secondPick) && !secondPick.contains(c)
+          ) || null;
+        if (liveFirstPick) {
+          liveFirstPick = resolveListItemCandidate(liveFirstPick);
+        }
         console.log(
           '[Maxun] Re-found first pick via signature:', firstPickSignature,
           '→ candidates:', candidates.length, 'picked:', liveFirstPick
@@ -406,6 +430,9 @@ function init() {
     mode = 'list-selected';
     document.removeEventListener('mousemove', onMouseMove, true);
     document.removeEventListener('click', onPickClick, true);
+    document.removeEventListener('pointerdown', onPickSuppress, true);
+    document.removeEventListener('mousedown', onPickSuppress, true);
+    document.removeEventListener('mouseup', onPickSuppress, true);
 
     // Auto-detect fields
     const detectedFields = autoDetectFields(document, selector);
@@ -469,6 +496,9 @@ function init() {
     clearAll();
     document.removeEventListener('mousemove', onMouseMove, true);
     document.removeEventListener('click', onPickClick, true);
+    document.removeEventListener('pointerdown', onPickSuppress, true);
+    document.removeEventListener('mousedown', onPickSuppress, true);
+    document.removeEventListener('mouseup', onPickSuppress, true);
   }
 
   /**
@@ -520,8 +550,89 @@ function init() {
   }
 
   function isOurElement(element: Element): boolean {
-    return !!(element as HTMLElement).id?.startsWith('__maxun_');
+    return !!(
+      (element as HTMLElement).id?.startsWith('__maxun_') ||
+      element.closest('[id^="__maxun_"]')
+    );
   }
+}
+
+/**
+ * Promote a click/hover target up to the list-item "card" when the user hits
+ * nested chrome (Save, Share, icons, titles). Without this, Hiring Cafe second
+ * picks often land on Save/Share and fail containment / common-pattern checks.
+ */
+function resolveListItemCandidate(el: HTMLElement): HTMLElement {
+  const INTERACTIVE = new Set([
+    'BUTTON', 'SVG', 'PATH', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'IMG', 'USE',
+  ]);
+  const INLINE = new Set([
+    'SPAN', 'STRONG', 'EM', 'B', 'I', 'LABEL', 'TIME', 'SMALL', 'P', 'H1', 'H2',
+    'H3', 'H4', 'H5', 'H6', 'LI',
+  ]);
+
+  let cur: HTMLElement | null = el;
+
+  // Climb out of icons / buttons / inline text nodes.
+  while (cur && cur.parentElement && cur !== document.body) {
+    const svg = cur.closest('svg');
+    if (svg && svg.parentElement) {
+      cur = svg.parentElement as HTMLElement;
+      continue;
+    }
+    if (INTERACTIVE.has(cur.tagName) || INLINE.has(cur.tagName)) {
+      cur = cur.parentElement;
+      continue;
+    }
+    const role = cur.getAttribute('role');
+    if (role === 'button' || role === 'link' || role === 'img') {
+      cur = cur.parentElement;
+      continue;
+    }
+    break;
+  }
+
+  if (!cur || cur === document.body || cur === document.documentElement) {
+    return el;
+  }
+
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  let best = cur;
+  let walk: HTMLElement | null = cur;
+
+  for (let i = 0; i < 14 && walk && walk !== document.body; i++) {
+    const rect = walk.getBoundingClientRect();
+    const wideEnough = rect.width >= 160;
+    const tallEnough = rect.height >= 72;
+    const notFullPage =
+      rect.width < viewportW * 0.95 && rect.height < viewportH * 0.85;
+
+    if (wideEnough && tallEnough && notFullPage) {
+      best = walk;
+      const parent = walk.parentElement;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter(
+          (c): c is HTMLElement => c instanceof HTMLElement
+        );
+        const similar = siblings.filter((s) => {
+          if (s === walk) return true;
+          const r = s.getBoundingClientRect();
+          if (r.width < 120 || r.height < 60) return false;
+          const widthRatio =
+            Math.abs(r.width - rect.width) / Math.max(rect.width, r.width);
+          return widthRatio < 0.35;
+        });
+        // Parent has multiple card-sized children → this is the list-item level.
+        if (similar.length >= 2) {
+          return walk;
+        }
+      }
+    }
+    walk = walk.parentElement;
+  }
+
+  return best;
 }
 
 // ── On-page progress toast ──

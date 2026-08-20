@@ -119,6 +119,23 @@ const asText = (value: unknown): string => {
     .trim();
 };
 
+/** Prefer employer apply URL; never use Hiring Cafe as the Apply target. */
+const resolveApplyHref = (applyUrl: unknown, jobUrl: unknown): string => {
+  const candidates = [asText(applyUrl), asText(jobUrl)].filter(Boolean);
+  for (const href of candidates) {
+    try {
+      const host = new URL(href).hostname.toLowerCase().replace(/^www\./, '');
+      if (host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe')) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    return href;
+  }
+  return '';
+};
+
 const toReadableDescription = (value: unknown): string => {
   let raw = value == null ? '' : String(value);
   if (!raw.trim()) return '';
@@ -430,13 +447,32 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
   const posted = formatRelative(data.date, job.createdAt);
   const postedExact = formatPosted(data.date, job.createdAt);
   const logo = resolveCompanyLogo(company, asText(data.companyLogoUrl));
-  const applyUrl = asText(data.applyUrl) || asText(data.jobUrl);
+  const applyUrl = resolveApplyHref(data.applyUrl, data.jobUrl);
   const experience =
     (typeof data.jobExperience === 'number' && data.jobExperience > 0
       ? `${data.jobExperience}+ years experience`
       : '') || highlights.experienceLabel;
   const remoteLabel = remote || highlights.remoteHint;
   const employmentLabel = employment || highlights.employmentHint;
+  const f500Raw = asText(data.f500);
+  const f500Lower = f500Raw.toLowerCase();
+  // Row-context stores yes/no; Hiring Cafe may store "NYSE: TICKER". Never show raw "no".
+  const f500Label =
+    !f500Raw || f500Lower === 'no' || f500Lower === 'false' || f500Lower === '0'
+      ? ''
+      : f500Lower === 'yes' || f500Lower === 'true' || f500Lower === '1'
+        ? 'Fortune 500'
+        : f500Raw;
+  const aboutLine = asText(data.about);
+  const companySubtitle =
+    asText(data.sectorIndustry) ||
+    f500Label ||
+    (aboutLine
+      ? aboutLine.length > 48
+        ? `${aboutLine.slice(0, 48)}…`
+        : aboutLine
+      : '') ||
+    (postedExact ? `Posted ${postedExact}` : '');
 
   const DetailBlock: React.FC<{
     icon: React.ReactNode;
@@ -591,14 +627,15 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
           <Typography sx={{ fontWeight: 700, fontSize: '0.82rem', color: TEAL }} noWrap>
             {company}
           </Typography>
-          {postedExact && (
+          {companySubtitle && (
             <Typography
               variant="caption"
               color="text.secondary"
               sx={{ display: 'block', fontSize: '0.68rem', lineHeight: 1.35 }}
               noWrap
+              title={companySubtitle}
             >
-              Posted {postedExact}
+              {companySubtitle}
             </Typography>
           )}
         </Box>
@@ -776,7 +813,7 @@ const JobDetailModal: React.FC<{
   const industry = asText(data.sectorIndustry);
   const jobId = asText(data.jobId);
   const jobUrl = asText(data.jobUrl);
-  const applyUrl = asText(data.applyUrl) || jobUrl;
+  const applyUrl = resolveApplyHref(data.applyUrl, jobUrl);
   const description = toReadableDescription(data.jobDescription);
   const posted = formatPosted(data.date, job?.createdAt);
   const logo = resolveCompanyLogo(company, asText(data.companyLogoUrl));
@@ -1054,6 +1091,7 @@ export const JobBoardPage: React.FC = () => {
   const [location, setLocation] = useState('');
   const [workMode, setWorkMode] = useState('');
   const [jobType, setJobType] = useState('');
+  const [source, setSource] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1074,6 +1112,7 @@ export const JobBoardPage: React.FC = () => {
         workMode: workMode || undefined,
         jobType: jobType || undefined,
         added,
+        source: source || undefined,
       });
       setJobs(res.jobs);
       setPagination(res.pagination);
@@ -1087,7 +1126,7 @@ export const JobBoardPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, q, category, location, workMode, jobType, added, t]);
+  }, [page, q, category, location, workMode, jobType, added, source, t]);
 
   useEffect(() => {
     void loadJobs();
@@ -1151,6 +1190,7 @@ export const JobBoardPage: React.FC = () => {
     setLocation('');
     setWorkMode('');
     setJobType('');
+    setSource('');
     setPage(1);
   };
 
@@ -1161,6 +1201,7 @@ export const JobBoardPage: React.FC = () => {
     location,
     workMode,
     jobType,
+    source,
   });
 
   const limit = pagination.limit || PAGE_SIZE;
@@ -1252,6 +1293,19 @@ export const JobBoardPage: React.FC = () => {
               options={ADDED_DATE_PRESETS}
               onChange={(next) => {
                 setAdded(next as JobBoardAddedPreset);
+                setPage(1);
+              }}
+            />
+
+            <JobBoardChipFilter
+              caption="SOURCE"
+              value={source || 'all'}
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'hiring_cafe', label: 'Hiring Cafe' },
+              ]}
+              onChange={(next) => {
+                setSource(next === 'all' ? '' : next);
                 setPage(1);
               }}
             />

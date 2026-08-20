@@ -336,6 +336,7 @@ export function AutomationTable({
   copiedScoutId,
   copiedTargetUrl,
   handlers,
+  showJobBoardColumn = false,
 }: {
   automations: AutomationSummary[];
   pending: PendingActions;
@@ -343,6 +344,8 @@ export function AutomationTable({
   copiedScoutId: string | null;
   copiedTargetUrl: string | null;
   handlers: AutomationRowHandlers;
+  /** Aggregators: show jobs added to the job board from the latest run. */
+  showJobBoardColumn?: boolean;
 }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
@@ -356,7 +359,7 @@ export function AutomationTable({
         stickyHeader
         size={DESKTOP_TABLE_SIZE}
         sx={{
-          minWidth: DESKTOP_TABLE_MIN_WIDTH_PX,
+          minWidth: showJobBoardColumn ? DESKTOP_TABLE_MIN_WIDTH_PX + 72 : DESKTOP_TABLE_MIN_WIDTH_PX,
           tableLayout: 'fixed',
           borderCollapse: 'separate',
           borderSpacing: 0,
@@ -373,17 +376,22 @@ export function AutomationTable({
           },
         }}
       >
-        <caption>{AUTOMATIONS_TABLE_CAPTION}</caption>
+        <caption>
+          {showJobBoardColumn
+            ? `${AUTOMATIONS_TABLE_CAPTION} Plus job board count.`
+            : AUTOMATIONS_TABLE_CAPTION}
+        </caption>
         <colgroup>
-          <col style={{ width: '11%' }} />
-          <col style={{ width: '10%' }} />
-          <col style={{ width: '10%' }} />
-          <col style={{ width: '13%' }} />
+          <col style={{ width: showJobBoardColumn ? '10%' : '11%' }} />
+          <col style={{ width: '9%' }} />
+          <col style={{ width: '9%' }} />
+          <col style={{ width: showJobBoardColumn ? '11%' : '13%' }} />
           <col style={{ width: '7%' }} />
-          <col style={{ width: '14%' }} />
+          <col style={{ width: showJobBoardColumn ? '12%' : '14%' }} />
           <col style={{ width: '5%' }} />
+          {showJobBoardColumn ? <col style={{ width: '6%' }} /> : null}
           <col style={{ width: '8%' }} />
-          <col style={{ width: '10%' }} />
+          <col style={{ width: '9%' }} />
           <col style={{ width: '11%' }} />
         </colgroup>
         <TableHead>
@@ -395,6 +403,9 @@ export function AutomationTable({
             <TableCell sx={stickyHeaderCellSx()}>URL</TableCell>
             <TableCell sx={stickyHeaderCellSx()}>Last run</TableCell>
             <TableCell sx={stickyHeaderCellSx()} align="right">Rows</TableCell>
+            {showJobBoardColumn ? (
+              <TableCell sx={stickyHeaderCellSx()} align="right">Job board</TableCell>
+            ) : null}
             <TableCell sx={stickyHeaderCellSx()}>Next run</TableCell>
             <TableCell sx={stickyHeaderCellSx()}>Schedule</TableCell>
             <TableCell align="right" sx={stickyHeaderCellSx()}>Actions</TableCell>
@@ -486,6 +497,11 @@ export function AutomationTable({
               <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
                 {automation.rowsExtracted || 0}
               </TableCell>
+              {showJobBoardColumn ? (
+                <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+                  {automation.jobsAddedToBoard || 0}
+                </TableCell>
+              ) : null}
               <TableCell>
                 <NextRunLabel automation={automation} />
               </TableCell>

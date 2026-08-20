@@ -40,6 +40,8 @@ export interface AutomationSummary {
   updatedAt?: string;
   lastRunTime: string | null;
   rowsExtracted: number;
+  /** Jobs from the latest run that were accepted onto the job board (aggregators). */
+  jobsAddedToBoard?: number;
   status: string;
   latestRunId?: string | null;
   latestFailureReason?: string | null;
@@ -168,6 +170,52 @@ export const getDashboardAutomations = async (params?: {
   };
 };
 
+export const getDashboardAggregators = async (params?: {
+  page?: number;
+  limit?: number;
+  provider?: string;
+  tags?: string[];
+  q?: string;
+  id?: string;
+  scheduleCron?: string;
+}, signal?: AbortSignal): Promise<{
+  provider: string;
+  searches: AutomationSummary[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+  summary: DashboardAutomationsSummary & { jobsAddedToBoardTotal?: number };
+}> => {
+  const page = params?.page ?? 1;
+  const limit = params?.limit ?? 10;
+  const response = await axios.get(`${apiUrl}/api/dashboard/aggregators`, {
+    params: {
+      page,
+      limit,
+      ...(params?.provider ? { provider: params.provider } : {}),
+      ...(params?.tags?.length ? { tags: params.tags.join(',') } : {}),
+      ...(params?.q ? { q: params.q } : {}),
+      ...(params?.id ? { id: params.id } : {}),
+      ...(params?.scheduleCron ? { scheduleCron: params.scheduleCron } : {}),
+    },
+    withCredentials: true,
+    signal,
+  });
+  const data = response.data || {};
+  return {
+    provider: data.provider || 'hiring_cafe',
+    searches: data.searches || [],
+    pagination: data.pagination || { page: 1, limit, total: 0, totalPages: 1 },
+    summary: data.summary || {
+      totalAutomations: 0,
+      activeScheduledCount: 0,
+      pausedScheduleCount: 0,
+      rowsExtractedTotal: 0,
+      successfulCount: 0,
+      failedCount: 0,
+      jobsAddedToBoardTotal: 0,
+    },
+  };
+};
+
 export type OpsMetricsWindow = '15m' | '30m' | '1h' | '3h' | '6h' | '24h';
 
 export type OpsMetricsResponse = {
@@ -220,6 +268,13 @@ export type OpsMetricsResponse = {
       arrayBuffers?: number;
     };
     uptimeSeconds: number;
+    enrichment?: {
+      creditsSpentToday: number;
+      dailyCreditBudget: number;
+      creditsSpentLast14Days?: number;
+      series14d?: Array<{ t: number; label: string; credits: number }>;
+      methods14d?: Array<{ method: string; jobs: number; credits: number }>;
+    };
   };
   digitalOcean: any;
 };
@@ -275,6 +330,17 @@ export const getDashboardDigestStatus = async (
     withCredentials: true,
     signal,
   });
+  return response.data;
+};
+
+export const updateDashboardDigestRecipients = async (
+  recipients: string[],
+): Promise<DashboardDigestStatus> => {
+  const response = await axios.put(
+    `${apiUrl}/api/dashboard/digest/recipients`,
+    { recipients },
+    { withCredentials: true },
+  );
   return response.data;
 };
 

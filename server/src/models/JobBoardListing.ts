@@ -17,6 +17,13 @@ export interface IJobBoardListSnapshot {
   sectorIndustry?: string;
   f500?: string;
   date?: Date | string | null;
+  about?: string;
+  companyLogoUrl?: string;
+  skills?: string[];
+  responsibilities?: string[];
+  minimumQualifications?: string[];
+  preferredQualifications?: string[];
+  benefits?: string[];
 }
 
 export interface IJobBoardEnrichment {
@@ -67,6 +74,8 @@ export interface IJobBoardListing extends Document {
   contentHash: string;
   listSnapshot: IJobBoardListSnapshot;
   enrichment: IJobBoardEnrichment;
+  /** Origin of the listing, e.g. hiring_cafe for Aggregators. Empty for company scrapers. */
+  source: string;
   createdAt: Date;
   updatedAt: Date;
   lastSeenAt: Date;
@@ -86,6 +95,13 @@ const ListSnapshotSchema = new Schema(
     sectorIndustry: { type: String, default: '' },
     f500: { type: String, default: '' },
     date: { type: Date, default: null },
+    about: { type: String, default: '' },
+    companyLogoUrl: { type: String, default: '' },
+    skills: { type: [String], default: [] },
+    responsibilities: { type: [String], default: [] },
+    minimumQualifications: { type: [String], default: [] },
+    preferredQualifications: { type: [String], default: [] },
+    benefits: { type: [String], default: [] },
   },
   { _id: false }
 );
@@ -151,6 +167,7 @@ const JobBoardListingSchema: Schema = new Schema(
     contentHash: { type: String, default: '' },
     listSnapshot: { type: ListSnapshotSchema, default: () => ({}) },
     enrichment: { type: EnrichmentSchema, default: () => ({}) },
+    source: { type: String, default: '', index: true },
     lastSeenAt: { type: Date, default: () => new Date() },
   },
   {
@@ -172,6 +189,7 @@ JobBoardListingSchema.index({ jobUrlKey: 1 }, { unique: true, name: 'job_board_u
 JobBoardListingSchema.index({ ownerId: 1, status: 1, date: -1 }, { name: 'job_board_owner_status_date_idx' });
 JobBoardListingSchema.index({ ownerId: 1, companyName: 1 }, { name: 'job_board_owner_company_idx' });
 JobBoardListingSchema.index({ ownerId: 1, jobCategory: 1 }, { name: 'job_board_owner_category_idx' });
+JobBoardListingSchema.index({ ownerId: 1, source: 1, date: -1 }, { name: 'job_board_owner_source_date_idx' });
 JobBoardListingSchema.index(
   { status: 1, priority: -1, createdAt: 1 },
   { name: 'job_board_claim_scan_idx' }

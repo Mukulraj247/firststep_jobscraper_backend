@@ -298,4 +298,21 @@ describe('shouldKeepExtractedJobRow', () => {
       })
     ).toBe(true);
   });
+
+  it('drops Hiring Cafe /jobs index rows', () => {
+    expect(
+      shouldKeepExtractedJobRow({
+        jobUrl: 'https://hiringcafe.com/jobs',
+        jobTitle: 'Senior Engineer',
+        companyName: 'Acme',
+      })
+    ).toBe(false);
+    expect(
+      shouldKeepExtractedJobRow({
+        jobUrl: 'https://hiringcafe.com/job/senior-engineer-acme-abc123',
+        jobTitle: 'Senior Engineer',
+        companyName: 'Acme',
+      })
+    ).toBe(true);
+  });
 });

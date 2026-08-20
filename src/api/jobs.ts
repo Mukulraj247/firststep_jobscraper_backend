@@ -60,6 +60,7 @@ export const listJobs = async (params?: {
   jobType?: string;
   added?: string;
   runId?: string;
+  source?: string;
 }): Promise<JobBoardListResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 20;
@@ -74,6 +75,7 @@ export const listJobs = async (params?: {
       ...(params?.jobType ? { jobType: params.jobType } : {}),
       ...(params?.added && params.added !== 'all' ? { added: params.added } : {}),
       ...(params?.runId ? { runId: params.runId } : {}),
+      ...(params?.source ? { source: params.source } : {}),
     },
     withCredentials: true,
   });

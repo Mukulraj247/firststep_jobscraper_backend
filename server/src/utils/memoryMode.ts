@@ -51,11 +51,15 @@ export function shouldRetirePooledBrowser(opts: {
   return false;
 }
 
-/** RSS ceiling that triggers retiring all pooled browsers (default ≈ 1.2 GiB). */
+/**
+ * RSS ceiling that triggers retiring idle pooled browsers.
+ * Default ≈ 3 GiB so local workers with `--max-old-space-size=2048` are not
+ * forced to kill Chromium mid-scrape; low-memory hosts stay tighter (~400 MiB).
+ */
 export function getBrowserPoolRssLimitBytes(): number {
   const fromEnv = parseInt(process.env.BROWSER_POOL_RSS_LIMIT_BYTES || '', 10);
   if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
-  return 1_288_490_188;
+  return isLowMemoryMode() ? 419_430_400 : 3_221_225_472;
 }
 
 /** Pure helper: process RSS at/over limit → recycle the whole pool. */

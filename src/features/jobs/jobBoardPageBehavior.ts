@@ -66,6 +66,7 @@ export type JobBoardFilterState = {
   location: string;
   workMode: string;
   jobType: string;
+  source?: string;
 };
 
 export function addedSinceMs(
@@ -83,7 +84,8 @@ export function hasActiveJobBoardFilters(value: JobBoardFilterState): boolean {
     || value.category
     || value.location
     || value.workMode
-    || value.jobType,
+    || value.jobType
+    || value.source,
   );
 }
 

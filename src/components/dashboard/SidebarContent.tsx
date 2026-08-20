@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   MailOutline,
+  HubOutlined,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import { FIRSTSTEP, tint } from './ops/dashboardTokens';
@@ -60,6 +61,10 @@ export const SidebarContent = ({
     communication: {
       label: t('mainmenu.communication', 'Communication'),
       icon: <MailOutline aria-hidden={sidebarIconAriaHidden} />,
+    },
+    aggregators: {
+      label: 'Aggregators',
+      icon: <HubOutlined aria-hidden={sidebarIconAriaHidden} />,
     },
     proxy: { label: t('mainmenu.proxy'), icon: <Usb aria-hidden={sidebarIconAriaHidden} /> },
   };

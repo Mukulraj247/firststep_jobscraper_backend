@@ -1,7 +1,7 @@
 /* Maxun Web Scraper - Content Script Styles */
 
 #__maxun_overlay {
-  position: absolute;
+  position: fixed;
   pointer-events: none;
   z-index: 2147483646;
   border: 2px solid #ff6b00;

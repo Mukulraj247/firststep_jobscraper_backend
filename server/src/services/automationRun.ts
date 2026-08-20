@@ -2,8 +2,9 @@ import { v4 as uuid } from 'uuid';
 import mongoose from 'mongoose';
 import Run from '../models/Run';
 import Robot from '../models/Robot';
-import { enqueueScraperRun, requeueScraperRun } from '../queue/scraperQueue';
+import { enqueueScraperRun, enqueueAggregatorRun, requeueScraperRun, requeueAggregatorRun } from '../queue/scraperQueue';
 import { getAutomationConfig } from './automation';
+import { isAggregatorRobot } from './aggregatorIdentity';
 import logger from '../logger';
 import { toOperationalRunConfig } from './automationConfigView';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
@@ -59,11 +60,7 @@ export async function reenqueueStalePendingScraperRuns(options?: ReenqueuePendin
       if (!robot) {
         continue;
       }
-      // Use `requeueScraperRun` (not `enqueueScraperRun`) so we correctly handle the case where
-      // an Agenda `scraper-jobs` doc for this runId already exists in a terminal state (failed
-      // mid-run, but the worker's retry-enqueue didn't land). `enqueueScraperRun`'s insertOnly
-      // upsert would silently no-op in that case and leave the run pending forever.
-      await requeueScraperRun({
+      const payload = {
         automationId: run.robotMetaId,
         runId: run.runId,
         userId: String(run.runByUserId),
@@ -72,7 +69,12 @@ export async function reenqueueStalePendingScraperRuns(options?: ReenqueuePendin
           ...(run.interpreterSettings?.runtimeConfig || {}),
         }),
         _attemptsMade: run.retryCount || 0,
-      });
+      };
+      if (isAggregatorRobot(robot)) {
+        await requeueAggregatorRun(payload);
+      } else {
+        await requeueScraperRun(payload);
+      }
       ensured += 1;
     }
     if (ensured > 0) {
@@ -157,12 +159,15 @@ export async function createQueuedAutomationRun(
 
   let job;
   try {
-    job = await enqueueScraperRun({
+    const payload = {
       automationId: robot.recording_meta.id,
       runId,
       userId: String(userId),
       config: operationalConfig,
-    });
+    };
+    job = isAggregatorRobot(robot)
+      ? await enqueueAggregatorRun(payload)
+      : await enqueueScraperRun(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const finishedAt = new Date().toISOString();

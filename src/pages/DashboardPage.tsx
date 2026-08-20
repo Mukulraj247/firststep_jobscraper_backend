@@ -85,9 +85,24 @@ const formatPct = (n?: number | null, digits = 1) => {
   return `${n.toFixed(digits)}%`;
 };
 
+const formatCompactNumber = (n?: number | null) => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+};
+
 const formatUptime = (seconds?: number | null) => {
   if (seconds == null || !Number.isFinite(seconds)) return '—';
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+};
+
+const methodLabel = (method: string) => {
+  const key = String(method || '').toLowerCase();
+  if (key === 'scrape.do') return 'Scraping algorithm';
+  if (key === 'ats') return 'ATS direct';
+  if (key === 'browser') return 'Browser fallback';
+  if (key === 'list') return 'List complete';
+  if (key === 'llm') return 'LLM';
+  return method || 'Other';
 };
 
 const SectionHeading = ({ title, caption }: { title: string; caption?: string }) => (
@@ -250,6 +265,16 @@ export const DashboardPage = () => {
   const passSeriesPoints = (metrics?.series.runs || []).map((b) => ({ t: b.t, v: b.passed }));
   const failSeriesPoints = (metrics?.series.runs || []).map((b) => ({ t: b.t, v: b.failed }));
   const jobsSeriesPoints = (metrics?.series.jobsAdded || []).map((b) => ({ t: b.t, v: b.jobsAdded }));
+
+  const enrichment = compute?.enrichment;
+  const creditSeriesPoints = (enrichment?.series14d || []).map((b) => ({
+    t: normalizeChartTimestampMs(b.t),
+    v: b.credits,
+  }));
+  const creditsToday = enrichment?.creditsSpentToday ?? 0;
+  const creditBudget = enrichment?.dailyCreditBudget ?? 0;
+  const creditBudgetPct =
+    creditBudget > 0 ? Math.min(100, Math.round((creditsToday / creditBudget) * 100)) : null;
 
   const passRate =
     totals && totals.runs > 0 ? Math.round((totals.passed / totals.runs) * 100) : null;
@@ -416,6 +441,101 @@ export const DashboardPage = () => {
               height={CHART_HEIGHT}
               delay={180}
             />
+          </Box>
+
+          <SectionHeading
+            title="ScoutX enrichment credits"
+            caption="Company scrapers only (ATS-first + scraping algorithm). Hiring Cafe and n8n are excluded."
+          />
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: 2,
+              mb: 2,
+            }}
+          >
+            <StatCard
+              label="Credits today"
+              value={enrichment ? String(creditsToday) : '—'}
+              hint={
+                creditBudgetPct != null
+                  ? `${creditBudgetPct}% of daily budget (${creditBudget})`
+                  : undefined
+              }
+              color={METRIC_COLORS.credits}
+              icon={<BoltOutlinedIcon />}
+              delay={0}
+            />
+            <StatCard
+              label="Daily budget"
+              value={enrichment ? String(creditBudget) : '—'}
+              hint="Local ScoutX daily cap"
+              color={METRIC_COLORS.jobs}
+              icon={<LayersOutlinedIcon />}
+              delay={40}
+            />
+            <StatCard
+              label="Last 14 days"
+              value={
+                enrichment?.creditsSpentLast14Days != null
+                  ? formatCompactNumber(enrichment.creditsSpentLast14Days)
+                  : '—'
+              }
+              hint="Job board usage history"
+              color={METRIC_COLORS.rows}
+              icon={<TableChartOutlinedIcon />}
+              delay={80}
+            />
+          </Box>
+
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' },
+              gap: 2,
+              mb: 5,
+            }}
+          >
+            <MiniChart
+              title="Credits spent (14 days)"
+              valueLabel={String(creditsToday)}
+              points={creditSeriesPoints}
+              color={METRIC_COLORS.credits}
+              yAxisLabel="Credits"
+              xAxisLabel="Day (UTC)"
+              height={CHART_HEIGHT}
+              delay={0}
+            />
+            <Paper elevation={0} sx={[cardSx(), fadeUpSx(80), { p: 2.25 }]}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.25 }}>
+                Enrichment mix (14 days)
+              </Typography>
+              {(enrichment?.methods14d || []).length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  No enrichment activity in this window yet.
+                </Typography>
+              ) : (
+                <Stack spacing={1.1}>
+                  {(enrichment?.methods14d || []).map((row) => (
+                    <Stack
+                      key={row.method}
+                      direction="row"
+                      justifyContent="space-between"
+                      alignItems="baseline"
+                      spacing={1}
+                    >
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {methodLabel(row.method)}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {row.jobs} jobs · {formatCompactNumber(row.credits)} cr
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Stack>
+              )}
+            </Paper>
           </Box>
 
           <SectionHeading title="Workers & compute" caption="Live worker capacity and API process health." />

@@ -132,7 +132,13 @@ export const browserPool = new BrowserPool();
 export const recentRecoveries = new Map<string, any[]>();
 
 app.use(cookieParser())
-app.use(createCsrfOriginGuard({ publicUrl: process.env.PUBLIC_URL }));
+app.use(
+  createCsrfOriginGuard({
+    publicUrl: process.env.PUBLIC_URL,
+    allowedExtensionOrigins: process.env.ALLOWED_EXTENSION_ORIGINS,
+    isProduction: process.env.NODE_ENV === 'production',
+  })
+);
 
 app.use('/webhook', webhook);
 app.use('/record', record);

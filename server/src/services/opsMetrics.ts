@@ -323,7 +323,7 @@ export async function buildOpsMetrics(opts: {
     /* pool may be empty during boot */
   }
 
-  const [robots, runs, activeNow] = await Promise.all([
+  const [robots, runs, activeNow, enrichmentMetrics] = await Promise.all([
     Robot.find(ownerIdFilter(opts.userId))
       .select(
         'schedule recording_meta.id recording_meta.tags recording_meta.saasConfig.tags recording_meta.saasConfig.schedule'
@@ -342,6 +342,14 @@ export async function buildOpsMetrics(opts: {
           status: { $in: activeStatuses },
         })
       : Promise.resolve(0),
+    (async () => {
+      try {
+        const { getScoutXEnrichmentMetrics } = await import('./enrichmentMetrics');
+        return await getScoutXEnrichmentMetrics();
+      } catch {
+        return null;
+      }
+    })(),
   ]);
 
   const metaIds = robots
@@ -407,6 +415,13 @@ export async function buildOpsMetrics(opts: {
       activeBrowserIds: browserPoolStats.browserIds,
       memoryUsage: process.memoryUsage(),
       uptimeSeconds: Math.round(process.uptime()),
+      enrichment: enrichmentMetrics || {
+        creditsSpentToday: 0,
+        dailyCreditBudget: parseInt(process.env.SCRAPE_DO_DAILY_CREDIT_BUDGET || '15000', 10),
+        creditsSpentLast14Days: 0,
+        series14d: [],
+        methods14d: [],
+      },
     },
     digitalOcean: resolveDigitalOceanForOpsMetrics(
       peekDigitalOceanDashboardCache(doWindow),

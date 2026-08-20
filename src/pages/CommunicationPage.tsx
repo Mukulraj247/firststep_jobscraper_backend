@@ -1,15 +1,24 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Box } from '@mui/material';
-import { getDashboardDigestStatus, sendDashboardDigestTest } from '../api/automation';
+import {
+  getDashboardDigestStatus,
+  sendDashboardDigestTest,
+  updateDashboardDigestRecipients,
+} from '../api/automation';
 import { FIRSTSTEP } from '../components/dashboard/ops/dashboardTokens';
 import { CommunicationHero } from '../features/communication/CommunicationHero';
 import { OpsDigestPanel } from '../features/communication/OpsDigestPanel';
-import { digestSentMessage, type DigestStatus } from '../features/communication/communicationPageBehavior';
+import {
+  digestSentMessage,
+  normalizeDigestEmailList,
+  type DigestStatus,
+} from '../features/communication/communicationPageBehavior';
 
 export const CommunicationPage = () => {
   const [status, setStatus] = useState<DigestStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -33,6 +42,25 @@ export const CommunicationPage = () => {
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  const handleSaveRecipients = async (recipients: string[]) => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const next = await updateDashboardDigestRecipients(normalizeDigestEmailList(recipients));
+      setStatus(next);
+      setMessage(
+        next.recipients.length
+          ? `Recipients saved (${next.recipients.length}).`
+          : 'Recipients cleared. Add at least one email before sending.',
+      );
+    } catch (error: any) {
+      const data = error?.response?.data;
+      setMessage(data?.reason || data?.error || 'Failed to save recipients');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleSend = async () => {
     setSending(true);
@@ -62,6 +90,7 @@ export const CommunicationPage = () => {
       <OpsDigestPanel
         status={status}
         sending={sending}
+        saving={saving}
         loading={loading}
         message={message}
         loadError={loadError}
@@ -70,6 +99,9 @@ export const CommunicationPage = () => {
         }}
         onSend={() => {
           void handleSend();
+        }}
+        onSaveRecipients={(recipients) => {
+          void handleSaveRecipients(recipients);
         }}
       />
     </Box>

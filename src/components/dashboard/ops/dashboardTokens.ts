@@ -31,6 +31,7 @@ export const METRIC_COLORS = {
   jobs: FIRSTSTEP.tealDark,
   rows: FIRSTSTEP.tealDeep,
   active: FIRSTSTEP.teal,
+  credits: FIRSTSTEP.warning,
   cpu: '#c45c26',
   memory: FIRSTSTEP.tealDark,
   load: FIRSTSTEP.navy,

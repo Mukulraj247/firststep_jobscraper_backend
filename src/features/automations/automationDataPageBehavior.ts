@@ -11,6 +11,7 @@ export const DATA_COLUMN_LABELS: Record<string, string> = {
   f500: 'F500',
   jobId: 'Job ID',
   jobUrl: 'URL',
+  applyUrl: 'Apply URL',
   job_url: 'URL',
   jobTitle: 'Title',
   job_title: 'Title',

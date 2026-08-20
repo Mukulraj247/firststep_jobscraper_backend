@@ -8,6 +8,7 @@ import { DashboardPage } from './DashboardPage';
 import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
 import { CommunicationPage } from './CommunicationPage';
+import { AggregatorsPage } from './AggregatorsPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
 import { jobBoardHidesScrollbar, jobBoardScrollSx } from '../features/jobs/jobBoardPageBehavior';
 import { useGlobalInfoStore, useCacheInvalidation } from "../context/globalInfo";
@@ -331,6 +332,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
         return <FailureDashboardPage />;
       case 'communication':
         return <CommunicationPage />;
+      case 'aggregators':
+        return <AggregatorsPage />;
       case 'proxy':
         return <ProxyForm />;
       case 'dashboard':

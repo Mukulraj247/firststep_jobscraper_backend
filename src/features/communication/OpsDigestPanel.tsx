@@ -1,7 +1,19 @@
-import React from 'react';
-import { Alert, Box, Button, CircularProgress, Paper, Stack, Typography } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import {
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import SendOutlinedIcon from '@mui/icons-material/SendOutlined';
 import {
   cardSx,
@@ -12,30 +24,51 @@ import {
 } from '../../components/dashboard/ops/dashboardTokens';
 import {
   digestAlertSeverity,
+  digestRecipientsEqual,
   digestSendDisabled,
   digestStatusCaption,
+  normalizeDigestEmailList,
   type DigestStatus,
 } from './communicationPageBehavior';
 
 export function OpsDigestPanel({
   status,
   sending,
+  saving,
   loading,
   message,
   loadError,
   onRefresh,
   onSend,
+  onSaveRecipients,
 }: {
   status: DigestStatus | null;
   sending: boolean;
+  saving: boolean;
   loading: boolean;
   message: string | null;
   loadError: string | null;
   onRefresh: () => void;
   onSend: () => void;
+  onSaveRecipients: (recipients: string[]) => void;
 }) {
+  const [draft, setDraft] = useState<string[]>(status?.recipients || []);
+  const [inputValue, setInputValue] = useState('');
+
+  useEffect(() => {
+    setDraft(status?.recipients || []);
+  }, [status?.recipients]);
+
   const caption = digestStatusCaption(status);
   const sendDisabled = digestSendDisabled(sending, status?.canSend);
+  const dirty = !digestRecipientsEqual(draft, status?.recipients || []);
+  const busy = loading || sending || saving;
+
+  const commitInput = () => {
+    const next = normalizeDigestEmailList([...draft, inputValue]);
+    setDraft(next);
+    setInputValue('');
+  };
 
   return (
     <Paper
@@ -73,8 +106,8 @@ export function OpsDigestPanel({
               Email trigger
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25, maxWidth: 560 }}>
-              Send the ops digest now to the ZeptoMail recipients configured on the server. Same
-              email as the scheduled 6-hour digest.
+              These addresses all receive the scheduled digest and test sends. Add or remove as
+              many as you need.
             </Typography>
           </Box>
         </Stack>
@@ -83,7 +116,7 @@ export function OpsDigestPanel({
             variant="outlined"
             startIcon={loading ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />}
             onClick={onRefresh}
-            disabled={loading || sending}
+            disabled={busy}
           >
             {loading ? 'Loading…' : 'Refresh status'}
           </Button>
@@ -91,7 +124,7 @@ export function OpsDigestPanel({
             variant="contained"
             startIcon={sending ? <CircularProgress size={16} color="inherit" /> : <SendOutlinedIcon />}
             onClick={onSend}
-            disabled={sendDisabled || loading}
+            disabled={sendDisabled || busy || dirty}
             sx={{
               bgcolor: FIRSTSTEP.teal,
               '&:hover': { bgcolor: FIRSTSTEP.navy },
@@ -101,6 +134,58 @@ export function OpsDigestPanel({
           </Button>
         </Stack>
       </Stack>
+
+      <Box sx={{ mt: 2.5 }}>
+        <Autocomplete
+          multiple
+          freeSolo
+          options={[]}
+          value={draft}
+          inputValue={inputValue}
+          onInputChange={(_e, value) => setInputValue(value)}
+          onChange={(_e, value) => {
+            setDraft(normalizeDigestEmailList(value));
+          }}
+          onBlur={() => {
+            if (inputValue.trim()) commitInput();
+          }}
+          disabled={busy}
+          renderTags={(value, getTagProps) =>
+            value.map((option, index) => {
+              const { key, ...tagProps } = getTagProps({ index });
+              return <Chip key={key} label={option} size="small" {...tagProps} />;
+            })
+          }
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Digest recipients"
+              placeholder={draft.length ? 'Add another email' : 'name@company.com'}
+              helperText="Press Enter or paste a comma-separated list. Save to apply."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && inputValue.trim()) {
+                  e.preventDefault();
+                  commitInput();
+                }
+              }}
+            />
+          )}
+        />
+        <Stack direction="row" spacing={1} sx={{ mt: 1.5 }} flexWrap="wrap" useFlexGap>
+          <Button
+            variant="contained"
+            startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <SaveOutlinedIcon />}
+            onClick={() => onSaveRecipients(normalizeDigestEmailList([...draft, inputValue]))}
+            disabled={busy || !dirty}
+            sx={{
+              bgcolor: FIRSTSTEP.navy,
+              '&:hover': { bgcolor: FIRSTSTEP.tealDark },
+            }}
+          >
+            {saving ? 'Saving…' : 'Save recipients'}
+          </Button>
+        </Stack>
+      </Box>
 
       {caption ? (
         <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>

@@ -51,6 +51,15 @@ export interface AbortJobData {
 /** Max concurrent `scraper-jobs` per API/worker process (Agenda `define` concurrency). */
 export const SCRAPER_JOB_CONCURRENCY = parseInt(process.env.SCRAPER_WORKER_CONCURRENCY || '3', 10);
 
+/** Max concurrent Hiring Cafe / aggregator jobs (dedicated worker). */
+export const AGGREGATOR_JOB_CONCURRENCY = parseInt(
+  process.env.AGGREGATOR_WORKER_CONCURRENCY || '2',
+  10
+);
+
+export const AGGREGATOR_JOB_NAME = 'aggregator-jobs';
+export const SCRAPER_JOB_NAME = 'scraper-jobs';
+
 /** Drain window before force-unlock (default 90s). Keep below PM2 kill_timeout. */
 export function getScrapeDrainMs(): number {
   const fromEnv = parseInt(process.env.SCRAPE_DRAIN_MS || '', 10);
@@ -104,7 +113,7 @@ export async function getAgenda(): Promise<Agenda> {
 
   agendaInstance.on('fail', (err: unknown, job: Job) => {
     const name = job?.attrs?.name ?? 'unknown';
-    if (name !== 'schedule-triggers' && name !== 'scraper-jobs') {
+    if (name !== 'schedule-triggers' && name !== 'scraper-jobs' && name !== 'aggregator-jobs') {
       return;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -112,7 +121,11 @@ export async function getAgenda(): Promise<Agenda> {
     let extra = '';
     if (name === 'schedule-triggers' && data && typeof data.automationId === 'string') {
       extra = ` automationId=${data.automationId}`;
-    } else if (name === 'scraper-jobs' && data && typeof data.runId === 'string') {
+    } else if (
+      (name === 'scraper-jobs' || name === 'aggregator-jobs') &&
+      data &&
+      typeof data.runId === 'string'
+    ) {
       extra = ` runId=${data.runId}`;
     }
     logger.log('error', `Agenda job "${name}" failed:${extra} ${msg}`);
@@ -125,10 +138,23 @@ export async function enqueueScraperRun(
   jobData: ScraperJobData,
   opts?: { delayMs?: number }
 ): Promise<Job> {
+  return enqueueNamedRunJob(SCRAPER_JOB_NAME, jobData, opts);
+}
+
+export async function enqueueAggregatorRun(
+  jobData: ScraperJobData,
+  opts?: { delayMs?: number }
+): Promise<Job> {
+  return enqueueNamedRunJob(AGGREGATOR_JOB_NAME, jobData, opts);
+}
+
+async function enqueueNamedRunJob(
+  jobName: string,
+  jobData: ScraperJobData,
+  opts?: { delayMs?: number }
+): Promise<Job> {
   const agenda = await getAgenda();
-  const job = await agenda.create<ScraperJobData>('scraper-jobs', jobData);
-  // One Agenda document per run. `saveJob` merges `name` into the unique query; match `data.runId`
-  // so repeat enqueue / recovery is idempotent (insertOnly).
+  const job = await agenda.create<ScraperJobData>(jobName, jobData);
   job.unique({ 'data.runId': jobData.runId }, { insertOnly: true });
   const delayMs = opts?.delayMs && opts.delayMs > 0 ? Math.floor(opts.delayMs) : 0;
   if (delayMs > 0) {
@@ -138,8 +164,8 @@ export async function enqueueScraperRun(
   logger.log(
     'info',
     delayMs > 0
-      ? `Enqueued scraper job for run ${jobData.runId} (delay ${delayMs}ms)`
-      : `Enqueued scraper job for run ${jobData.runId}`
+      ? `Enqueued ${jobName} for run ${jobData.runId} (delay ${delayMs}ms)`
+      : `Enqueued ${jobName} for run ${jobData.runId}`
   );
   return job;
 }
@@ -162,10 +188,25 @@ export async function requeueScraperRun(
   jobData: ScraperJobData,
   opts?: { force?: boolean; delayMs?: number }
 ): Promise<Job | null> {
+  return requeueNamedRunJob(SCRAPER_JOB_NAME, jobData, opts);
+}
+
+export async function requeueAggregatorRun(
+  jobData: ScraperJobData,
+  opts?: { force?: boolean; delayMs?: number }
+): Promise<Job | null> {
+  return requeueNamedRunJob(AGGREGATOR_JOB_NAME, jobData, opts);
+}
+
+async function requeueNamedRunJob(
+  jobName: string,
+  jobData: ScraperJobData,
+  opts?: { force?: boolean; delayMs?: number }
+): Promise<Job | null> {
   const agenda = await getAgenda();
   const collection: any = (agenda as any)._collection;
   const existing = collection
-    ? await collection.findOne({ name: 'scraper-jobs', 'data.runId': jobData.runId })
+    ? await collection.findOne({ name: jobName, 'data.runId': jobData.runId })
     : null;
 
   if (existing) {
@@ -174,14 +215,14 @@ export async function requeueScraperRun(
     if (lockedRecently && !opts?.force) {
       logger.log(
         'warn',
-        `requeueScraperRun: run ${jobData.runId} has an active/locked Agenda doc — skipping re-enqueue`
+        `requeue ${jobName}: run ${jobData.runId} has an active/locked Agenda doc — skipping re-enqueue`
       );
       return null;
     }
-    await agenda.cancel({ name: 'scraper-jobs', 'data.runId': jobData.runId });
+    await agenda.cancel({ name: jobName, 'data.runId': jobData.runId });
   }
 
-  return enqueueScraperRun(jobData, { delayMs: opts?.delayMs });
+  return enqueueNamedRunJob(jobName, jobData, { delayMs: opts?.delayMs });
 }
 
 export async function enqueueScheduleTrigger(automationId: string, userId: string, jobId: string): Promise<Job> {

@@ -603,10 +603,26 @@ router.get('/dashboard/digital-ocean', async (req: any, res: any) => {
 
 router.get('/dashboard/digest/status', async (_req: any, res: any) => {
   try {
-    return res.json(opsDigestStatusBody());
+    const { getOpsDigestConfigStatus } = await import('../services/opsDigest');
+    return res.json(opsDigestStatusBody(await getOpsDigestConfigStatus()));
   } catch (error: any) {
     logger.log('error', `Failed to fetch ops digest status: ${error.message}`);
     return res.status(500).json({ error: 'Failed to load digest status' });
+  }
+});
+
+router.put('/dashboard/digest/recipients', async (req: any, res: any) => {
+  try {
+    const { saveDigestRecipients } = await import('../services/digestRecipients');
+    const { getOpsDigestConfigStatus } = await import('../services/opsDigest');
+    const recipients = await saveDigestRecipients(req.body?.recipients);
+    return res.json({
+      ...opsDigestStatusBody(await getOpsDigestConfigStatus()),
+      recipients,
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to save digest recipients: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to save digest recipients' });
   }
 });
 
@@ -638,7 +654,11 @@ router.get('/dashboard/schedule-heatmap', async (req: any, res: any) => {
 router.get('/dashboard/automations', async (req: any, res: any) => {
   try {
     const { page, limit, skip } = parseListPagination(req);
-    const ownerFilter: any = { ...ownerIdFilter(req.user.id) };
+    const { careerRobotsOnlyMongoClause } = await import('../services/aggregatorIdentity');
+    const ownerFilter: any = {
+      ...ownerIdFilter(req.user.id),
+      ...careerRobotsOnlyMongoClause(),
+    };
 
     const tagsFilterRaw = req.query.tags != null ? String(req.query.tags).trim() : '';
     const tagsFilter = tagsFilterRaw
@@ -765,6 +785,170 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to fetch automation dashboard: ${error.message}`);
     res.status(500).json({ error: 'Failed to fetch automations' });
+  }
+});
+
+/** Aggregator robots only (Hiring Cafe searches) — excluded from /dashboard/automations. */
+router.get('/dashboard/aggregators', async (req: any, res: any) => {
+  try {
+    const { page, limit, skip } = parseListPagination(req);
+    const { aggregatorRobotsOnlyMongoClause, AGGREGATOR_PROVIDER_HIRING_CAFE } = await import(
+      '../services/aggregatorIdentity'
+    );
+    const provider =
+      req.query.provider != null
+        ? String(req.query.provider).trim()
+        : AGGREGATOR_PROVIDER_HIRING_CAFE;
+    const ownerFilter: any = {
+      ...ownerIdFilter(req.user.id),
+      ...aggregatorRobotsOnlyMongoClause(provider || undefined),
+    };
+
+    const tagsFilterRaw = req.query.tags != null ? String(req.query.tags).trim() : '';
+    const tagsFilter = tagsFilterRaw
+      ? tagsFilterRaw.split(',').map((t) => t.trim()).filter(Boolean)
+      : [];
+    if (tagsFilter.length) {
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.tags': { $all: tagsFilter } },
+            { 'recording_meta.saasConfig.tags': { $all: tagsFilter } },
+          ],
+        },
+      ];
+    }
+
+    const qFilter = req.query.q != null ? String(req.query.q).trim() : '';
+    if (qFilter) {
+      const re = new RegExp(qFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.name': re },
+            { 'recording_meta.companyName': re },
+            { 'recording_meta.saasConfig.companyName': re },
+          ],
+        },
+      ];
+    }
+
+    const idFilter = req.query.id != null ? String(req.query.id).trim() : '';
+    if (idFilter) {
+      const re = new RegExp(idFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.id': re },
+            { 'recording_meta.scoutId': re },
+          ],
+        },
+      ];
+    }
+
+    const scheduleCron =
+      req.query.scheduleCron != null ? String(req.query.scheduleCron).trim() : '';
+    if (scheduleCron === 'none') {
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $and: [
+            {
+              $or: [
+                { 'recording_meta.saasConfig.schedule.cron': { $in: [null, ''] } },
+                { 'recording_meta.saasConfig.schedule.cron': { $exists: false } },
+              ],
+            },
+            {
+              $or: [
+                { 'schedule.cron': { $in: [null, ''] } },
+                { 'schedule.cron': { $exists: false } },
+              ],
+            },
+          ],
+        },
+      ];
+    } else if (scheduleCron) {
+      ownerFilter.$and = [
+        ...(ownerFilter.$and || []),
+        {
+          $or: [
+            { 'recording_meta.saasConfig.schedule.cron': scheduleCron },
+            { 'schedule.cron': scheduleCron },
+          ],
+        },
+      ];
+    }
+
+    const [total, robots, scheduleRobots, allMetaIdsRaw] = await Promise.all([
+      Robot.countDocuments(ownerFilter),
+      Robot.find(ownerFilter)
+        .select(ROBOT_DASHBOARD_LIST_SELECT.join(' '))
+        .sort({ 'recording_meta.updatedAt': -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Robot.find(ownerFilter)
+        .select('schedule recording_meta.saasConfig.schedule')
+        .lean(),
+      Robot.distinct('recording_meta.id', ownerFilter),
+    ]);
+
+    let activeScheduledCount = 0;
+    let pausedScheduleCount = 0;
+    for (const robot of scheduleRobots) {
+      const { active, paused } = robotScheduleSummaryFlags(robot);
+      if (active) activeScheduledCount += 1;
+      if (paused) pausedScheduleCount += 1;
+    }
+
+    const allMetaIds = (allMetaIdsRaw as unknown[]).filter(Boolean).map(String);
+    const runTotals = await computeFilteredDashboardRunTotals(req.user.id, allMetaIds);
+
+    let jobsAddedToBoardTotal = 0;
+    for (const run of runTotals.latestRuns.values()) {
+      if (typeof run?.jobsAddedToBoard === 'number') {
+        jobsAddedToBoardTotal += run.jobsAddedToBoard;
+      }
+    }
+
+    const searches = robots.map((robot: any) => {
+      const metaId = robot.recording_meta.id;
+      const latestRun = runTotals.latestRuns.get(metaId);
+      const rowsExtracted = latestRun?.runId
+        ? runTotals.rowCounts.get(String(latestRun.runId)) || 0
+        : 0;
+      return {
+        ...mapAutomation(robot, latestRun, rowsExtracted),
+        aggregatorProvider:
+          robot.recording_meta?.saasConfig?.aggregatorProvider || provider || '',
+        targetUrl: robot.recording_meta?.url || '',
+        jobsAddedToBoard:
+          typeof latestRun?.jobsAddedToBoard === 'number' ? latestRun.jobsAddedToBoard : 0,
+      };
+    });
+
+    const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+    return res.json({
+      provider: provider || AGGREGATOR_PROVIDER_HIRING_CAFE,
+      searches,
+      pagination: { page, limit, total, totalPages },
+      summary: {
+        totalAutomations: total,
+        activeScheduledCount,
+        pausedScheduleCount,
+        rowsExtractedTotal: runTotals.rowsExtractedTotal,
+        successfulCount: runTotals.successfulCount,
+        failedCount: runTotals.failedCount,
+        jobsAddedToBoardTotal,
+      },
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch aggregators dashboard: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch aggregators' });
   }
 });
 
@@ -1179,6 +1363,25 @@ router.post('/automations', async (req: any, res: any) => {
     delete (saasIncoming as any).companyName;
     delete (saasIncoming as any).tags;
 
+    const { applyAggregatorProviderFromUrl } = await import('../services/aggregatorIdentity');
+    applyAggregatorProviderFromUrl(normalizedStartUrl, saasIncoming as Record<string, unknown>);
+
+    // Aggregator searches: reuse listExtraction from an existing Hiring Cafe template when omitted.
+    const aggregatorProvider = String((saasIncoming as any).aggregatorProvider || '').trim();
+    if (aggregatorProvider && !(saasIncoming as any).listExtraction) {
+      const template = await Robot.findOne({
+        ...ownerIdFilter(req.user.id),
+        'recording_meta.saasConfig.aggregatorProvider': aggregatorProvider,
+        'recording_meta.saasConfig.listExtraction.itemSelector': { $exists: true, $ne: '' },
+      })
+        .select('recording_meta.saasConfig.listExtraction')
+        .lean();
+      const tmplList = (template as any)?.recording_meta?.saasConfig?.listExtraction;
+      if (tmplList) {
+        (saasIncoming as any).listExtraction = tmplList;
+      }
+    }
+
     const robot = await Robot.create({
       id: uuid(),
       userId: normalizeOwnerIdForWrite(req.user.id),
@@ -1310,6 +1513,12 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
       if (companyName) {
         nextSaasConfig.companyName = companyName;
       }
+
+      const { applyAggregatorProviderFromUrl } = await import('../services/aggregatorIdentity');
+      applyAggregatorProviderFromUrl(
+        String((incoming as any).previewUrl || robot.recording_meta?.url || ''),
+        nextSaasConfig
+      );
 
       const nextMeta = {
         ...robot.recording_meta,
@@ -1448,6 +1657,12 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
     if (companyName !== undefined) {
       nextSaasConfig.companyName = companyName;
     }
+
+    const { applyAggregatorProviderFromUrl } = await import('../services/aggregatorIdentity');
+    applyAggregatorProviderFromUrl(
+      normalizedStartUrl || String(robot.recording_meta?.url || ''),
+      nextSaasConfig
+    );
 
     const nextMeta = {
       ...robot.recording_meta,

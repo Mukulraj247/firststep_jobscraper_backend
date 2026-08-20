@@ -132,25 +132,34 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
     : description.length <= CARD_PREVIEW_CHARS
       ? description
       : `${description.slice(0, CARD_PREVIEW_CHARS).trim()}…`;
-  const location = normalizeLocation(
-    decodeHtmlEntities(row.location || list.location || '')
-  );
+  const locationRaw = decodeHtmlEntities(row.location || list.location || '');
+  const location = /United States|India|Kingdom|Canada|Australia|, [A-Z]{2}\b/.test(locationRaw)
+    ? locationRaw.replace(/\s+/g, ' ').trim()
+    : normalizeLocation(locationRaw);
   const category = decodeHtmlEntities(row.jobCategory || list.jobCategory || '');
-  const salary = normalizeSalaryRange(
-    decodeHtmlEntities(row.salaryRange || list.salaryRange || ''),
-    { location }
-  );
+  const salaryRaw = decodeHtmlEntities(row.salaryRange || list.salaryRange || '');
+  const salary = /\/(?:hr|yr|mo|wk|day)\b/i.test(salaryRaw)
+    ? salaryRaw
+    : normalizeSalaryRange(salaryRaw, { location });
   const employment = decodeHtmlEntities(row.employmentType || list.employmentType || '');
   const remote = decodeHtmlEntities(row.remoteType || list.remoteType || '');
   const industry = decodeHtmlEntities(row.sectorIndustry || list.sectorIndustry || '');
   const jobId = String(row.jobId || '').trim();
-  const applyUrl = row.applyUrl || jobUrl;
+  const rawApply = String(row.applyUrl || '').trim();
+  let applyUrl = rawApply;
+  try {
+    const host = rawApply ? new URL(rawApply).hostname.toLowerCase().replace(/^www\./, '') : '';
+    const isHc =
+      host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
+    if (!rawApply || isHc) applyUrl = '';
+  } catch {
+    applyUrl = rawApply;
+  }
   const dateRaw = row.date || list.date;
   const createdAt = row.createdAt || row.lastSeenAt;
   const postedMs = dateRaw ? new Date(dateRaw).getTime() : NaN;
   const date =
     Number.isFinite(postedMs) && postedMs <= Date.now() ? dateRaw : createdAt;
-  const logo = String(row.companyLogoUrl || '').trim();
   const descScore = descriptionQualityScore(description);
   const derived =
     descScore > 0
@@ -167,12 +176,16 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   const asStringList = (v: unknown): string[] =>
     Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
 
-  const about = decodeHtmlEntities(String(row.about || '').trim());
-  const minimumQualifications = asStringList(row.minimumQualifications);
-  const preferredQualifications = asStringList(row.preferredQualifications);
-  const responsibilities = asStringList(row.responsibilities);
-  const benefits = asStringList(row.benefits);
-  const skills = asStringList(row.skills);
+  const about = decodeHtmlEntities(String(row.about || list.about || '').trim());
+  const minimumQualifications = asStringList(row.minimumQualifications || list.minimumQualifications);
+  const preferredQualifications = asStringList(
+    row.preferredQualifications || list.preferredQualifications
+  );
+  const responsibilities = asStringList(row.responsibilities || list.responsibilities);
+  const benefits = asStringList(row.benefits || list.benefits);
+  const skills = asStringList(row.skills || list.skills);
+  const logo = String(row.companyLogoUrl || list.companyLogoUrl || '').trim();
+  const f500 = String(row.f500 || list.f500 || '').trim();
 
   return {
     id: row._id?.toString?.() || String(row.id),
@@ -192,7 +205,7 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
       remoteType: remoteFinal,
       jobExperience,
       sectorIndustry: industry,
-      f500: row.f500 || list.f500 || '',
+      f500,
       companyLogoUrl: logo,
       status: row.status,
       enrichmentMethod: row.enrichment?.method || '',
@@ -372,6 +385,7 @@ router.get('/jobs', async (req: any, res: any) => {
       location,
       workMode,
       jobType,
+      source: req.query.source != null ? String(req.query.source).trim() : '',
     });
 
     const countKey = JSON.stringify({
@@ -384,7 +398,8 @@ router.get('/jobs', async (req: any, res: any) => {
       workMode,
       jobType,
       added,
-      v: 10,
+      source: req.query.source != null ? String(req.query.source).trim() : '',
+      v: 11,
     });
     const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {

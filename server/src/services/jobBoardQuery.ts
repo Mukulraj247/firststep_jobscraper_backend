@@ -30,6 +30,8 @@ export type JobBoardListFilterInput = {
   location?: string;
   workMode?: string;
   jobType?: string;
+  /** e.g. hiring_cafe — empty means all sources */
+  source?: string;
 };
 
 export function applyJobBoardListFilters(
@@ -41,6 +43,11 @@ export function applyJobBoardListFilters(
 
   if (filters.addedSince) {
     next.createdAt = { $gte: filters.addedSince };
+  }
+
+  const source = String(filters.source || '').trim();
+  if (source) {
+    next.source = source;
   }
 
   const location = String(filters.location || '').trim();

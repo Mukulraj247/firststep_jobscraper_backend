@@ -2,18 +2,36 @@ import { describe, expect, it } from 'vitest';
 import { SIDEBAR_NAV_VALUES } from '../../components/dashboard/sidebarNav';
 import {
   digestAlertSeverity,
+  digestRecipientsEqual,
   digestSendDisabled,
   digestSentMessage,
   digestStatusCaption,
+  normalizeDigestEmailList,
 } from './communicationPageBehavior';
 
 describe('sidebar Communication tab', () => {
-  it('sits after Failure Dashboard and before Proxy', () => {
+  it('sits after Failure Dashboard; Aggregators sits before Proxy', () => {
     const failures = SIDEBAR_NAV_VALUES.indexOf('failures');
     const communication = SIDEBAR_NAV_VALUES.indexOf('communication');
+    const aggregators = SIDEBAR_NAV_VALUES.indexOf('aggregators');
     const proxy = SIDEBAR_NAV_VALUES.indexOf('proxy');
     expect(communication).toBe(failures + 1);
-    expect(proxy).toBe(communication + 1);
+    expect(aggregators).toBe(communication + 1);
+    expect(proxy).toBe(aggregators + 1);
+  });
+});
+
+describe('normalizeDigestEmailList', () => {
+  it('splits, validates, and dedupes recipients', () => {
+    expect(normalizeDigestEmailList('a@x.com, b@y.com;A@x.com nope')).toEqual([
+      'a@x.com',
+      'b@y.com',
+    ]);
+  });
+
+  it('compares recipient lists case-insensitively', () => {
+    expect(digestRecipientsEqual(['A@x.com'], ['a@x.com'])).toBe(true);
+    expect(digestRecipientsEqual(['a@x.com'], ['a@x.com', 'b@y.com'])).toBe(false);
   });
 });
 
