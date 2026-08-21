@@ -89,3 +89,35 @@ export function addAdmissionGuardReleaseToTerminalUpdate<T extends Record<string
     },
   };
 }
+
+/**
+ * Keep indexed `sortAt` aligned with when the run actually finished so Failure
+ * Dashboard windows match the Timing column (not create-time).
+ */
+export function resolveTerminalSortAt(finishedAt?: string | null, fallback: Date = new Date()): Date {
+  if (finishedAt) {
+    const parsed = new Date(String(finishedAt));
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return fallback;
+}
+
+export function addSortAtToTerminalUpdate<T extends Record<string, any>>(
+  update: T,
+  now: Date = new Date(),
+): T {
+  const fields = update?.$set ?? update;
+  const status = fields?.status;
+  if (!isTerminalRunStatus(status)) {
+    return update;
+  }
+  const finishedAt = fields?.finishedAt;
+  if (finishedAt === '' || finishedAt == null) {
+    return update;
+  }
+  const sortAt = resolveTerminalSortAt(finishedAt, now);
+  if (update?.$set) {
+    return { ...update, $set: { ...update.$set, sortAt } } as T;
+  }
+  return { ...update, sortAt } as T;
+}

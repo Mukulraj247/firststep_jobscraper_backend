@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failureQueryOptions } from './failureQueries';
+import { failureQueryOptions, shouldKeepFailurePlaceholder } from './failureQueries';
 import { FIRSTSTEP, tint } from '../../components/dashboard/ops/dashboardTokens';
 import {
   CARD_RESTING_SHADOW_DARK,
@@ -46,6 +46,8 @@ import {
   failuresLiveRegionMessage,
   filterControlSx,
   filterLayoutForWidth,
+  formatFailureTimingLines,
+  formatRelativeAgo,
   hasActiveFilters,
   isDangerAccentAllowed,
   labelledSelectContract,
@@ -289,6 +291,43 @@ describe('parseFailureDashboardSearch', () => {
     });
   });
 
+  it('shows finished time with ago and run duration, not duration alone as age', () => {
+    const finishedAt = '2026-08-21T04:30:00.000Z';
+    const nowMs = Date.parse('2026-08-21T04:40:00.000Z');
+    expect(formatRelativeAgo(finishedAt, nowMs)).toBe('10m ago');
+    expect(formatFailureTimingLines({
+      startedAt: '2026-08-21T04:26:10.000Z',
+      finishedAt,
+      durationMs: 230_000,
+    }, nowMs).detail).toBe('10m ago · ran 3m 50s');
+  });
+
+  it('does not keep placeholder rows when the time window changes', () => {
+    const prevKey = [
+      'failures', 1, 25, '', '', 'failed,dead,aborted', '', '', '6h', '', '', true,
+    ] as const;
+    expect(shouldKeepFailurePlaceholder(prevKey, {
+      page: 1,
+      pageSize: 25,
+      q: '',
+      id: '',
+      status: 'failed,dead,aborted',
+      anomaly: '',
+      reason: '',
+      timeWindow: '1h',
+    })).toBe(false);
+    expect(shouldKeepFailurePlaceholder(prevKey, {
+      page: 2,
+      pageSize: 25,
+      q: '',
+      id: '',
+      status: 'failed,dead,aborted',
+      anomaly: '',
+      reason: '',
+      timeWindow: '6h',
+    })).toBe(true);
+  });
+
   it('keeps run-details back on the filtered failures list instead of dashboard', () => {
     expect(serializeFailureListSearch({
       q: 'jhu',
@@ -309,7 +348,7 @@ describe('parseFailureDashboardSearch', () => {
 
 describe('stale-response cancellation and load errors', () => {
   it('keeps previous rows via placeholderData and resets page in the same filter handler', () => {
-    const options = failureQueryOptions({
+    const query = {
       page: 1,
       pageSize: 25,
       q: 'checkout',
@@ -317,13 +356,20 @@ describe('stale-response cancellation and load errors', () => {
       status: DEFAULT_FAILURE_STATUS_FILTER,
       anomaly: '',
       reason: '',
-      timeWindow: '1h',
-    });
+      timeWindow: '1h' as const,
+    };
+    const options = failureQueryOptions(query);
     expect(typeof options.placeholderData).toBe('function');
     const placeholder = options.placeholderData;
     if (typeof placeholder !== 'function') return;
     const previous = { runs: [{ runId: 'kept' }], pagination: { page: 1, limit: 25, total: 1, totalPages: 1 } };
-    expect(placeholder(previous as never, undefined as never)).toBe(previous);
+    const sameWindowPrev = {
+      queryKey: [
+        'failures', 1, 25, 'checkout', '', DEFAULT_FAILURE_STATUS_FILTER, '', '', '1h', '', '', true,
+      ],
+    };
+    expect(placeholder(previous as never, sameWindowPrev as never)).toBe(previous);
+    expect(placeholder(previous as never, undefined as never)).toBeUndefined();
 
     let reason = '';
     let page = 4;
@@ -551,7 +597,7 @@ describe('task 9 visual contracts mirrored on failures', () => {
     expect(failuresTableScrollSx().flex).toBe('none');
     expect(failuresTableScrollSx().overflowY).toBe('visible');
     expect(failuresTableScrollSx().overflowX).toBe('auto');
-    expect(failuresTableScrollSx().scrollbarWidth).toBe('none');
+    expect(failuresTableScrollSx().scrollbarWidth).toBeUndefined();
     expect(failuresTableScrollSx().maxHeight).toBeUndefined();
   });
 });

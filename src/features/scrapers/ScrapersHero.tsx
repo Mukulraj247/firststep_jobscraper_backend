@@ -89,7 +89,7 @@ export function ScrapersHero({
           </Stack>
         </Box>
 
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ maxWidth: '100%' }}>
           <Button
             variant="outlined"
             startIcon={<DownloadIcon />}

@@ -92,6 +92,41 @@ describe('buildCanonicalJobDataSync', () => {
     expect(row.employmentType).toBe('Full-time');
     expect(row.remoteType).toBe('Remote');
   });
+
+  it('persists description sections and HC-rich fields', () => {
+    const row = buildCanonicalJobDataSync(
+      {
+        jobTitle: 'Engineer',
+        about: 'We build things',
+        responsibilities: ['Ship features', 'Mentor juniors', 'Own on-call'],
+        minimumQualifications: ['5+ years', "Bachelor's degree"],
+        preferredQualifications: ["Master's preferred"],
+        benefits: ['401(k) matching', 'Visa sponsorship'],
+        skills: ['Go', 'AWS'],
+        certifications: ['AWS SAP'],
+        seniorityLevel: 'Senior Level',
+        roleType: 'Individual Contributor',
+        educationRequirement: "Bachelor's degree (required)",
+        visaSponsorship: 'yes',
+        companyEmployeeCount: 500,
+        companyFoundedYear: 2012,
+      } as Record<string, unknown>,
+      { createdAt: created, jobId: 'AB01FE005', insertDefaults: true }
+    );
+    expect(row.about).toBe('We build things');
+    expect(row.responsibilities).toEqual(['Ship features', 'Mentor juniors', 'Own on-call']);
+    expect(row.minimumQualifications).toEqual(['5+ years', "Bachelor's degree"]);
+    expect(row.preferredQualifications).toEqual(["Master's preferred"]);
+    expect(row.benefits).toEqual(['401(k) matching', 'Visa sponsorship']);
+    expect(row.skills).toEqual(['Go', 'AWS']);
+    expect(row.certifications).toEqual(['AWS SAP']);
+    expect(row.seniorityLevel).toBe('Senior Level');
+    expect(row.roleType).toBe('Individual Contributor');
+    expect(row.educationRequirement).toBe("Bachelor's degree (required)");
+    expect(row.visaSponsorship).toBe('yes');
+    expect(row.companyEmployeeCount).toBe(500);
+    expect(row.companyFoundedYear).toBe(2012);
+  });
 });
 
 describe('hasCanonicalExtractedShape', () => {

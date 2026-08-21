@@ -16,11 +16,45 @@ export type HiringCafeStructuredFields = ParsedJobFields & {
   skills?: string[];
   responsibilities?: string[];
   minimumQualifications?: string[];
+  preferredQualifications?: string[];
+  benefits?: string[];
+  certifications?: string[];
   sectorIndustry?: string;
   f500?: string;
   companyWebsite?: string;
   jobExperience?: number;
+  seniorityLevel?: string;
+  roleType?: string;
+  educationRequirement?: string;
+  /** `yes` | `no` | `` when unknown */
+  visaSponsorship?: string;
+  companyEmployeeCount?: number;
+  companyFoundedYear?: number;
 };
+
+/** Benefit boolean keys on HC v5 → human labels (only when true). */
+const HC_BENEFIT_FLAGS: Array<{ key: string; label: string }> = [
+  { key: '401k_matching', label: '401(k) matching' },
+  { key: 'retirement_plan', label: 'Retirement plan' },
+  { key: 'generous_parental_leave', label: 'Parental leave' },
+  { key: 'tuition_reimbursement', label: 'Tuition reimbursement' },
+  { key: 'generous_paid_time_off', label: 'Generous PTO' },
+  { key: 'four_day_work_week', label: 'Four-day work week' },
+  { key: 'relocation_assistance', label: 'Relocation assistance' },
+  { key: 'visa_sponsorship', label: 'Visa sponsorship' },
+  { key: 'military_veterans', label: 'Military / veterans friendly' },
+];
+
+const DEGREE_LEVELS: Array<{
+  reqKey: string;
+  fieldsKey: string;
+  label: string;
+}> = [
+  { reqKey: 'associates_degree_requirement', fieldsKey: 'associates_degree_fields_of_study', label: "Associate's degree" },
+  { reqKey: 'bachelors_degree_requirement', fieldsKey: 'bachelors_degree_fields_of_study', label: "Bachelor's degree" },
+  { reqKey: 'masters_degree_requirement', fieldsKey: 'masters_degree_fields_of_study', label: "Master's degree" },
+  { reqKey: 'doctorate_degree_requirement', fieldsKey: 'doctorate_degree_fields_of_study', label: 'Doctorate' },
+];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -220,6 +254,83 @@ function yoeFromV5(v5: Record<string, unknown>): number {
   return n != null ? Math.max(0, Math.floor(n)) : 0;
 }
 
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    const key = value.trim().toLowerCase();
+    return key === 'true' || key === 'yes' || key === '1';
+  }
+  return false;
+}
+
+function degreeRequirementKind(raw: unknown): 'required' | 'preferred' | 'none' {
+  const key = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ');
+  if (!key || key.includes('not mentioned') || key === 'none' || key === 'n/a') return 'none';
+  if (key.includes('prefer')) return 'preferred';
+  if (key.includes('require') || key === 'yes' || key === 'true') return 'required';
+  return 'none';
+}
+
+function formatDegreeLine(label: string, fields: string[], kind: 'required' | 'preferred'): string {
+  const fieldsPart = fields.length ? ` in ${fields.join(', ')}` : '';
+  const suffix = kind === 'preferred' ? ' (preferred)' : ' (required)';
+  return `${label}${fieldsPart}${suffix}`;
+}
+
+/** Map HC degree_* fields into required / preferred qualification lines + a short education chip. */
+export function extractHiringCafeEducation(v5: Record<string, unknown>): {
+  required: string[];
+  preferred: string[];
+  educationRequirement: string;
+} {
+  const required: string[] = [];
+  const preferred: string[] = [];
+  for (const level of DEGREE_LEVELS) {
+    const kind = degreeRequirementKind(v5[level.reqKey]);
+    if (kind === 'none') continue;
+    const fields = asStringList(v5[level.fieldsKey]);
+    const line = formatDegreeLine(level.label, fields, kind);
+    if (kind === 'required') required.push(line);
+    else preferred.push(line);
+  }
+  const educationRequirement = [...required, ...preferred].join('; ');
+  return { required, preferred, educationRequirement };
+}
+
+/** True benefit flags → human-readable labels (visa also listed when true). */
+export function extractHiringCafeBenefits(v5: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const { key, label } of HC_BENEFIT_FLAGS) {
+    if (!isTruthyFlag(v5[key])) continue;
+    const lower = label.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(label);
+  }
+  return out;
+}
+
+export function formatHiringCafeVisaSponsorship(v5: Record<string, unknown>): string {
+  if (v5.visa_sponsorship === true || isTruthyFlag(v5.visa_sponsorship)) return 'yes';
+  if (v5.visa_sponsorship === false) return 'no';
+  return '';
+}
+
+function positiveInt(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const n = parseInt(value.replace(/,/g, ''), 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
 /**
  * Map a raw Hiring Cafe job object (pageProps.job) into Scout-X structured fields.
  */
@@ -227,19 +338,26 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
   const info = asRecord(rec.job_information) || {};
   const v5 = asRecord(rec.v5_processed_job_data) || {};
   const company = asRecord(rec.enriched_company_data) || {};
+  const v5Company = asRecord(rec.v5_processed_company_data) || {};
 
   const homepage = firstString(company.homepage_uri, v5.company_website, company.website);
-  const stockExchange = firstString(company.stock_exchange);
-  const stockSymbol = firstString(company.stock_symbol);
+  const stockExchange = firstString(company.stock_exchange, v5Company.stock_exchange);
+  const stockSymbol = firstString(company.stock_symbol, v5Company.stock_symbol);
   const f500 =
     stockExchange && stockSymbol
       ? `${stockExchange}: ${stockSymbol}`
       : firstString(stockSymbol, stockExchange);
 
-  const industries = asStringList(company.industries);
+  const industries = asStringList(company.industries).length
+    ? asStringList(company.industries)
+    : asStringList(v5Company.industries);
   const requirementsSummary = firstString(v5.requirements_summary);
   const roleActivities = asStringList(v5.role_activities);
   const technicalTools = asStringList(v5.technical_tools);
+  const certifications = asStringList(v5.licenses_or_certifications);
+  const education = extractHiringCafeEducation(v5);
+  const benefits = extractHiringCafeBenefits(v5);
+  const visaSponsorship = formatHiringCafeVisaSponsorship(v5);
 
   const descriptionHtml = firstString(info.description, rec.description, rec.jobDescription);
   const description = stripHtmlToText(descriptionHtml);
@@ -256,13 +374,31 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
     info.apply_url
   );
 
-  const about = firstString(company.tagline, v5.company_tagline);
-  const minimumQualifications = requirementsSummary
+  const about = firstString(company.tagline, v5.company_tagline, v5Company.tagline);
+  const fromSummary = requirementsSummary
     ? requirementsSummary
         .split(/;|\n|•/)
         .map((s) => s.trim())
         .filter((s) => s.length > 8)
     : [];
+  // Prefer summary bullets; when thin, strengthen with structured required degrees.
+  const minimumQualifications =
+    fromSummary.length >= 2 ? fromSummary : [...fromSummary, ...education.required];
+  const preferredQualifications = education.preferred;
+
+  const companyEmployeeCount =
+    positiveInt(company.nb_employees) ||
+    positiveInt(v5Company.nb_employees) ||
+    positiveInt(company.employee_count) ||
+    positiveInt(v5Company.employee_count);
+  const companyFoundedYear =
+    positiveInt(company.year_founded) ||
+    positiveInt(v5Company.year_founded) ||
+    positiveInt(company.founded_year) ||
+    positiveInt(v5Company.founded_year);
+
+  const seniorityLevel = firstString(v5.seniority_level);
+  const roleType = firstString(v5.role_type);
 
   const fields: HiringCafeStructuredFields = {
     jobTitle: firstString(
@@ -273,7 +409,7 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
       rec.jobTitle
     ),
     companyName: sanitizeCompanyName(
-      firstString(company.name, v5.company_name, rec.companyName, rec.company)
+      firstString(company.name, v5.company_name, v5Company.name, rec.companyName, rec.company)
     ),
     jobDescription: description,
     location,
@@ -289,6 +425,9 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
     skills: technicalTools,
     responsibilities: roleActivities.map((a) => a.charAt(0).toUpperCase() + a.slice(1)),
     minimumQualifications,
+    preferredQualifications,
+    benefits,
+    certifications,
     sectorIndustry: industries.join(', ') || firstString(v5.company_sector_and_industry),
     f500,
     companyWebsite: homepage
@@ -297,6 +436,14 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
         : `https://${homepage.replace(/^\/+/, '')}`
       : '',
     jobExperience: yoeFromV5(v5),
+    seniorityLevel,
+    roleType,
+    educationRequirement: education.educationRequirement,
+    visaSponsorship,
+    ...(companyEmployeeCount > 0 ? { companyEmployeeCount } : {}),
+    ...(companyFoundedYear >= 1800 && companyFoundedYear <= new Date().getFullYear() + 1
+      ? { companyFoundedYear }
+      : {}),
   };
 
   const yoe = Number(fields.jobExperience || 0);

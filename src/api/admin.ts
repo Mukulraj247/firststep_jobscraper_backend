@@ -188,7 +188,16 @@ export async function sendAdminDigestTest(): Promise<{
   reason?: string;
   error?: string;
   requestId?: string | null;
-  summary?: { generatedAt: string; last6h: { total: number; passed: number; failed: number } } | null;
+  summary?: {
+    generatedAt: string;
+    last6h: {
+      total: number;
+      passed: number;
+      failed: number;
+      jobsAddedToBoard?: number;
+      rowsExtracted?: number;
+    };
+  } | null;
 }> {
   const response = await axios.post(`${apiUrl}/api/admin/digest/test`, {}, withCreds);
   return response.data;

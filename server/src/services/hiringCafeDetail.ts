@@ -286,10 +286,23 @@ export function parseHiringCafeJobPageHtml(
     skills: fromNext?.skills || [],
     responsibilities: fromNext?.responsibilities || [],
     minimumQualifications: fromNext?.minimumQualifications || [],
+    preferredQualifications: fromNext?.preferredQualifications || [],
+    benefits: fromNext?.benefits || [],
+    certifications: fromNext?.certifications || [],
     sectorIndustry: fromNext?.sectorIndustry || '',
     f500: fromNext?.f500 || '',
     companyWebsite: fromNext?.companyWebsite || '',
     jobExperience: fromNext?.jobExperience || fromNext?._jobExperience || 0,
+    seniorityLevel: fromNext?.seniorityLevel || '',
+    roleType: fromNext?.roleType || '',
+    educationRequirement: fromNext?.educationRequirement || '',
+    visaSponsorship: fromNext?.visaSponsorship || '',
+    ...(fromNext?.companyEmployeeCount && fromNext.companyEmployeeCount > 0
+      ? { companyEmployeeCount: fromNext.companyEmployeeCount }
+      : {}),
+    ...(fromNext?.companyFoundedYear && fromNext.companyFoundedYear > 0
+      ? { companyFoundedYear: fromNext.companyFoundedYear }
+      : {}),
   };
   // Prefer Hiring Cafe–normalized fields (mergeParsedFields can mangle salary/location).
   if (fromNext?.companyLogoUrl) structured.companyLogoUrl = fromNext.companyLogoUrl;
@@ -464,6 +477,25 @@ export function mergeHiringCafeDetailIntoRow(
   }
   if (Array.isArray(detail.minimumQualifications) && detail.minimumQualifications.length) {
     next.minimumQualifications = detail.minimumQualifications;
+  }
+  if (Array.isArray(detail.preferredQualifications) && detail.preferredQualifications.length) {
+    next.preferredQualifications = detail.preferredQualifications;
+  }
+  if (Array.isArray(detail.benefits) && detail.benefits.length) {
+    next.benefits = detail.benefits;
+  }
+  if (Array.isArray(detail.certifications) && detail.certifications.length) {
+    next.certifications = detail.certifications;
+  }
+  if (detail.seniorityLevel) next.seniorityLevel = detail.seniorityLevel;
+  if (detail.roleType) next.roleType = detail.roleType;
+  if (detail.educationRequirement) next.educationRequirement = detail.educationRequirement;
+  if (detail.visaSponsorship) next.visaSponsorship = detail.visaSponsorship;
+  if (detail.companyEmployeeCount && detail.companyEmployeeCount > 0) {
+    next.companyEmployeeCount = detail.companyEmployeeCount;
+  }
+  if (detail.companyFoundedYear && detail.companyFoundedYear > 0) {
+    next.companyFoundedYear = detail.companyFoundedYear;
   }
 
   const externalApply = preferExternalApplyUrl(applyUrl, next.applyUrl);

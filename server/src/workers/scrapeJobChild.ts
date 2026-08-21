@@ -10,6 +10,7 @@ import logger from '../logger';
 import { connectDB, syncDB } from '../storage/db';
 import { closeBrowserReusePool } from '../services/browserReusePool';
 import { killUntrackedPlaywrightChromium } from '../services/browserProcess';
+import { setChromiumSlotProcessKind } from '../services/chromiumSlotLease';
 import type { ScraperJobData } from '../queue/scraperQueue';
 import { runScraperJobPayload } from './scraperWorker';
 import { closeAgenda } from '../queue/scraperQueue';
@@ -35,6 +36,7 @@ async function shutdown(): Promise<void> {
 }
 
 async function runJob(data: ScraperJobData): Promise<void> {
+  setChromiumSlotProcessKind('scraper');
   await connectDB();
   await syncDB();
   await runScraperJobPayload(data);

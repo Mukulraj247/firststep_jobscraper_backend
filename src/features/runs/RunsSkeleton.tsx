@@ -15,7 +15,7 @@ export function RunsSkeleton() {
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: { xs: '1fr', lg: 'repeat(5, 1fr)' },
+            gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: 'repeat(5, 1fr)' },
             gap: 1.5,
           }}
         >

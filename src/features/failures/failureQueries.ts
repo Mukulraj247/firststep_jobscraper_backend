@@ -26,6 +26,8 @@ export type FailureQuery = {
   timeWindow: FailureTimeWindow;
   from?: string;
   to?: string;
+  /** Drop failures already cleared by 2 consecutive successes (default true). */
+  excludeHealed?: boolean;
 };
 
 export const failureQueryKeys = {
@@ -44,6 +46,7 @@ export const failureQueryKey = (query: FailureQuery) => [
   query.timeWindow,
   query.from || '',
   query.to || '',
+  query.excludeHealed !== false,
 ] as const;
 
 export type FailureFetcher = (
@@ -65,7 +68,24 @@ const fetchFailures: FailureFetcher = (query, signal) =>
       : query.timeWindow === 'all'
         ? {}
         : { from: new Date(Date.now() - WINDOW_MS[query.timeWindow]).toISOString() }),
+    excludeHealed: query.excludeHealed !== false,
   }, signal);
+
+/** Keep prior page data only when the time window is unchanged (avoids 6h rows under a 1h pill). */
+export function shouldKeepFailurePlaceholder(
+  previousKey: readonly unknown[] | undefined,
+  nextQuery: FailureQuery,
+): boolean {
+  if (!previousKey || previousKey[0] !== 'failures') return false;
+  const prevWindow = previousKey[8];
+  const prevFrom = previousKey[9];
+  const prevTo = previousKey[10];
+  return (
+    prevWindow === nextQuery.timeWindow
+    && prevFrom === (nextQuery.from || '')
+    && prevTo === (nextQuery.to || '')
+  );
+}
 
 export const failureQueryOptions = (
   query: FailureQuery,
@@ -73,5 +93,10 @@ export const failureQueryOptions = (
 ) => queryOptions({
   queryKey: failureQueryKey(query),
   queryFn: ({ signal }) => fetcher(query, signal),
-  placeholderData: (previousData) => previousData,
+  placeholderData: (previousData, previousQuery) => {
+    if (!shouldKeepFailurePlaceholder(previousQuery?.queryKey, query)) {
+      return undefined;
+    }
+    return previousData;
+  },
 });

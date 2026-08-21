@@ -17,6 +17,7 @@ import {
 } from './workers/scraperWorker';
 import { drainAndCloseAgenda, getScrapeDrainMs } from './queue/scraperQueue';
 import { closeBrowserReusePool } from './services/browserReusePool';
+import { setChromiumSlotProcessKind } from './services/chromiumSlotLease';
 import {
   killUntrackedPlaywrightChromium,
   startOrphanChromiumReaper,
@@ -26,6 +27,7 @@ import {
 let shuttingDown = false;
 
 async function main() {
+  setChromiumSlotProcessKind('aggregator');
   await connectDB();
   await syncDB();
   await startAggregatorWorker();

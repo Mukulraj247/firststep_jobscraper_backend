@@ -17,6 +17,7 @@ import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined';
 import type { OpsMetricsWindow } from '../../../api/automation';
 import { dashboardDatePickerBounds } from '../../../features/dashboard/dashboardPageBehavior';
+import { formatIstYmd } from '../../../shared/opsTimezone';
 import {
   FIRSTSTEP,
   heroGlassFormControlSx,
@@ -113,6 +114,7 @@ export function DashboardHeroSection({
   window,
   onWindowChange,
   date,
+  dayMode,
   onDateChange,
   onRefresh,
   loading,
@@ -126,6 +128,7 @@ export function DashboardHeroSection({
   window: OpsMetricsWindow;
   onWindowChange: (window: OpsMetricsWindow) => void;
   date: string;
+  dayMode: boolean;
   onDateChange: (date: string) => void;
   onRefresh: () => void;
   loading: boolean;
@@ -144,7 +147,7 @@ export function DashboardHeroSection({
   forecastUntilLabel: string | null;
 }) {
   const bounds = dashboardDatePickerBounds();
-  const dayMode = Boolean(date);
+  const todayYmd = formatIstYmd(Date.now());
   const upcomingRuns = upcoming?.totalScheduledRuns ?? 0;
   const upcomingAutomations = upcoming?.automationsWithRuns ?? 0;
   const runsMatchAutomations =
@@ -187,21 +190,23 @@ export function DashboardHeroSection({
           useFlexGap
           sx={{ flexShrink: 0, alignSelf: { md: 'flex-start' } }}
         >
-          <FormControl size="small" sx={heroGlassFormControlSx()}>
-            <InputLabel id="ops-window-label">Time range</InputLabel>
-            <Select
-              labelId="ops-window-label"
-              label="Time range"
-              value={window}
-              onChange={(e) => onWindowChange(e.target.value as OpsMetricsWindow)}
-            >
-              {WINDOWS.map((w) => (
-                <MenuItem key={w} value={w}>
-                  {w} · last & next
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          {!dayMode ? (
+            <FormControl size="small" sx={heroGlassFormControlSx()}>
+              <InputLabel id="ops-window-label">Time range</InputLabel>
+              <Select
+                labelId="ops-window-label"
+                label="Time range"
+                value={window}
+                onChange={(e) => onWindowChange(e.target.value as OpsMetricsWindow)}
+              >
+                {WINDOWS.map((w) => (
+                  <MenuItem key={w} value={w}>
+                    {w} · last & next
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          ) : null}
           <TextField
             size="small"
             type="date"
@@ -212,6 +217,21 @@ export function DashboardHeroSection({
             onChange={(event) => onDateChange(event.target.value)}
             sx={heroGlassFormControlSx()}
           />
+          {dayMode ? (
+            <Button
+              variant="outlined"
+              onClick={() => onDateChange(todayYmd)}
+              sx={{
+                ...heroGlassFormControlSx(),
+                textTransform: 'none',
+                fontWeight: 700,
+                borderColor: tint(FIRSTSTEP.teal, 0.45),
+                color: FIRSTSTEP.tealDeep,
+              }}
+            >
+              Today
+            </Button>
+          ) : null}
           <Button
             variant="contained"
             startIcon={
@@ -298,7 +318,7 @@ export function DashboardHeroSection({
                 sx={{
                   color: 'text.secondary',
                   fontWeight: 600,
-                  whiteSpace: 'nowrap',
+                  whiteSpace: 'normal',
                 }}
               >
                 until {forecastUntilLabel}

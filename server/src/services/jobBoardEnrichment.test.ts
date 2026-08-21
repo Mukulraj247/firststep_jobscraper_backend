@@ -15,9 +15,22 @@ describe('jobBoardEnrichment helpers', () => {
       jobDescription: 'x'.repeat(450),
       location: 'Remote',
       jobExperience: '3',
+      benefits: ['401(k) matching'],
+      seniorityLevel: 'Senior Level',
+      educationRequirement: "Bachelor's degree (required)",
+      visaSponsorship: 'yes',
+      certifications: ['PMP'],
+      companyEmployeeCount: 250,
+      companyFoundedYear: 2015,
     });
     expect(snap.jobTitle).toBe('Engineer');
     expect(snap.jobExperience).toBe(3);
+    expect(snap.benefits).toEqual(['401(k) matching']);
+    expect(snap.seniorityLevel).toBe('Senior Level');
+    expect(snap.visaSponsorship).toBe('yes');
+    expect(snap.certifications).toEqual(['PMP']);
+    expect(snap.companyEmployeeCount).toBe(250);
+    expect(snap.companyFoundedYear).toBe(2015);
     expect(isListRowComplete(snap)).toBe(true);
   });
 

@@ -35,7 +35,7 @@ import {
   canSubmitAction,
   controlMinHeight,
   failureReasonLabel,
-  formatDuration,
+  formatFailureTimingLines,
   formatRunWhen,
   failuresTableScrollSx,
   reasonSelectAriaLabel,
@@ -85,7 +85,7 @@ export function FailureReasonSelect({
   const name = runDisplayName(run);
   const labelId = reasonSelectLabelId(runId);
   return (
-    <FormControl size="small" fullWidth sx={{ minWidth: 160 }}>
+    <FormControl size="small" fullWidth sx={{ minWidth: 0 }}>
       <InputLabel id={labelId} sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
         {reasonSelectAriaLabel(name, runId)}
       </InputLabel>
@@ -236,7 +236,7 @@ export function FailureTable({
                     <StatusCell status={run.status} />
                   </TableCell>
                   <TableCell
-                    sx={{ minWidth: 180 }}
+                    sx={{ minWidth: 120 }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     <FailureReasonSelect
@@ -263,11 +263,18 @@ export function FailureTable({
                   <TableCell>
                     <AnomalyChip run={run} />
                   </TableCell>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                    <Typography variant="body2">{formatRunWhen(run.startedAt)}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {formatDuration(run.durationMs ?? run.duration)}
-                    </Typography>
+                  <TableCell sx={{ whiteSpace: 'normal' }}>
+                    {(() => {
+                      const timing = formatFailureTimingLines(run);
+                      return (
+                        <>
+                          <Typography variant="body2">{timing.when}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {timing.detail}
+                          </Typography>
+                        </>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>
                     {attemptsLabel(run.retryCount)}

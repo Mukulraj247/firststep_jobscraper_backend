@@ -1,12 +1,29 @@
 import type { OpsMetricsWindow } from '../../api/automation';
 import {
   endOfIstDay,
+  formatIstYmd,
   lastNIstDayYmds,
   startOfIstDay,
 } from '../../shared/opsTimezone';
 
 export const DASHBOARD_TAG_LIMIT = 15;
 export const DASHBOARD_DATE_LOOKBACK_DAYS = 7;
+
+export function defaultDashboardDate(nowMs: number = Date.now()): string {
+  return formatIstYmd(nowMs);
+}
+
+export function isDashboardToday(date: string, nowMs: number = Date.now()): boolean {
+  return Boolean(date) && date === formatIstYmd(nowMs);
+}
+
+/** Past IST day → full calendar day; today/empty → rolling window mode. */
+export function isDashboardCalendarDayMode(
+  date: string,
+  nowMs: number = Date.now(),
+): boolean {
+  return Boolean(date) && !isDashboardToday(date, nowMs);
+}
 
 export const GEO_TAG_NAMESPACES = ['state', 'region', 'city'] as const;
 

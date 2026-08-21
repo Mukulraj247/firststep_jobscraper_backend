@@ -14,6 +14,7 @@ import {
 import { registerOpsDigestJob } from './services/opsDigest';
 import { drainAndCloseAgenda, getScrapeDrainMs } from './queue/scraperQueue';
 import { closeBrowserReusePool } from './services/browserReusePool';
+import { setChromiumSlotProcessKind } from './services/chromiumSlotLease';
 import {
   killUntrackedPlaywrightChromium,
   startOrphanChromiumReaper,
@@ -28,6 +29,7 @@ let shuttingDown = false;
 async function startWorkerRuntime() {
   warnIfConstrainedScraperFingerprint((level, msg) => logger.log(level as any, msg));
 
+  setChromiumSlotProcessKind('scraper');
   await connectDB();
   await syncDB();
 

@@ -188,25 +188,164 @@ export function buildRunListSort(
   return { [sortField]: -1, _id: -1 };
 }
 
-/** Legacy runs may lack sortAt; derive a stable timestamp for ordering and windows. */
+/**
+ * Prefer finishedAt for list windows (when the run ended / failed), then stored
+ * sortAt, then startedAt. Creation-time sortAt alone wrongly keeps long-running
+ * failures out of short windows and can disagree with the Timing column.
+ */
 export function buildRunListSortAtStage(): Record<string, unknown> {
   return {
     $addFields: {
       [RUN_LIST_SORT_FIELD]: {
         $ifNull: [
-          '$sortAt',
           {
             $convert: {
-              input: { $ifNull: ['$finishedAt', '$startedAt'] },
+              input: '$finishedAt',
               to: 'date',
               onError: null,
               onNull: null,
             },
           },
+          {
+            $ifNull: [
+              '$sortAt',
+              {
+                $convert: {
+                  input: '$startedAt',
+                  to: 'date',
+                  onError: null,
+                  onNull: null,
+                },
+              },
+            ],
+          },
         ],
       },
     },
   };
+}
+
+/** Success statuses that clear a prior failure after a consecutive streak. */
+export const FAILURE_HEAL_SUCCESS_STATUSES = ['success', 'completed'] as const;
+export const FAILURE_HEAL_SUCCESS_STREAK = 2;
+
+export function isSuccessRunStatus(status?: string | null): boolean {
+  const normalized = String(status || '').toLowerCase();
+  return (FAILURE_HEAL_SUCCESS_STATUSES as readonly string[]).includes(normalized);
+}
+
+/** True when the next N runs after a failure are all successes. */
+export function isFailureHealedBySuccessStreak(
+  nextRuns: Array<{ status?: string | null }>,
+  minStreak: number = FAILURE_HEAL_SUCCESS_STREAK,
+): boolean {
+  if (!Number.isFinite(minStreak) || minStreak <= 0) return false;
+  if (nextRuns.length < minStreak) return false;
+  return nextRuns.slice(0, minStreak).every((run) => isSuccessRunStatus(run.status));
+}
+
+/**
+ * Drop failure rows whose automation already posted `minStreak` consecutive
+ * successes after this failure (Failure Dashboard heal rule).
+ */
+export function buildFailureHealSuppressionStages(
+  minStreak: number = FAILURE_HEAL_SUCCESS_STREAK,
+): Record<string, unknown>[] {
+  const streak = Math.max(1, Math.floor(minStreak) || FAILURE_HEAL_SUCCESS_STREAK);
+  return [
+    {
+      $lookup: {
+        from: 'maxun_runs',
+        let: {
+          robotId: '$robotMetaId',
+          afterAt: `$${RUN_LIST_SORT_FIELD}`,
+          selfId: '$runId',
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$robotMetaId', '$$robotId'] },
+                  { $ne: ['$runId', '$$selfId'] },
+                ],
+              },
+            },
+          },
+          {
+            $addFields: {
+              _healSortAt: {
+                $ifNull: [
+                  {
+                    $convert: {
+                      input: '$finishedAt',
+                      to: 'date',
+                      onError: null,
+                      onNull: null,
+                    },
+                  },
+                  {
+                    $ifNull: [
+                      '$sortAt',
+                      {
+                        $convert: {
+                          input: '$startedAt',
+                          to: 'date',
+                          onError: null,
+                          onNull: null,
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $ne: ['$_healSortAt', null] },
+                  { $ne: ['$$afterAt', null] },
+                  { $gt: ['$_healSortAt', '$$afterAt'] },
+                ],
+              },
+            },
+          },
+          { $sort: { _healSortAt: 1, _id: 1 } },
+          { $limit: streak },
+          { $project: { status: 1 } },
+        ],
+        as: '_healNextRuns',
+      },
+    },
+    {
+      $match: {
+        $expr: {
+          $or: [
+            { $lt: [{ $size: '$_healNextRuns' }, streak] },
+            {
+              $not: {
+                $allElementsTrue: {
+                  $map: {
+                    input: '$_healNextRuns',
+                    as: 'r',
+                    in: {
+                      $in: [
+                        { $toLower: { $ifNull: ['$$r.status', ''] } },
+                        [...FAILURE_HEAL_SUCCESS_STATUSES],
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    { $project: { _healNextRuns: 0 } },
+  ];
 }
 
 export function buildRunListMatch(
@@ -348,6 +487,8 @@ function appendComputedWindowStages(
     toDate?: Date | null;
     minDurationMs?: number | null;
     maxDurationMs?: number | null;
+    excludeHealedFailures?: boolean;
+    healSuccessStreak?: number;
   },
 ): void {
   pipeline.push(buildRunListSortAtStage());
@@ -361,6 +502,13 @@ function appendComputedWindowStages(
     if (durationMatch) {
       pipeline.push({ $match: durationMatch });
     }
+  }
+  if (options.excludeHealedFailures) {
+    pipeline.push(
+      ...buildFailureHealSuppressionStages(
+        options.healSuccessStreak ?? FAILURE_HEAL_SUCCESS_STREAK,
+      ),
+    );
   }
 }
 
@@ -419,6 +567,8 @@ export type RunListPaginationOptions = {
   toDate?: Date | null;
   minDurationMs?: number | null;
   maxDurationMs?: number | null;
+  excludeHealedFailures?: boolean;
+  healSuccessStreak?: number;
   failureReasonPageStages?: Record<string, unknown>[];
 };
 
@@ -431,7 +581,14 @@ export function buildRunListPaginationPipeline(
     ...(options.failureReasonPageStages || []),
   ];
 
-  appendComputedWindowStages(pipeline, options);
+  appendComputedWindowStages(pipeline, {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    minDurationMs: options.minDurationMs,
+    maxDurationMs: options.maxDurationMs,
+    excludeHealedFailures: options.excludeHealedFailures,
+    healSuccessStreak: options.healSuccessStreak,
+  });
 
   pipeline.push(
     { $sort: buildRunListSort() },
@@ -458,7 +615,14 @@ export function buildRunGroupsPipeline(
     ...(options.failureReasonPageStages || []),
   ];
 
-  appendComputedWindowStages(pipeline, options);
+  appendComputedWindowStages(pipeline, {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    minDurationMs: options.minDurationMs,
+    maxDurationMs: options.maxDurationMs,
+    excludeHealedFailures: options.excludeHealedFailures,
+    healSuccessStreak: options.healSuccessStreak,
+  });
 
   pipeline.push(
     { $sort: buildRunListSort() },
@@ -487,6 +651,8 @@ export type RunFailureCountsOptions = {
   toDate?: Date | null;
   minDurationMs?: number | null;
   maxDurationMs?: number | null;
+  excludeHealedFailures?: boolean;
+  healSuccessStreak?: number;
   failureReasonCountStages: Record<string, unknown>[];
 };
 
@@ -499,7 +665,14 @@ export function buildRunFailureCountsPipeline(
     pipeline.push(options.failureReasonCountStages[0]);
   }
 
-  appendComputedWindowStages(pipeline, options);
+  appendComputedWindowStages(pipeline, {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    minDurationMs: options.minDurationMs,
+    maxDurationMs: options.maxDurationMs,
+    excludeHealedFailures: options.excludeHealedFailures,
+    healSuccessStreak: options.healSuccessStreak,
+  });
 
   if (options.failureReasonCountStages.length > 1) {
     pipeline.push(options.failureReasonCountStages[1]);

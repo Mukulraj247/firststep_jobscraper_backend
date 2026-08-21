@@ -33,7 +33,13 @@ describe('mapOpsDigestSendResult', () => {
       payload: {
         generatedAt: '2026-08-19T12:00:00.000Z',
         windows: {
-          last6h: { total: 10, passed: 8, failed: 2 },
+          last6h: {
+            total: 10,
+            passed: 8,
+            failed: 2,
+            jobsAddedToBoard: 42,
+            rowsExtracted: 120,
+          },
         },
       } as any,
     });
@@ -43,7 +49,13 @@ describe('mapOpsDigestSendResult', () => {
       requestId: 'req-1',
       summary: {
         generatedAt: '2026-08-19T12:00:00.000Z',
-        last6h: { total: 10, passed: 8, failed: 2 },
+        last6h: {
+          total: 10,
+          passed: 8,
+          failed: 2,
+          jobsAddedToBoard: 42,
+          rowsExtracted: 120,
+        },
       },
     });
   });

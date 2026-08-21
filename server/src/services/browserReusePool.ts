@@ -18,6 +18,13 @@ import {
   setOrphanReaperPoolEmptyCheck,
   killUntrackedPlaywrightChromium,
 } from './browserProcess';
+import {
+  claimChromiumSlot,
+  getChromiumSlotProcessKind,
+  releaseChromiumSlot,
+  type ChromiumSlotHandle,
+  type ChromiumSlotKind,
+} from './chromiumSlotLease';
 
 interface PooledBrowserEntry {
   key: string;
@@ -37,6 +44,8 @@ interface PooledPageLease {
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  /** Droplet-wide Chromium slot (released in releasePooledPage). */
+  chromiumSlot?: ChromiumSlotHandle;
 }
 
 interface AcquirePooledPageOptions {
@@ -48,6 +57,9 @@ interface AcquirePooledPageOptions {
   };
   maxPagesPerBrowser?: number;
   blockResources?: boolean;
+  /** Override process default (`scraper` | `aggregator`). */
+  chromiumSlotKind?: ChromiumSlotKind;
+  chromiumSlotRunId?: string;
 }
 
 const pooledBrowsers = new Map<string, PooledBrowserEntry>();
@@ -254,7 +266,19 @@ async function getOrCreateBrowser(options: AcquirePooledPageOptions): Promise<Po
 }
 
 export async function acquirePooledPage(options: AcquirePooledPageOptions = {}): Promise<PooledPageLease> {
-  const entry = await getOrCreateBrowser(options);
+  const chromiumSlot = await claimChromiumSlot({
+    kind: options.chromiumSlotKind || getChromiumSlotProcessKind(),
+    runId: options.chromiumSlotRunId,
+  });
+
+  let entry: PooledBrowserEntry;
+  try {
+    entry = await getOrCreateBrowser(options);
+  } catch (error) {
+    await releaseChromiumSlot(chromiumSlot).catch(() => {});
+    throw error;
+  }
+
   entry.activePages += 1;
   entry.lastUsedAt = Date.now();
   entry.acquiredAt = Date.now();
@@ -296,12 +320,14 @@ export async function acquirePooledPage(options: AcquirePooledPageOptions = {}):
       browser: entry.browser,
       context,
       page,
+      chromiumSlot,
     };
   } catch (error) {
     entry.activePages = Math.max(0, entry.activePages - 1);
     entry.lastUsedAt = Date.now();
     // Sick browser after create/context failure — evict the whole process.
     await evictBrowserFromPool(entry.key).catch(() => {});
+    await releaseChromiumSlot(chromiumSlot).catch(() => {});
     throw error;
   }
 }
@@ -338,6 +364,7 @@ export async function releasePooledPage(lease: PooledPageLease | null | undefine
         await evictBrowserFromPool(lease.key);
       }
     }
+    await releaseChromiumSlot(lease.chromiumSlot).catch(() => {});
   }
 }
 

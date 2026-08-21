@@ -4,7 +4,10 @@ import {
   GEO_TAG_NAMESPACES,
   applyDashboardTagSelection,
   dashboardDatePickerBounds,
+  defaultDashboardDate,
   failuresHrefFromDashboard,
+  isDashboardCalendarDayMode,
+  isDashboardToday,
   isSelectableDashboardTag,
   normalizeChartTimestampMs,
   toggleDashboardTag,
@@ -21,6 +24,25 @@ describe('failuresHrefFromDashboard', () => {
     expect(failuresHrefFromDashboard({ mode: 'day', date: '2026-08-11' })).toBe(
       '/failures?from=2026-08-10T18:30:00.000Z&to=2026-08-11T18:29:59.999Z',
     );
+  });
+});
+
+describe('dashboard today vs past day mode', () => {
+  const now = Date.parse('2026-08-18T10:00:00.000Z'); // 15:30 IST on 18 Aug
+
+  it('defaults the day picker to today IST', () => {
+    expect(defaultDashboardDate(now)).toBe('2026-08-18');
+  });
+
+  it('treats today as rolling window mode, not calendar day', () => {
+    expect(isDashboardToday('2026-08-18', now)).toBe(true);
+    expect(isDashboardCalendarDayMode('2026-08-18', now)).toBe(false);
+    expect(isDashboardCalendarDayMode('', now)).toBe(false);
+  });
+
+  it('treats a past IST day as calendar day mode', () => {
+    expect(isDashboardToday('2026-08-11', now)).toBe(false);
+    expect(isDashboardCalendarDayMode('2026-08-11', now)).toBe(true);
   });
 });
 

@@ -13,6 +13,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TablePagination,
   TableRow,
@@ -204,7 +205,7 @@ export function RunGroupAccordion({
             alignItems="center"
             flexWrap="wrap"
             useFlexGap
-            sx={{ flexShrink: 0, justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}
+            sx={{ maxWidth: '100%', justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}
           >
             <RunStatusChip status={latest.status} anomaly={latest.anomaly} anomalyMeta={latest.anomalyMeta} />
             <Chip
@@ -264,56 +265,58 @@ export function RunGroupAccordion({
                 <CircularProgress size={16} />
               </Box>
             ) : null}
-            <Table stickyHeader aria-label="sticky table" size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell />
-                  {translatedColumns.map((column) => (
-                    <TableCell
-                      key={column.id}
-                      align={column.align}
-                      style={{
-                        minWidth: column.minWidth,
-                        cursor: column.id === 'startedAt' || column.id === 'finishedAt' ? 'pointer' : 'default',
-                      }}
-                      onClick={() => {
-                        if (column.id === 'startedAt' || column.id === 'finishedAt') {
-                          handleSort(column.id);
-                        }
-                      }}
-                    >
-                      <Tooltip
-                        title={
-                          column.id === 'startedAt' || column.id === 'finishedAt'
-                            ? 'Click to sort'
-                            : ''
-                        }
+            <TableContainer sx={{ overflowX: 'auto', maxWidth: '100%' }}>
+              <Table stickyHeader aria-label="sticky table" size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell />
+                    {translatedColumns.map((column) => (
+                      <TableCell
+                        key={column.id}
+                        align={column.align}
+                        style={{
+                          minWidth: column.minWidth,
+                          cursor: column.id === 'startedAt' || column.id === 'finishedAt' ? 'pointer' : 'default',
+                        }}
+                        onClick={() => {
+                          if (column.id === 'startedAt' || column.id === 'finishedAt') {
+                            handleSort(column.id);
+                          }
+                        }}
                       >
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          {column.label}
-                          {renderSortIcon(column)}
-                        </Box>
-                      </Tooltip>
-                    </TableCell>
+                        <Tooltip
+                          title={
+                            column.id === 'startedAt' || column.id === 'finishedAt'
+                              ? 'Click to sort'
+                              : ''
+                          }
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {column.label}
+                            {renderSortIcon(column)}
+                          </Box>
+                        </Tooltip>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sortedRows.map((row) => (
+                    <CollapsibleRow
+                      key={`row-${row.runId || row.id}`}
+                      row={row}
+                      handleDelete={onDelete}
+                      isOpen={expandedRows.has(row.runId)}
+                      onToggleExpanded={(shouldExpand) => onRowExpand(row.runId, row.robotMetaId, shouldExpand)}
+                      currentLog={currentInterpretationLog}
+                      abortRunHandler={abortRunHandler}
+                      runningRecordingName={runningRecordingName}
+                      urlRunId={urlRunId}
+                    />
                   ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {sortedRows.map((row) => (
-                  <CollapsibleRow
-                    key={`row-${row.runId || row.id}`}
-                    row={row}
-                    handleDelete={onDelete}
-                    isOpen={expandedRows.has(row.runId)}
-                    onToggleExpanded={(shouldExpand) => onRowExpand(row.runId, row.robotMetaId, shouldExpand)}
-                    currentLog={currentInterpretationLog}
-                    abortRunHandler={abortRunHandler}
-                    runningRecordingName={runningRecordingName}
-                    urlRunId={urlRunId}
-                  />
-                ))}
-              </TableBody>
-            </Table>
+                </TableBody>
+              </Table>
+            </TableContainer>
             <TablePagination
               component="div"
               count={total}

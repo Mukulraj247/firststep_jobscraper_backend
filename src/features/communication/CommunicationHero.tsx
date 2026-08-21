@@ -33,7 +33,7 @@ export function CommunicationHero({ canSend }: { canSend: boolean | undefined })
           </Typography>
           <Typography sx={heroGlassTitleSx('lg')}>Email trigger</Typography>
           <Typography variant="body2" sx={{ ...heroGlassSubtitleSx, maxWidth: 560 }}>
-            Manual send for the Scout-X ops digest — run totals, failures, and compute snapshot.
+            Manual send for the Scout-X ops digest — last 6h runs, jobs added, failures, and a light infra snapshot.
           </Typography>
           <Stack direction="row" alignItems="center" spacing={1} sx={heroGlassPillSx}>
             <Box

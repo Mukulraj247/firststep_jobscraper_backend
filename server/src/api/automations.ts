@@ -249,6 +249,7 @@ type SaasRunListQuery = {
   minDurationMs: number | null;
   maxDurationMs: number | null;
   failureReasons: string[];
+  excludeHealedFailures: boolean;
 };
 
 function parseOptionalNonNegativeNumber(raw: unknown): number | null {
@@ -270,6 +271,7 @@ async function resolveSaasRunListQuery(req: any): Promise<SaasRunListQuery> {
     minDurationMs: null,
     maxDurationMs: null,
     failureReasons: [],
+    excludeHealedFailures: false,
   });
 
   const qFilter = req.query.q != null ? String(req.query.q).trim() : '';
@@ -372,6 +374,12 @@ async function resolveSaasRunListQuery(req: any): Promise<SaasRunListQuery> {
   const minDurationMs = parseOptionalNonNegativeNumber(req.query.minDurationMs);
   const maxDurationMs = parseOptionalNonNegativeNumber(req.query.maxDurationMs);
 
+  const excludeHealedRaw = String(req.query.excludeHealed || '').trim().toLowerCase();
+  const excludeHealedFailures =
+    excludeHealedRaw === '1'
+    || excludeHealedRaw === 'true'
+    || excludeHealedRaw === 'yes';
+
   const { fromDate, toDate } = parseRunListDateQuery({
     date: req.query.date,
     from: req.query.from,
@@ -398,6 +406,7 @@ async function resolveSaasRunListQuery(req: any): Promise<SaasRunListQuery> {
     minDurationMs,
     maxDurationMs,
     failureReasons,
+    excludeHealedFailures,
   };
 }
 
@@ -2057,6 +2066,7 @@ router.get('/runs/groups', async (req: any, res: any) => {
       toDate: query.toDate,
       minDurationMs: query.minDurationMs,
       maxDurationMs: query.maxDurationMs,
+      excludeHealedFailures: query.excludeHealedFailures,
       failureReasonPageStages: failureReasonStages.page,
     });
 
@@ -2545,6 +2555,7 @@ router.get('/runs', async (req: any, res: any) => {
       toDate: query.toDate,
       minDurationMs: query.minDurationMs,
       maxDurationMs: query.maxDurationMs,
+      excludeHealedFailures: query.excludeHealedFailures,
       failureReasonPageStages: failureReasonStages.page,
     });
 
@@ -2554,6 +2565,7 @@ router.get('/runs', async (req: any, res: any) => {
       toDate: query.toDate,
       minDurationMs: query.minDurationMs,
       maxDurationMs: query.maxDurationMs,
+      excludeHealedFailures: query.excludeHealedFailures,
       failureReasonCountStages: failureReasonStages.counts,
     });
 

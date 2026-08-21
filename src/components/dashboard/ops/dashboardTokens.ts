@@ -184,7 +184,9 @@ export const heroGlassPrimaryButtonSx: SystemStyleObject<Theme> = {
 export const heroGlassFormControlSx = (
   minHeight?: number | string,
 ): SystemStyleObject<Theme> => ({
-  minWidth: 150,
+  minWidth: 0,
+  flex: '1 1 140px',
+  maxWidth: '100%',
   '& .MuiInputLabel-root': { color: FIRSTSTEP.textMuted },
   '& .MuiInputLabel-root.Mui-focused': { color: FIRSTSTEP.tealDark },
   '& .MuiOutlinedInput-root': {

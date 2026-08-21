@@ -83,6 +83,13 @@ export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnaps
     minimumQualifications: asStringList(data.minimumQualifications),
     preferredQualifications: asStringList(data.preferredQualifications),
     benefits: asStringList(data.benefits),
+    certifications: asStringList(data.certifications),
+    seniorityLevel: decodeHtmlEntities(asText(data.seniorityLevel)),
+    roleType: decodeHtmlEntities(asText(data.roleType)),
+    educationRequirement: decodeHtmlEntities(asText(data.educationRequirement)),
+    visaSponsorship: asText(data.visaSponsorship).toLowerCase(),
+    companyEmployeeCount: asExperience(data.companyEmployeeCount),
+    companyFoundedYear: asExperience(data.companyFoundedYear),
   };
 }
 
@@ -210,6 +217,13 @@ function applySnapshotToDoc(
     minimumQualifications: snapshot.minimumQualifications || [],
     preferredQualifications: snapshot.preferredQualifications || [],
     benefits: snapshot.benefits || [],
+    certifications: snapshot.certifications || [],
+    seniorityLevel: snapshot.seniorityLevel || '',
+    roleType: snapshot.roleType || '',
+    educationRequirement: snapshot.educationRequirement || '',
+    visaSponsorship: snapshot.visaSponsorship || '',
+    companyEmployeeCount: snapshot.companyEmployeeCount || 0,
+    companyFoundedYear: snapshot.companyFoundedYear || 0,
     contentHash: contentHashFromFields({
       jobTitle: snapshot.jobTitle,
       companyName: snapshot.companyName,

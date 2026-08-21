@@ -14,7 +14,8 @@ import {
     TableRow,
     TableBody,
     TableCell,
-    Paper
+    Paper,
+    Stack,
 } from '@mui/material';
 import { sendProxyConfig, getProxyConfig, testProxyConfig, deleteProxyConfig } from '../../api/proxy';
 import { useGlobalInfoStore } from '../../context/globalInfo';
@@ -141,14 +142,17 @@ const ProxyForm: React.FC = () => {
     }, []);
 
     return (
-        <Box sx={{
+        <Box
+            sx={{
             display: 'flex',
-            gap: 4,
-            p: 5,
+            flexDirection: { xs: 'column', lg: 'row' },
+            gap: { xs: 2, md: 3 },
+            p: { xs: 2, md: 3 },
             width: '100%',
             maxWidth: '100%',
-            boxSizing: 'border-box'
-        }}>
+            boxSizing: 'border-box',
+        }}
+        >
             <Box sx={{
                 flex: 1,
                 minWidth: 0,
@@ -160,7 +164,7 @@ const ProxyForm: React.FC = () => {
                 {
                     isProxyConfigured ? (
                         <Box sx={{ width: '100%', mt: 3 }}>
-                            <TableContainer component={Paper} sx={{ mb: 2 }}>
+                            <TableContainer component={Paper} sx={{ mb: 2, overflowX: 'auto', maxWidth: '100%' }}>
                                 <Table>
                                     <TableHead>
                                         <TableRow>
@@ -170,18 +174,20 @@ const ProxyForm: React.FC = () => {
                                     </TableHead>
                                     <TableBody>
                                         <TableRow>
-                                            <TableCell>{proxy.proxy_url}</TableCell>
+                                            <TableCell sx={{ wordBreak: 'break-all' }}>{proxy.proxy_url}</TableCell>
                                             <TableCell>{proxy.auth ? 'Yes' : 'No'}</TableCell>
                                         </TableRow>
                                     </TableBody>
                                 </Table>
                             </TableContainer>
+                            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                             <Button variant="outlined" color="primary" onClick={testProxy}>
                                 {t('proxy.test_proxy')}
                             </Button>
-                            <Button variant="outlined" color="error" onClick={removeProxy} sx={{ ml: 1 }}>
+                            <Button variant="outlined" color="error" onClick={removeProxy}>
                                 {t('proxy.remove_proxy')}
                             </Button>
+                            </Stack>
                         </Box>
                     ) : (
                         <Box component="form" onSubmit={handleSubmit} sx={{ width: '100%', mt: 3 }}>

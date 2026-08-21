@@ -82,10 +82,11 @@ export function OpsDigestPanel({
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         justifyContent="space-between"
-        alignItems={{ sm: 'flex-start' }}
+        alignItems={{ xs: 'stretch', sm: 'flex-start' }}
         spacing={2}
+        sx={{ width: '100%' }}
       >
-        <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+        <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ minWidth: 0, flex: 1 }}>
           <Box
             aria-hidden
             sx={{
@@ -111,7 +112,17 @@ export function OpsDigestPanel({
             </Typography>
           </Box>
         </Stack>
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={1}
+          flexWrap="wrap"
+          useFlexGap
+          sx={{
+            width: { xs: '100%', sm: 'auto' },
+            justifyContent: { xs: 'stretch', sm: 'flex-end' },
+            '& > *': { flex: { xs: '1 1 auto', sm: '0 0 auto' } },
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={loading ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />}

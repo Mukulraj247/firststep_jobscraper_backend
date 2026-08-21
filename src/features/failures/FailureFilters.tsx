@@ -102,8 +102,8 @@ export function FailureFilters({
           display: 'grid',
           gridTemplateColumns: {
             xs: '1fr',
-            sm: '1fr 1fr',
-            lg: 'minmax(180px, 1.6fr) minmax(150px, 1fr) minmax(160px, 1fr) minmax(140px, 1fr)',
+            md: '1fr 1fr',
+            xl: 'minmax(180px, 1.6fr) minmax(150px, 1fr) minmax(160px, 1fr) minmax(140px, 1fr)',
           },
           gap: 1.5,
           alignItems: 'center',

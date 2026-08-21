@@ -1,5 +1,5 @@
 import { DESKTOP_BREAKPOINT_PX } from '../../components/dashboard/appShellBehavior';
-import { FIRSTSTEP, tint, hiddenScrollbarSx } from '../../components/dashboard/ops/dashboardTokens';
+import { FIRSTSTEP, tint } from '../../components/dashboard/ops/dashboardTokens';
 import type { OpsMetricsWindow } from '../../api/automation';
 
 export type FailureTimeWindow = OpsMetricsWindow | 'all';
@@ -494,7 +494,6 @@ export function failuresTableScrollSx() {
     maxWidth: '100%',
     overflowX: 'auto',
     overflowY: 'visible',
-    ...hiddenScrollbarSx,
   };
 }
 
@@ -581,6 +580,47 @@ export function formatDuration(ms: number | null | undefined): string {
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
   return `${hours}h ${remainingMinutes}m`;
+}
+
+/** Relative age from an absolute timestamp (e.g. "12m ago"). */
+export function formatRelativeAgo(
+  value?: string | null,
+  nowMs: number = Date.now(),
+): string {
+  if (!value) return '—';
+  const ms = Date.parse(String(value));
+  if (Number.isNaN(ms)) return '—';
+  const delta = Math.max(0, nowMs - ms);
+  if (delta < 60_000) return `${Math.max(1, Math.floor(delta / 1000))}s ago`;
+  if (delta < 60 * 60_000) {
+    const minutes = Math.floor(delta / 60_000);
+    return `${minutes}m ago`;
+  }
+  if (delta < 48 * 60 * 60_000) {
+    const hours = Math.floor(delta / (60 * 60_000));
+    const minutes = Math.floor((delta % (60 * 60_000)) / 60_000);
+    return minutes > 0 ? `${hours}h ${minutes}m ago` : `${hours}h ago`;
+  }
+  const days = Math.floor(delta / (24 * 60 * 60_000));
+  return days === 1 ? '1d ago' : `${days}d ago`;
+}
+
+/** Timing cell: when it failed + how long ago + how long it ran. */
+export function formatFailureTimingLines(run: {
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+  duration?: number | null;
+}, nowMs: number = Date.now()): { when: string; detail: string } {
+  const whenRaw = run.finishedAt || run.startedAt;
+  const when = formatRunWhen(whenRaw, run.startedAt);
+  const ago = formatRelativeAgo(whenRaw, nowMs);
+  const duration = formatDuration(run.durationMs ?? run.duration);
+  const detail =
+    duration === '—'
+      ? ago
+      : `${ago} · ran ${duration}`;
+  return { when, detail };
 }
 
 /** Prefer ISO display; for legacy locale strings, pick the reading closest to anchor. */

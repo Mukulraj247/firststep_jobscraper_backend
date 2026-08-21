@@ -5,7 +5,12 @@ import Run from '../models/Run';
 import Robot from '../models/Robot';
 import { SCRAPER_JOB_CONCURRENCY } from '../queue/scraperQueue';
 import { ownerIdFilter, normalizeOwnerIdForWrite } from '../utils/ownerId';
-import { endOfIstDay, floorToIstUnit, startOfIstDay } from '../../../src/shared/opsTimezone';
+import {
+  endOfIstDay,
+  floorToIstUnit,
+  formatIstYmd,
+  startOfIstDay,
+} from '../../../src/shared/opsTimezone';
 import { getJobCategoryDashboardTags } from '../constants/tagCatalog';
 import {
   buildOwnerRunFilter,
@@ -112,7 +117,10 @@ export function resolveOpsMetricsBounds(opts: {
 }): OpsMetricsBounds {
   const nowMs = opts.nowMs ?? Date.now();
   const date = opts.date ? parseOpsMetricsDate(opts.date) : null;
-  if (date) {
+  // Today (IST) uses the rolling window so last N hours may cross midnight.
+  // Only past/future calendar days use a full midnight–midnight IST day.
+  const useCalendarDay = Boolean(date && date !== formatIstYmd(nowMs));
+  if (useCalendarDay && date) {
     const sinceMs = startOfIstDay(date).getTime();
     const untilMs = endOfIstDay(date).getTime();
     const bucketMs = 3 * 60 * 60 * 1000;

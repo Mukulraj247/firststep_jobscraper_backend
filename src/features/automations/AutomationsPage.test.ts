@@ -514,7 +514,7 @@ describe('task 9 visual contracts', () => {
     expect(automationsTableScrollSx().flex).toBe('none');
     expect(automationsTableScrollSx().overflowY).toBe('visible');
     expect(automationsTableScrollSx().overflowX).toBe('auto');
-    expect(automationsTableScrollSx().scrollbarWidth).toBe('none');
+    expect(automationsTableScrollSx().scrollbarWidth).toBeUndefined();
     expect(automationsTableScrollSx().maxHeight).toBeUndefined();
     expect(groupTagsForDisplay(['role:Engineer', 'industry:tech', 'unknown'])).toEqual([
       { label: 'Job Title / Role', tags: ['role:Engineer'] },

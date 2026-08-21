@@ -96,8 +96,8 @@ export function AutomationFilters({
           display: 'grid',
           gridTemplateColumns: {
             xs: '1fr',
-            sm: '1fr 1fr',
-            lg: 'minmax(180px, 1.5fr) minmax(160px, 1fr) minmax(180px, 1fr) auto',
+            md: '1fr 1fr',
+            xl: 'minmax(180px, 1.5fr) minmax(160px, 1fr) minmax(180px, 1fr) auto',
           },
           gap: 1.5,
           alignItems: 'center',
@@ -157,8 +157,8 @@ export function AutomationFilters({
             fontWeight: 700,
             color: FIRSTSTEP.navy,
             borderColor: 'divider',
-            justifySelf: { lg: 'start' },
-            whiteSpace: 'nowrap',
+            justifySelf: { xl: 'start' },
+            whiteSpace: 'normal',
             minHeight,
           }}
         >

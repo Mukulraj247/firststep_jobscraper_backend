@@ -30,6 +30,13 @@ export const CANONICAL_JOB_FIELD_ORDER = [
   'minimumQualifications',
   'preferredQualifications',
   'benefits',
+  'certifications',
+  'seniorityLevel',
+  'roleType',
+  'educationRequirement',
+  'visaSponsorship',
+  'companyEmployeeCount',
+  'companyFoundedYear',
 ] as const;
 
 export type CanonicalJobData = Record<
@@ -153,6 +160,18 @@ export const buildCanonicalJobDataSync = (
   const asList = (v: unknown): string[] =>
     Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean) : [];
 
+  const asPositiveInt = (v: unknown): number => {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
+    if (typeof v === 'string' && v.trim()) {
+      const n = parseInt(v.replace(/\D/g, ''), 10);
+      if (!Number.isNaN(n) && n > 0) return n;
+    }
+    return 0;
+  };
+
+  const visaRaw = str(data.visaSponsorship).toLowerCase();
+  const visaSponsorship = visaRaw === 'yes' || visaRaw === 'no' ? visaRaw : '';
+
   return {
     jobId,
     jobUrl,
@@ -179,6 +198,13 @@ export const buildCanonicalJobDataSync = (
     minimumQualifications: asList(data.minimumQualifications),
     preferredQualifications: asList(data.preferredQualifications),
     benefits: asList(data.benefits),
+    certifications: asList(data.certifications),
+    seniorityLevel: str(data.seniorityLevel),
+    roleType: str(data.roleType),
+    educationRequirement: str(data.educationRequirement),
+    visaSponsorship,
+    companyEmployeeCount: asPositiveInt(data.companyEmployeeCount),
+    companyFoundedYear: asPositiveInt(data.companyFoundedYear),
   };
 };
 

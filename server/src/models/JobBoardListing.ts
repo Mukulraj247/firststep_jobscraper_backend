@@ -24,6 +24,13 @@ export interface IJobBoardListSnapshot {
   minimumQualifications?: string[];
   preferredQualifications?: string[];
   benefits?: string[];
+  certifications?: string[];
+  seniorityLevel?: string;
+  roleType?: string;
+  educationRequirement?: string;
+  visaSponsorship?: string;
+  companyEmployeeCount?: number;
+  companyFoundedYear?: number;
 }
 
 export interface IJobBoardEnrichment {
@@ -67,6 +74,13 @@ export interface IJobBoardListing extends Document {
   responsibilities: string[];
   benefits: string[];
   skills: string[];
+  certifications: string[];
+  seniorityLevel: string;
+  roleType: string;
+  educationRequirement: string;
+  visaSponsorship: string;
+  companyEmployeeCount: number;
+  companyFoundedYear: number;
   status: JobBoardStatus;
   priority: number;
   leaseUntil: Date | null;
@@ -102,6 +116,13 @@ const ListSnapshotSchema = new Schema(
     minimumQualifications: { type: [String], default: [] },
     preferredQualifications: { type: [String], default: [] },
     benefits: { type: [String], default: [] },
+    certifications: { type: [String], default: [] },
+    seniorityLevel: { type: String, default: '' },
+    roleType: { type: String, default: '' },
+    educationRequirement: { type: String, default: '' },
+    visaSponsorship: { type: String, default: '' },
+    companyEmployeeCount: { type: Number, default: 0 },
+    companyFoundedYear: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -155,6 +176,13 @@ const JobBoardListingSchema: Schema = new Schema(
     responsibilities: { type: [String], default: [] },
     benefits: { type: [String], default: [] },
     skills: { type: [String], default: [] },
+    certifications: { type: [String], default: [] },
+    seniorityLevel: { type: String, default: '' },
+    roleType: { type: String, default: '' },
+    educationRequirement: { type: String, default: '' },
+    visaSponsorship: { type: String, default: '' },
+    companyEmployeeCount: { type: Number, default: 0 },
+    companyFoundedYear: { type: Number, default: 0 },
     status: {
       type: String,
       enum: ['queued', 'enriching', 'ready', 'partial', 'failed', 'expired'],

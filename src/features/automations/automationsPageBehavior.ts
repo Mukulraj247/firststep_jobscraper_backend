@@ -1,5 +1,5 @@
 import { DESKTOP_BREAKPOINT_PX } from '../../components/dashboard/appShellBehavior';
-import { FIRSTSTEP, tint, hiddenScrollbarSx } from '../../components/dashboard/ops/dashboardTokens';
+import { FIRSTSTEP, tint } from '../../components/dashboard/ops/dashboardTokens';
 
 export type AutomationsContentState =
   | 'first-load-skeleton'
@@ -504,7 +504,7 @@ export const DESKTOP_TABLE_SIZE = 'medium' as const;
 export const DESKTOP_TABLE_ROW_MIN_HEIGHT_PX = 52;
 export const DESKTOP_TABLE_ROW_MAX_HEIGHT_PX = 60;
 export const DESKTOP_TABLE_ROW_HEIGHT_PX = 56;
-export const DESKTOP_TABLE_MIN_WIDTH_PX = 980;
+export const DESKTOP_TABLE_MIN_WIDTH_PX = 880;
 export const DESKTOP_TABLE_ROW_DIVIDER = 'rgba(2, 51, 69, 0.08)';
 export const DESKTOP_TABLE_STATUS_MARKER_PX = 4;
 export const DESKTOP_TABLE_ROW_HOVER_BG = tint(FIRSTSTEP.teal, 0.08);
@@ -626,7 +626,6 @@ export function automationsTableScrollSx() {
     maxWidth: '100%',
     overflowX: 'auto',
     overflowY: 'visible',
-    ...hiddenScrollbarSx,
   };
 }
 

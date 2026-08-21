@@ -11,6 +11,8 @@ export type DigestLast6hSummary = {
   total: number;
   passed: number;
   failed: number;
+  jobsAddedToBoard?: number;
+  rowsExtracted?: number;
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -74,5 +76,7 @@ export function digestAlertSeverity(message: string): 'success' | 'warning' {
 export function digestSentMessage(summary: { last6h: DigestLast6hSummary } | null | undefined): string {
   const last6h = summary?.last6h;
   if (!last6h) return 'Digest sent.';
-  return `Digest sent. Last 6h: ${last6h.total} runs, ${last6h.passed} passed, ${last6h.failed} failed.`;
+  const jobs =
+    typeof last6h.jobsAddedToBoard === 'number' ? `, ${last6h.jobsAddedToBoard} jobs added` : '';
+  return `Digest sent. Last 6h: ${last6h.total} runs, ${last6h.passed} passed, ${last6h.failed} failed${jobs}.`;
 }

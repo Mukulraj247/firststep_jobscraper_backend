@@ -2,8 +2,10 @@ import mongoose, { Document, Schema } from 'mongoose';
 import {
   addAdmissionGuardReleaseToTerminalUpdate,
   addFailureClassificationToTerminalUpdate,
+  addSortAtToTerminalUpdate,
   isFailureRunStatus,
   isTerminalRunStatus,
+  resolveTerminalSortAt,
 } from '../services/runLifecycle';
 
 export interface IRun extends Document {
@@ -147,6 +149,10 @@ RunSchema.pre('save', function releaseAdmissionGuardsOnTerminalSave() {
   if (isTerminalRunStatus(this.status as string | null | undefined)) {
     this.set('activeAutomationKey', undefined);
     this.set('accountActiveSlot', undefined);
+    const finishedAt = this.get('finishedAt') as string | null | undefined;
+    if (finishedAt) {
+      this.set('sortAt', resolveTerminalSortAt(finishedAt));
+    }
   }
 });
 
@@ -156,8 +162,10 @@ RunSchema.pre(
     const update = this.getUpdate() as Record<string, any> | null;
     if (update) {
       this.setUpdate(
-        addAdmissionGuardReleaseToTerminalUpdate(
-          addFailureClassificationToTerminalUpdate(update)
+        addSortAtToTerminalUpdate(
+          addAdmissionGuardReleaseToTerminalUpdate(
+            addFailureClassificationToTerminalUpdate(update)
+          )
         )
       );
     }

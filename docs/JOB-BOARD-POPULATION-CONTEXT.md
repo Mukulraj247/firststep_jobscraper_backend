@@ -131,16 +131,23 @@ Key files: `server/src/services/geminiJobExtractor.ts`, `server/src/models/LlmUs
 | `location` / `salaryRange` / `employmentType` / `remoteType` / `jobCategory` / `date` | list / ATS / JSON-LD / Gemini |
 | `jobExperience` | list / Gemini / regex years in JD |
 | `jobDescription` | plain text blob (Gemini also composes canonical-headed text from sections) |
-| `about` | Gemini (dedicated); empty if absent |
-| `minimumQualifications[]` | Gemini (dedicated); empty if absent |
-| `preferredQualifications[]` | Gemini (dedicated); empty if absent |
-| `responsibilities[]` | Gemini (dedicated); empty if absent |
-| `benefits[]` | Gemini (dedicated); empty if absent |
-| `skills[]` | Gemini (dedicated); empty if absent |
-| `sectorIndustry` / `f500` | usually robot `rowContext` / overrides — **not** parsers |
+| `about` | Gemini; Hiring Cafe company tagline |
+| `minimumQualifications[]` | Gemini; Hiring Cafe `requirements_summary` (+ required degrees when summary is thin) |
+| `preferredQualifications[]` | Gemini; Hiring Cafe preferred degree requirements |
+| `responsibilities[]` | Gemini; Hiring Cafe `role_activities` |
+| `benefits[]` | Gemini; Hiring Cafe benefit flags (`401k_matching`, PTO, visa, etc.) when true |
+| `skills[]` | Gemini; Hiring Cafe `technical_tools` |
+| `certifications[]` | Hiring Cafe `licenses_or_certifications` |
+| `seniorityLevel` / `roleType` | Hiring Cafe `seniority_level` / `role_type` |
+| `educationRequirement` | Hiring Cafe formatted required/preferred degrees |
+| `visaSponsorship` | Hiring Cafe (`yes` / `no` / empty) |
+| `companyEmployeeCount` / `companyFoundedYear` | Hiring Cafe enriched company data |
+| `sectorIndustry` / `f500` | robot `rowContext` / overrides; Hiring Cafe industries + stock ticker |
 | `applyUrl` / `jobUrl` | ATS absolute URL / page URL |
 
 **Only-if-present rule:** enrichment never overwrites a good stored structured field with an empty Gemini array/string.
+
+**Hiring Cafe backfill:** raw HC `__NEXT_DATA__` is not retained on the board. Existing `source=hiring_cafe` rows only pick up the richer fields after you **re-run** the Hiring Cafe aggregator search (or re-scrape detail pages). Deploy alone does not remap old listings.
 
 ### Card rendering
 
@@ -148,7 +155,8 @@ Key files: `server/src/services/geminiJobExtractor.ts`, `server/src/models/LlmUs
 |------------|----------------|
 | MINIMUM QUALS / PREFERRED / RESPONSIBILITIES / BENEFITS / skills | Prefer **stored arrays**; else `extractCardHighlights(jobDescription)` |
 | About blurb | Prefer stored `about`; else sectionizer |
-| Experience / employment / remote chips | Stored scalars or derived from JD |
+| Experience / employment / remote / seniority / education / visa chips | Stored scalars (visa chip when `yes`) |
+| Company meta | Industry · ticker · employee count · founded when present |
 | “AI-parsed” chip | When `enrichmentMethod === 'llm'` |
 
 ---

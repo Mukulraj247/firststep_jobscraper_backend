@@ -316,6 +316,7 @@ const DescriptionSections: React.FC<{
     responsibilities?: string[];
     benefits?: string[];
     skills?: string[];
+    certifications?: string[];
   };
 }> = ({ text, fallbackTitle, structured }) => {
   const { t } = useTranslation();
@@ -355,6 +356,13 @@ const DescriptionSections: React.FC<{
     const skills = asList(structured.skills);
     if (skills.length) {
       structuredBlocks.push({ title: 'Skills', body: skills.map((b) => `• ${b}`).join('\n') });
+    }
+    const certs = asList(structured.certifications);
+    if (certs.length) {
+      structuredBlocks.push({
+        title: 'Certifications',
+        body: certs.map((b) => `• ${b}`).join('\n'),
+      });
     }
   }
 
@@ -464,12 +472,43 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         ? 'Fortune 500'
         : f500Raw;
   const aboutLine = asText(data.about);
+  const seniorityLevel = asText(data.seniorityLevel);
+  const educationRequirement = asText(data.educationRequirement);
+  const educationShort =
+    educationRequirement.length > 36
+      ? `${educationRequirement.slice(0, 35).trim()}…`
+      : educationRequirement;
+  const visaSponsorship = asText(data.visaSponsorship).toLowerCase();
+  const certifications = asList(data.certifications);
+  const skillChips = [
+    ...highlights.skills,
+    ...certifications.filter(
+      (c) => !highlights.skills.some((s) => s.toLowerCase() === c.toLowerCase())
+    ),
+  ];
+  const employeeCount =
+    typeof data.companyEmployeeCount === 'number' && data.companyEmployeeCount > 0
+      ? data.companyEmployeeCount
+      : 0;
+  const foundedYear =
+    typeof data.companyFoundedYear === 'number' && data.companyFoundedYear > 0
+      ? data.companyFoundedYear
+      : 0;
+  const companyMetaParts = [
+    asText(data.sectorIndustry),
+    f500Label,
+    employeeCount > 0
+      ? employeeCount >= 1000
+        ? `${Math.round(employeeCount / 1000)}k employees`
+        : `${employeeCount} employees`
+      : '',
+    foundedYear > 0 ? `Founded ${foundedYear}` : '',
+  ].filter(Boolean);
   const companySubtitle =
-    asText(data.sectorIndustry) ||
-    f500Label ||
+    companyMetaParts.join(' · ') ||
     (aboutLine
-      ? aboutLine.length > 48
-        ? `${aboutLine.slice(0, 48)}…`
+      ? aboutLine.length > 72
+        ? `${aboutLine.slice(0, 71).trim()}…`
         : aboutLine
       : '') ||
     (postedExact ? `Posted ${postedExact}` : '');
@@ -497,7 +536,7 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
             {label}
           </Typography>
         </Stack>
-        {lines.slice(0, 2).map((line, i) => (
+        {lines.slice(0, 3).map((line, i) => (
           <Typography
             key={i}
             variant="body2"
@@ -538,9 +577,9 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         maxWidth: '100%',
         minWidth: 0,
         height: '100%',
-        aspectRatio: { xs: 'auto', sm: '3 / 4.1' },
-        minHeight: { xs: 380, sm: 0 },
-        maxHeight: { xl: 520 },
+        aspectRatio: { xs: 'auto', sm: '3 / 4.35' },
+        minHeight: { xs: 400, sm: 0 },
+        maxHeight: { xl: 560 },
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -616,8 +655,11 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
       <Stack direction="row" flexWrap="wrap" gap={0.5} mb={1.1} sx={{ minWidth: 0, maxWidth: '100%' }}>
         {remoteLabel && <SoftChip label={remoteLabel} tone="accent" />}
         {employmentLabel && <SoftChip label={employmentLabel} tone="teal" />}
+        {seniorityLevel && <SoftChip label={seniorityLevel} />}
         {category && <SoftChip label={category} />}
         {salary && <SoftChip label={salary} tone="teal" />}
+        {educationShort && <SoftChip label={educationShort} />}
+        {visaSponsorship === 'yes' && <SoftChip label="Visa sponsorship" tone="accent" />}
         {asText(data.enrichmentMethod) === 'llm' && <SoftChip label="AI-parsed" tone="accent" />}
       </Stack>
 
@@ -627,6 +669,23 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
           <Typography sx={{ fontWeight: 700, fontSize: '0.82rem', color: TEAL }} noWrap>
             {company}
           </Typography>
+          {aboutLine && companyMetaParts.length > 0 && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                fontSize: '0.68rem',
+                lineHeight: 1.35,
+              }}
+              title={aboutLine}
+            >
+              {aboutLine}
+            </Typography>
+          )}
           {companySubtitle && (
             <Typography
               variant="caption"
@@ -635,7 +694,7 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
               noWrap
               title={companySubtitle}
             >
-              {companySubtitle}
+              {aboutLine && companyMetaParts.length > 0 ? companyMetaParts.join(' · ') : companySubtitle}
             </Typography>
           )}
         </Box>
@@ -728,9 +787,9 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
             </Typography>
           )}
 
-        {highlights.skills.length > 0 && (
+        {skillChips.length > 0 && (
           <Stack direction="row" flexWrap="wrap" gap={0.45} sx={{ minWidth: 0, maxWidth: '100%' }}>
-            {highlights.skills.slice(0, 6).map((s) => (
+            {skillChips.slice(0, 10).map((s) => (
               <SoftChip key={s} label={s} />
             ))}
           </Stack>
@@ -821,6 +880,30 @@ const JobDetailModal: React.FC<{
     typeof data.jobExperience === 'number' && data.jobExperience > 0
       ? t('jobboard.years', { count: data.jobExperience })
       : '';
+  const seniorityLevel = asText(data.seniorityLevel);
+  const roleType = asText(data.roleType);
+  const educationRequirement = asText(data.educationRequirement);
+  const visaSponsorship = asText(data.visaSponsorship).toLowerCase();
+  const visaLabel =
+    visaSponsorship === 'yes' ? 'Yes' : visaSponsorship === 'no' ? 'No' : '';
+  const certifications = Array.isArray(data.certifications)
+    ? data.certifications.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const employeeCount =
+    typeof data.companyEmployeeCount === 'number' && data.companyEmployeeCount > 0
+      ? data.companyEmployeeCount
+      : 0;
+  const foundedYear =
+    typeof data.companyFoundedYear === 'number' && data.companyFoundedYear > 0
+      ? data.companyFoundedYear
+      : 0;
+  const companySizeLabel =
+    employeeCount > 0
+      ? employeeCount >= 1000
+        ? `${Math.round(employeeCount / 1000)}k employees`
+        : `${employeeCount} employees`
+      : '';
+  const foundedLabel = foundedYear > 0 ? String(foundedYear) : '';
 
   return (
     <Dialog
@@ -870,6 +953,8 @@ const JobDetailModal: React.FC<{
                 {salary && <SoftChip label={salary} />}
                 {employment && <SoftChip label={employment} />}
                 {remote && <SoftChip label={remote} tone="accent" />}
+                {seniorityLevel && <SoftChip label={seniorityLevel} />}
+                {visaSponsorship === 'yes' && <SoftChip label="Visa sponsorship" tone="accent" />}
               </Stack>
             </Box>
           </Stack>
@@ -942,7 +1027,17 @@ const JobDetailModal: React.FC<{
               <FieldCell label={t('jobboard.employment_type')} value={employment} />
               <FieldCell label={t('jobboard.remote_type')} value={remote} />
               <FieldCell label={t('jobboard.experience')} value={experience} />
+              <FieldCell label="Seniority" value={seniorityLevel} />
+              <FieldCell label="Role type" value={roleType} />
+              <FieldCell label="Education" value={educationRequirement} />
+              <FieldCell label="Visa sponsorship" value={visaLabel} />
+              <FieldCell label="Company size" value={companySizeLabel} />
+              <FieldCell label="Founded" value={foundedLabel} />
               <FieldCell label={t('jobboard.industry')} value={industry} />
+              <FieldCell
+                label="Certifications"
+                value={certifications.length ? certifications.join(', ') : null}
+              />
               <FieldCell
                 label={t('jobboard.job_id')}
                 value={
@@ -994,6 +1089,7 @@ const JobDetailModal: React.FC<{
                 responsibilities: Array.isArray(data.responsibilities) ? data.responsibilities : [],
                 benefits: Array.isArray(data.benefits) ? data.benefits : [],
                 skills: Array.isArray(data.skills) ? data.skills : [],
+                certifications,
               }}
             />
           </Stack>
@@ -1040,7 +1136,7 @@ const JobBoardFacetAutocomplete: React.FC<{
       renderInput={(params) => (
         <TextField {...params} label={label} placeholder={placeholder} />
       )}
-      sx={{ minWidth: 200, flex: '1 1 200px', ...heroGlassFormControlSx() }}
+      sx={{ minWidth: 0, flex: '1 1 160px', maxWidth: '100%', ...heroGlassFormControlSx() }}
     />
   );
 };
@@ -1228,7 +1324,7 @@ export const JobBoardPage: React.FC = () => {
           alignItems={{ xs: 'stretch', lg: 'flex-start' }}
           sx={{ position: 'relative', zIndex: 1 }}
         >
-          <Box sx={{ minWidth: 0, flex: { lg: '0 0 320px' }, maxWidth: { lg: 360 } }}>
+          <Box sx={{ minWidth: 0, flex: { lg: '1 1 240px' }, maxWidth: { lg: 360 } }}>
             <Typography variant="overline" sx={heroGlassOverlineSx}>
               Hiring pipeline
             </Typography>
@@ -1416,7 +1512,6 @@ export const JobBoardPage: React.FC = () => {
                 sm: 'repeat(2, minmax(0, 1fr))',
                 md: 'repeat(3, minmax(0, 1fr))',
                 lg: 'repeat(4, minmax(0, 1fr))',
-                xl: 'repeat(5, minmax(0, 1fr))',
               },
               gap: 1.75,
               alignItems: 'stretch',

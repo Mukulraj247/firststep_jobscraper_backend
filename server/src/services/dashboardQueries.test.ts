@@ -33,6 +33,7 @@ import {
   clampDashboardSummaryCacheTtlMs,
   createDashboardSummaryCache,
   parseRunListDateQuery,
+  isFailureHealedBySuccessStreak,
   RUN_LIST_SORT_FIELD,
   RUN_RESOLVED_DURATION_FIELD,
   MAX_SANE_LIST_DURATION_MS,
@@ -253,6 +254,28 @@ describe('buildRunListPaginationPipeline', () => {
     expect(rangeMatch).toEqual({ $match: { listSortAt: { $gte: from } } });
   });
 
+  it('prefers finishedAt over create-time sortAt so short windows match failure time', () => {
+    const stage = buildRunListSortAtStage() as {
+      $addFields: { listSortAt: { $ifNull: unknown[] } };
+    };
+    const first = stage.$addFields.listSortAt.$ifNull[0] as {
+      $convert: { input: string };
+    };
+    expect(first.$convert.input).toBe('$finishedAt');
+  });
+
+  it('suppresses healed failures when excludeHealedFailures is set', () => {
+    const pipeline = buildRunListPaginationPipeline({
+      match: { ownerId: 'u1' },
+      skip: 0,
+      limit: 5,
+      excludeHealedFailures: true,
+    });
+    const stageJson = JSON.stringify(pipeline);
+    expect(stageJson).toContain('_healNextRuns');
+    expect(stageJson).toContain('maxun_runs');
+  });
+
   it('computes resolved duration before applying duration bounds', () => {
     const pipeline = buildRunListPaginationPipeline({
       match: { ownerId: 'u1' },
@@ -270,6 +293,20 @@ describe('buildRunListPaginationPipeline', () => {
       $match: { [RUN_RESOLVED_DURATION_FIELD]: { $gte: 5_000, $lte: 30_000 } },
     });
     expect(json).not.toContain('"duration":{');
+  });
+});
+
+describe('isFailureHealedBySuccessStreak', () => {
+  it('requires the next two runs to be successes', () => {
+    expect(isFailureHealedBySuccessStreak([
+      { status: 'completed' },
+      { status: 'success' },
+    ])).toBe(true);
+    expect(isFailureHealedBySuccessStreak([
+      { status: 'completed' },
+      { status: 'failed' },
+    ])).toBe(false);
+    expect(isFailureHealedBySuccessStreak([{ status: 'completed' }])).toBe(false);
   });
 });
 

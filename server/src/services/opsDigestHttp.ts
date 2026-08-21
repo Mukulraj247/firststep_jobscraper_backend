@@ -15,7 +15,13 @@ export type OpsDigestSendResult = {
   payload?: {
     generatedAt: string;
     windows: {
-      last6h: { total: number; passed: number; failed: number };
+      last6h: {
+        total: number;
+        passed: number;
+        failed: number;
+        jobsAddedToBoard?: number;
+        rowsExtracted?: number;
+      };
     };
   };
 };
@@ -62,6 +68,8 @@ export function mapOpsDigestSendResult(result: OpsDigestSendResult): {
               total: result.payload.windows.last6h.total,
               passed: result.payload.windows.last6h.passed,
               failed: result.payload.windows.last6h.failed,
+              jobsAddedToBoard: result.payload.windows.last6h.jobsAddedToBoard ?? 0,
+              rowsExtracted: result.payload.windows.last6h.rowsExtracted ?? 0,
             },
           }
         : null,

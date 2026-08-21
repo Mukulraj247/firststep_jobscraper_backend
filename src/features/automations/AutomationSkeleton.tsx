@@ -8,7 +8,7 @@ export function AutomationSkeleton() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 120px), 1fr))',
           gap: 2,
           mb: 3,
         }}

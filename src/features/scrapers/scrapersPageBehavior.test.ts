@@ -126,7 +126,7 @@ describe('schedule heatmap presentation', () => {
     expect(scrapersPageShowsScraperList()).toBe(false);
     expect(scrapersUsesRecordingsListApi()).toBe(false);
     expect(SCRAPERS_HEATMAP_PATH).toBe('/api/dashboard/schedule-heatmap');
-    expect(heatmapHourCellMinHeightPx()).toBeGreaterThanOrEqual(120);
+    expect(heatmapHourCellMinHeightPx()).toBeGreaterThanOrEqual(100);
     expect(HEATMAP_HOUR_PERIODS).toHaveLength(4);
     expect(HEATMAP_HOUR_PERIODS.map((period) => period.startHour)).toEqual([0, 6, 12, 18]);
     expect(heatmapScheduledTotal([{ count: 4 }, { count: 0 }, { count: 19 }])).toBe(23);

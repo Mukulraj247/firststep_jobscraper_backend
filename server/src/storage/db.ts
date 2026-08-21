@@ -5,6 +5,7 @@ import Run from '../models/Run';
 import Robot from '../models/Robot';
 import ExtractedData from '../models/ExtractedData';
 import JobIdCounter from '../models/JobIdCounter';
+import ChromiumSlotLease from '../models/ChromiumSlotLease';
 
 dotenv.config();
 applyConfiguredDnsServers();
@@ -35,6 +36,7 @@ export const syncDB = async () => {
         await Robot.syncIndexes();
         await ExtractedData.syncIndexes();
         await JobIdCounter.syncIndexes();
+        await ChromiumSlotLease.syncIndexes();
         console.log('MongoDB indexes synced.');
     } catch (err) {
         console.error('MongoDB index sync failed:', err);

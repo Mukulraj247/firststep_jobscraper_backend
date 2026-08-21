@@ -5,8 +5,7 @@ import {
   ERROR_SUMMARY_LINE_CLAMP,
   attemptsLabel,
   canSubmitAction,
-  formatDuration,
-  formatRunWhen,
+  formatFailureTimingLines,
   runDisplayName,
   runIdentity,
   type PendingActions,
@@ -105,19 +104,21 @@ export function FailureCardList({
                 </Box>
                 <Box sx={{ minWidth: 0, m: 0 }}>
                   <Typography component="dt" variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                    Started
+                    Timing
                   </Typography>
-                  <Typography component="dd" variant="body2" sx={{ m: 0 }}>
-                    {formatRunWhen(run.startedAt)}
-                  </Typography>
-                </Box>
-                <Box sx={{ minWidth: 0, m: 0 }}>
-                  <Typography component="dt" variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                    Duration
-                  </Typography>
-                  <Typography component="dd" variant="body2" sx={{ m: 0 }}>
-                    {formatDuration(run.durationMs ?? run.duration)}
-                  </Typography>
+                  {(() => {
+                    const timing = formatFailureTimingLines(run);
+                    return (
+                      <>
+                        <Typography component="dd" variant="body2" sx={{ m: 0 }}>
+                          {timing.when}
+                        </Typography>
+                        <Typography component="dd" variant="caption" color="text.secondary" sx={{ m: 0, display: 'block' }}>
+                          {timing.detail}
+                        </Typography>
+                      </>
+                    );
+                  })()}
                 </Box>
                 <Box sx={{ minWidth: 0, m: 0 }}>
                   <Typography component="dt" variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>

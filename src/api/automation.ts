@@ -350,7 +350,16 @@ export const sendDashboardDigestTest = async (): Promise<{
   reason?: string;
   error?: string;
   requestId?: string | null;
-  summary?: { generatedAt: string; last6h: { total: number; passed: number; failed: number } } | null;
+  summary?: {
+    generatedAt: string;
+    last6h: {
+      total: number;
+      passed: number;
+      failed: number;
+      jobsAddedToBoard?: number;
+      rowsExtracted?: number;
+    };
+  } | null;
 }> => {
   const response = await axios.post(`${apiUrl}/api/dashboard/digest/test`, {}, { withCredentials: true });
   return response.data;
@@ -408,6 +417,8 @@ export const listSaasRuns = async (params?: {
   jobsAddedExact?: number;
   minDurationMs?: number;
   maxDurationMs?: number;
+  /** When true, hide failures already cleared by 2 consecutive successes. */
+  excludeHealed?: boolean;
 }, signal?: AbortSignal): Promise<SaasRunsListResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 10;
@@ -428,6 +439,7 @@ export const listSaasRuns = async (params?: {
       ...(params?.jobsAddedExact != null ? { jobsAddedExact: params.jobsAddedExact } : {}),
       ...(params?.minDurationMs != null ? { minDurationMs: params.minDurationMs } : {}),
       ...(params?.maxDurationMs != null ? { maxDurationMs: params.maxDurationMs } : {}),
+      ...(params?.excludeHealed ? { excludeHealed: '1' } : {}),
     },
     withCredentials: true,
     signal,

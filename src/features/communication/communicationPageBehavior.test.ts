@@ -82,8 +82,10 @@ describe('digest send helpers', () => {
 
   it('formats the last-6h summary after a successful send', () => {
     expect(
-      digestSentMessage({ last6h: { total: 37, passed: 32, failed: 5 } }),
-    ).toBe('Digest sent. Last 6h: 37 runs, 32 passed, 5 failed.');
+      digestSentMessage({
+        last6h: { total: 37, passed: 32, failed: 5, jobsAddedToBoard: 18 },
+      }),
+    ).toBe('Digest sent. Last 6h: 37 runs, 32 passed, 5 failed, 18 jobs added.');
     expect(digestSentMessage(null)).toBe('Digest sent.');
   });
 });

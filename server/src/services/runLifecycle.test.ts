@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addAdmissionGuardReleaseToTerminalUpdate,
   addFailureClassificationToTerminalUpdate,
+  addSortAtToTerminalUpdate,
   isTerminalRunStatus,
 } from './runLifecycle';
 
@@ -38,6 +39,26 @@ describe('addAdmissionGuardReleaseToTerminalUpdate', () => {
       $unset: { heartbeatAt: 1 },
     };
     expect(addAdmissionGuardReleaseToTerminalUpdate(update)).toBe(update);
+  });
+});
+
+describe('addSortAtToTerminalUpdate', () => {
+  it('sets sortAt from finishedAt on terminal updates', () => {
+    const finishedAt = '2026-08-21T04:30:00.000Z';
+    expect(addSortAtToTerminalUpdate({
+      $set: { status: 'dead', finishedAt },
+    })).toEqual({
+      $set: {
+        status: 'dead',
+        finishedAt,
+        sortAt: new Date(finishedAt),
+      },
+    });
+  });
+
+  it('skips non-terminal updates', () => {
+    const update = { $set: { status: 'running' } };
+    expect(addSortAtToTerminalUpdate(update)).toBe(update);
   });
 });
 

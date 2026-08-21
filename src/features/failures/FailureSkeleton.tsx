@@ -10,7 +10,8 @@ export function FailureSkeleton() {
           display: 'grid',
           gridTemplateColumns: {
             xs: '1fr 1fr',
-            sm: 'repeat(auto-fit, minmax(140px, 1fr))',
+            md: 'repeat(4, 1fr)',
+            xl: 'repeat(8, 1fr)',
           },
           gap: 2,
           mb: 3,

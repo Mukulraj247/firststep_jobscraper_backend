@@ -40,7 +40,9 @@ import { TagPill } from '../components/dashboard/ops/TagPill';
 import { TagFilterModal } from '../features/dashboard/TagFilterModal';
 import {
   applyDashboardTagSelection,
+  defaultDashboardDate,
   failuresHrefFromDashboard,
+  isDashboardCalendarDayMode,
   normalizeChartTimestampMs,
   selectableDashboardTags,
 } from '../features/dashboard/dashboardPageBehavior';
@@ -186,10 +188,11 @@ export const DashboardPage = () => {
   const queryClient = useQueryClient();
   const { notify } = useGlobalInfoStore();
   const [window, setWindow] = useState<OpsMetricsWindow>('6h');
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(() => defaultDashboardDate());
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagModalOpen, setTagModalOpen] = useState(false);
 
+  const dayMode = isDashboardCalendarDayMode(date);
   const query = useMemo(
     () => ({ window, date: date || null }),
     [window, date],
@@ -239,13 +242,12 @@ export const DashboardPage = () => {
   };
 
   const handleWindowChange = (next: OpsMetricsWindow) => {
-    setDate('');
     setWindow(next);
   };
 
   const handleDateChange = (next: string) => {
     if (!next) {
-      setDate('');
+      setDate(defaultDashboardDate());
       return;
     }
     if (!isIstDateWithinLastDays(next, Date.now(), 7)) return;
@@ -281,9 +283,9 @@ export const DashboardPage = () => {
 
   const upcoming = metrics?.upcomingSchedules;
   const forecastUntilLabel = formatForecastUntil(upcoming?.forecastUntil);
-  const futureWindowLabel = date ? WINDOW_FUTURE_LABEL['24h'] : WINDOW_FUTURE_LABEL[window];
+  const futureWindowLabel = dayMode ? WINDOW_FUTURE_LABEL['24h'] : WINDOW_FUTURE_LABEL[window];
   const failedHref = failuresHrefFromDashboard(
-    date ? { mode: 'day', date } : { mode: 'window', window },
+    dayMode ? { mode: 'day', date } : { mode: 'window', window },
   );
 
   const catalogTags = useMemo(
@@ -317,6 +319,7 @@ export const DashboardPage = () => {
           window={window}
           onWindowChange={handleWindowChange}
           date={date}
+          dayMode={dayMode}
           onDateChange={handleDateChange}
           onRefresh={handleRefresh}
           loading={loading}
@@ -338,7 +341,11 @@ export const DashboardPage = () => {
           <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gridTemplateColumns: {
+                xs: 'repeat(2, minmax(0, 1fr))',
+                md: 'repeat(3, minmax(0, 1fr))',
+                xl: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))',
+              },
               gap: 2,
               mb: 4,
             }}
@@ -346,7 +353,7 @@ export const DashboardPage = () => {
             <StatCard
               label="Runs"
               value={totals?.runs ?? '—'}
-              hint={date ? `${date} IST` : `Window ${window}`}
+              hint={dayMode ? `${date} IST` : `Window ${window}`}
               color={METRIC_COLORS.runs}
               icon={<PlayCircleOutlineIcon />}
               delay={0}
@@ -450,7 +457,7 @@ export const DashboardPage = () => {
           <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))',
               gap: 2,
               mb: 2,
             }}
@@ -543,7 +550,7 @@ export const DashboardPage = () => {
             <Box
               sx={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))',
                 gap: 2.5,
               }}
             >
@@ -709,9 +716,9 @@ export const DashboardPage = () => {
               sx={{
                 display: 'grid',
                 gridTemplateColumns: {
-                  xs: 'repeat(auto-fill, minmax(150px, 1fr))',
-                  sm: 'repeat(auto-fill, minmax(168px, 1fr))',
-                  lg: 'repeat(auto-fill, minmax(180px, 1fr))',
+                  xs: 'repeat(auto-fill, minmax(min(100%, 140px), 1fr))',
+                  sm: 'repeat(auto-fill, minmax(min(100%, 150px), 1fr))',
+                  lg: 'repeat(auto-fill, minmax(min(100%, 160px), 1fr))',
                 },
                 gap: 1.5,
                 pb: 1,

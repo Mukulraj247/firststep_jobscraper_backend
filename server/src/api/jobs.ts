@@ -184,8 +184,33 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   const responsibilities = asStringList(row.responsibilities || list.responsibilities);
   const benefits = asStringList(row.benefits || list.benefits);
   const skills = asStringList(row.skills || list.skills);
+  const certifications = asStringList(row.certifications || list.certifications);
   const logo = String(row.companyLogoUrl || list.companyLogoUrl || '').trim();
   const f500 = String(row.f500 || list.f500 || '').trim();
+  const seniorityLevel = decodeHtmlEntities(
+    String(row.seniorityLevel || list.seniorityLevel || '').trim()
+  );
+  const roleType = decodeHtmlEntities(String(row.roleType || list.roleType || '').trim());
+  const educationRequirement = decodeHtmlEntities(
+    String(row.educationRequirement || list.educationRequirement || '').trim()
+  );
+  const visaSponsorship = String(row.visaSponsorship || list.visaSponsorship || '')
+    .trim()
+    .toLowerCase();
+  const companyEmployeeCount =
+    (typeof row.companyEmployeeCount === 'number' && row.companyEmployeeCount > 0
+      ? row.companyEmployeeCount
+      : 0) ||
+    (typeof list.companyEmployeeCount === 'number' && list.companyEmployeeCount > 0
+      ? list.companyEmployeeCount
+      : 0);
+  const companyFoundedYear =
+    (typeof row.companyFoundedYear === 'number' && row.companyFoundedYear > 0
+      ? row.companyFoundedYear
+      : 0) ||
+    (typeof list.companyFoundedYear === 'number' && list.companyFoundedYear > 0
+      ? list.companyFoundedYear
+      : 0);
 
   return {
     id: row._id?.toString?.() || String(row.id),
@@ -216,6 +241,15 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
       ...(responsibilities.length ? { responsibilities } : {}),
       ...(benefits.length ? { benefits } : {}),
       ...(skills.length ? { skills } : {}),
+      ...(certifications.length ? { certifications } : {}),
+      ...(seniorityLevel ? { seniorityLevel } : {}),
+      ...(roleType ? { roleType } : {}),
+      ...(educationRequirement ? { educationRequirement } : {}),
+      ...(visaSponsorship === 'yes' || visaSponsorship === 'no'
+        ? { visaSponsorship }
+        : {}),
+      ...(companyEmployeeCount > 0 ? { companyEmployeeCount } : {}),
+      ...(companyFoundedYear > 0 ? { companyFoundedYear } : {}),
     },
   };
 }

@@ -30,6 +30,13 @@ export interface JobBoardJob {
     responsibilities?: string[];
     benefits?: string[];
     skills?: string[];
+    certifications?: string[];
+    seniorityLevel?: string;
+    roleType?: string;
+    educationRequirement?: string;
+    visaSponsorship?: string;
+    companyEmployeeCount?: number;
+    companyFoundedYear?: number;
     [key: string]: any;
   };
 }

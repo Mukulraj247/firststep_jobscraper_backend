@@ -7,14 +7,14 @@ export interface Column {
 }
 
 export const columns: readonly Column[] = [
-  { id: 'runStatus', label: 'Status', minWidth: 80 },
-  { id: 'name', label: 'Name', minWidth: 80 },
-  { id: 'startedAt', label: 'Started At', minWidth: 80 },
-  { id: 'finishedAt', label: 'Finished At', minWidth: 80 },
-  { id: 'duration', label: 'Duration', minWidth: 80 },
-  { id: 'jobsAdded', label: 'Jobs added', minWidth: 80 },
-  { id: 'settings', label: 'Settings', minWidth: 80 },
-  { id: 'delete', label: 'Delete', minWidth: 80 },
+  { id: 'runStatus', label: 'Status', minWidth: 64 },
+  { id: 'name', label: 'Name', minWidth: 72 },
+  { id: 'startedAt', label: 'Started At', minWidth: 72 },
+  { id: 'finishedAt', label: 'Finished At', minWidth: 72 },
+  { id: 'duration', label: 'Duration', minWidth: 64 },
+  { id: 'jobsAdded', label: 'Jobs added', minWidth: 64 },
+  { id: 'settings', label: 'Settings', minWidth: 64 },
+  { id: 'delete', label: 'Delete', minWidth: 64 },
 ];
 
 export interface Data {

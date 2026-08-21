@@ -234,7 +234,7 @@ export const HEATMAP_HOUR_PERIODS = [
 ] as const;
 
 export function heatmapHourCellMinHeightPx(): number {
-  return 128;
+  return 112;
 }
 
 export function heatmapScheduledTotal(hours: Array<{ count: number }>): number {

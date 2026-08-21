@@ -65,7 +65,8 @@ export function ScheduleHeatmap({
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
-          minHeight: { xs: 520, md: 640 },
+          minHeight: { xs: 480, md: 560 },
+          overflowX: 'auto',
         },
       ]}
     >
@@ -131,7 +132,9 @@ export function ScheduleHeatmap({
           <Box
             sx={{
               flex: 1,
-              minHeight: { xs: 420, md: 480 },
+              minHeight: { xs: 380, md: 440 },
+              minWidth: 0,
+              overflowX: 'auto',
               display: 'grid',
               gridTemplateColumns: {
                 xs: 'repeat(3, minmax(0, 1fr))',
@@ -190,7 +193,7 @@ export function ScheduleHeatmap({
                         height: '100%',
                         px: 1,
                         py: { xs: 1.5, md: 2 },
-                        minHeight: { xs: 92, md: cellMinHeight },
+                        minHeight: { xs: 80, md: cellMinHeight },
                         borderRadius: 2,
                         cursor: clickable ? 'pointer' : 'default',
                         bgcolor: isLoading ? FIRSTSTEP.border : color,
