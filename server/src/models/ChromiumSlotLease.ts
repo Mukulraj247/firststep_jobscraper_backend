@@ -9,8 +9,7 @@ export interface ChromiumSlotHolder {
   runId?: string;
 }
 
-export interface IChromiumSlotLease extends Document {
-  _id: string;
+export interface IChromiumSlotLease extends Document<string> {
   mode: 'shared' | 'exclusive';
   holders: ChromiumSlotHolder[];
   updatedAt: Date;

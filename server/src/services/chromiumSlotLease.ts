@@ -12,6 +12,8 @@ import ChromiumSlotLease, {
 } from '../models/ChromiumSlotLease';
 import logger from '../logger';
 
+export type { ChromiumSlotKind };
+
 const LEASE_DOC_ID = 'droplet';
 
 export interface ChromiumSlotHandle {
