@@ -139,6 +139,7 @@ export async function tryClaimChromiumSlot(
 
   await ensureLeaseDoc();
 
+  // Mongoose 9 rejects array updates unless updatePipeline is set (aggregation pipeline claim).
   const doc = await ChromiumSlotLease.findOneAndUpdate(
     { _id: LEASE_DOC_ID },
     [
@@ -205,7 +206,7 @@ export async function tryClaimChromiumSlot(
       },
       { $unset: ['_active', '_ok'] },
     ] as any,
-    { returnDocument: 'after' }
+    { returnDocument: 'after', updatePipeline: true }
   );
 
   const claimed = Boolean(
