@@ -190,34 +190,40 @@ export function buildRunListSort(
 
 /**
  * Prefer finishedAt for list windows (when the run ended / failed), then stored
- * sortAt, then startedAt. Creation-time sortAt alone wrongly keeps long-running
- * failures out of short windows and can disagree with the Timing column.
+ * sortAt, then startedAt. Only ISO timestamps are converted — legacy
+ * toLocaleString values like "11/8/2026, 7:40 pm" are parsed by Mongo as MDY
+ * (Nov 8) and falsely fall inside every recent window.
  */
+export function buildCanonicalDateConvert(field: string): Record<string, unknown> {
+  return {
+    $cond: [
+      {
+        $regexMatch: {
+          input: { $ifNull: [`$${field}`, ''] },
+          regex: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$',
+        },
+      },
+      {
+        $convert: {
+          input: `$${field}`,
+          to: 'date',
+          onError: null,
+          onNull: null,
+        },
+      },
+      null,
+    ],
+  };
+}
+
 export function buildRunListSortAtStage(): Record<string, unknown> {
   return {
     $addFields: {
       [RUN_LIST_SORT_FIELD]: {
         $ifNull: [
+          buildCanonicalDateConvert('finishedAt'),
           {
-            $convert: {
-              input: '$finishedAt',
-              to: 'date',
-              onError: null,
-              onNull: null,
-            },
-          },
-          {
-            $ifNull: [
-              '$sortAt',
-              {
-                $convert: {
-                  input: '$startedAt',
-                  to: 'date',
-                  onError: null,
-                  onNull: null,
-                },
-              },
-            ],
+            $ifNull: ['$sortAt', buildCanonicalDateConvert('startedAt')],
           },
         ],
       },
@@ -276,26 +282,9 @@ export function buildFailureHealSuppressionStages(
             $addFields: {
               _healSortAt: {
                 $ifNull: [
+                  buildCanonicalDateConvert('finishedAt'),
                   {
-                    $convert: {
-                      input: '$finishedAt',
-                      to: 'date',
-                      onError: null,
-                      onNull: null,
-                    },
-                  },
-                  {
-                    $ifNull: [
-                      '$sortAt',
-                      {
-                        $convert: {
-                          input: '$startedAt',
-                          to: 'date',
-                          onError: null,
-                          onNull: null,
-                        },
-                      },
-                    ],
+                    $ifNull: ['$sortAt', buildCanonicalDateConvert('startedAt')],
                   },
                 ],
               },

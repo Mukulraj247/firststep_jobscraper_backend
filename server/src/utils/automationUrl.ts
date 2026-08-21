@@ -1,6 +1,7 @@
 /**
  * Automation start URL normalization for storage + exact duplicate checks.
- * No path fuzzy-matching — only protocol/URL parse consistency.
+ * Does not rewrite career/ATS paths — extension filters (USA, category, etc.)
+ * live on the saved URL and must be preserved.
  */
 
 export function normalizeAutomationUrl(value: string): string {

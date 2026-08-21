@@ -8,7 +8,8 @@ export interface ProxyProfile {
   password?: string;
 }
 
-/** When false, account / env proxies are skipped. A per-automation proxy still applies. */
+/** When false, account / env proxies are skipped. Per-automation proxy is still resolved
+ * into the pool, but the scraper attaches it only on last-resort escalate / needsProxy. */
 export const isScraperProxyEnabled = (): boolean => {
   const raw = String(process.env.SCRAPER_PROXY_ENABLED ?? 'true').trim().toLowerCase();
   return !(raw === 'false' || raw === '0' || raw === 'no' || raw === 'off');

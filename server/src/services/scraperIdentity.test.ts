@@ -5,6 +5,7 @@ import {
   isProxyTunnelFailure,
   rememberFailedProxy,
 } from './scraperIdentity';
+import { isProxyAllowedForAttempt } from './proxyEscalation';
 
 const residential = {
   server: 'http://gate.decodo.com:7000',
@@ -40,6 +41,38 @@ describe('rememberFailedProxy', () => {
     expect(
       rememberFailedProxy(['http://31.59.20.176:6754'], 'http://31.59.20.176:6754')
     ).toEqual(['http://31.59.20.176:6754']);
+  });
+});
+
+describe('last-resort proxy attach gate', () => {
+  it('does not attach proxy on attempt 0 even when UI/env proxies exist', () => {
+    expect(
+      isProxyAllowedForAttempt({
+        attemptsMade: 0,
+        needsProxy: false,
+        retryReason: undefined,
+      })
+    ).toBe(false);
+  });
+
+  it('attaches proxy after captcha/block, or when needsProxy is remembered', () => {
+    expect(
+      isProxyAllowedForAttempt({ attemptsMade: 1, needsProxy: false, retryReason: 'block' })
+    ).toBe(true);
+    expect(
+      isProxyAllowedForAttempt({ attemptsMade: 0, needsProxy: true, retryReason: undefined })
+    ).toBe(true);
+  });
+
+  it('prefers robot residential over env on captcha retry when allowed', () => {
+    expect(
+      captchaRetryIdentity({
+        attemptsMade: 1,
+        selectedProxy: residential,
+        envFallbackProxy: { server: 'http://31.59.20.176:6754' },
+        configBrowserType: 'playwright',
+      })?.proxy
+    ).toEqual(residential);
   });
 });
 

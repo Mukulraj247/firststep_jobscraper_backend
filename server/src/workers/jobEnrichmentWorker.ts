@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import JobBoardListing, { IJobBoardListing } from '../models/JobBoardListing';
 import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import { getLlmUsageToday, addLlmUsage } from '../models/LlmUsageBudget';
-import { fetchAtsJob, shouldNeverScrapeDoUrl } from '../services/atsAdapters';
+import { fetchAtsJob, shouldNeverScrapeDoUrl, shouldSkipScrapeDoUrl } from '../services/atsAdapters';
 import { isHiringCafeUrl } from '../services/aggregatorIdentity';
 import {
   fetchBrowserJobFallback,
@@ -542,6 +542,23 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       tier: 0,
       creditsSpent: 0,
       error: isHiringCafeUrl(jobUrl) ? 'hiring_cafe_skip_scrape_do' : 'no_scrape_target',
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
+  // Known career / ATS hosts: never spend scrape.do after free ATS miss.
+  if (shouldSkipScrapeDoUrl(scrapeTargetUrl)) {
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: status === 'ready' ? 'list' : 'none',
+      tier: 0,
+      creditsSpent: 0,
+      error: 'career_host_skip_scrape_do',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;

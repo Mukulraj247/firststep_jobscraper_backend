@@ -165,7 +165,7 @@ async function handleMessage(
               type: pagination.type,
               selector: pagination.selector,
               confidence: pagination.confidence || 'medium',
-              maxPages: pagination.maxPages || 20,
+              maxPages: pagination.maxPages || 2,
               pageDelayMs: pagination.pageDelayMs || 1500,
             };
           }

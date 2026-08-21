@@ -23,7 +23,7 @@ export interface ScraperJobData {
   /** Proxies that already failed CONNECT; skipped on later attempts. */
   _failedProxyServers?: string[];
   _lastFailureWasProxyTunnel?: boolean;
-  _retryReason?: 'captcha' | 'proxy-tunnel';
+  _retryReason?: 'captcha' | 'block' | 'proxy-tunnel' | 'network';
 }
 
 export interface ScheduleTriggerData {

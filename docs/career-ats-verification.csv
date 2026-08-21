@@ -1,0 +1,506 @@
+sector,company,url,board_provider,detail_ats,skip_scrape_do,bucket
+"Banks","JPMorgan Chase & Co.","https://careers.jpmorgan.com/us/en/home",phenom,none,true,free_board
+"Banks","Bank of America","https://careers.bankofamerica.com/",bankofamerica,none,true,free_board
+"Banks","Wells Fargo & Company","https://www.wellsfargojobs.com/",phenom,none,true,free_board
+"Banks","Citigroup Inc.","https://jobs.citi.com/",phenom,none,true,free_board
+"Banks","Morgan Stanley","https://www.morganstanley.com/people-opportunities",none,none,true,enrich_free_or_skip
+"Banks","Goldman Sachs Group Inc.","https://www.goldmansachs.com/careers/index.html",none,none,true,enrich_free_or_skip
+"Banks","U.S. Bancorp","https://www.usbank.com/careers/index.html",none,none,true,enrich_free_or_skip
+"Banks","PNC Financial Services Group  Inc.","https://jobs.pnc.com/",phenom,none,true,free_board
+"Banks","Truist Financial Corporation","https://careers.truist.com/",phenom,none,true,free_board
+"Banks","TD Bank  N.A.","https://jobs.td.com/",phenom,none,true,free_board
+"Banks","TD Bank  N.A.","https://td.wd3.myworkdayjobs.com/en-US/TD_Bank_Careers",workday,none,true,free_board
+"Banks","Charles Schwab Corporation","https://jobs.schwabjobs.com/",phenom,none,true,free_board
+"Banks","Capital One Financial Corporation","https://www.capitalonecareers.com/",none,none,true,enrich_free_or_skip
+"Banks","The Bank of New York Mellon Corporation","https://jobs.bnymellon.com/",phenom,none,true,free_board
+"Banks","BMO Harris Bank N.A.","https://jobs.bmoharris.com/",phenom,none,true,free_board
+"Banks","State Street Corporation","https://careers.statestreet.com/",phenom,none,true,free_board
+"Banks","Regions Financial Corporation","https://www.regions.com/about-regions/careers",none,none,true,enrich_free_or_skip
+"Banks","M&T Bank Corporation","https://www3.mtb.com/careers",none,none,true,enrich_free_or_skip
+"Banks","SunTrust Banks  Inc.","https://jobs.truist.com/",phenom,none,true,free_board
+"Banks","Fifth Third Bancorp","https://www.53.com/content/fifth-third/en/careers.html",none,none,true,enrich_free_or_skip
+"Banks","KeyCorp","https://careers.key.com/",phenom,none,true,free_board
+"Banks","Huntington Bancshares Incorporated","https://www.huntington.com/careers",none,none,true,enrich_free_or_skip
+"Banks","Zions Bancorporation","https://careers.zionsbank.com/",phenom,none,true,free_board
+"Banks","Cadence Bank","https://www.cadencebankcareers.com/",none,none,true,enrich_free_or_skip
+"Banks","Bank OZK","https://ozk.com/about/careers",none,none,true,enrich_free_or_skip
+"Banks","BB&T Corporation","https://bbt.wd1.myworkdayjobs.com/en-US/careers",workday,none,true,free_board
+"Banks","Independent Bank Group  Inc.","https://www.independent-bank.com/about-us/careers",none,none,true,enrich_free_or_skip
+"Banks","First Horizon Corporation","https://www.firsthorizon.com/careers",none,none,true,enrich_free_or_skip
+"Banks","Comerica Incorporated","https://careers.comerica.com/",phenom,none,true,free_board
+"Banks","Synovus Financial Corp","https://careers.synovus.com/",phenom,none,true,free_board
+"Banks","Umpqua Holdings Corporation","https://umpquabankcareers.com/",none,none,true,enrich_free_or_skip
+"Banks","First Citizens BancShares  Inc.","https://www.firstcitizens.com/about/careers",none,none,true,enrich_free_or_skip
+"Banks","Santander Consumer USA Holdings Inc.","https://www.santanderconsumerusa.com/about/careers",none,none,true,enrich_free_or_skip
+"Banks","Citizens Financial Group  Inc.","https://jobs.citizensbank.com/",phenom,none,true,free_board
+"Banks","Webster Financial Corporation","https://www.websterbank.com/careers",none,none,true,enrich_free_or_skip
+"Banks","First Republic Bank","https://www.firstrepublic.com/careers",none,none,true,enrich_free_or_skip
+"Banks","Frost Bank Corporation","https://careers.frostbank.com/",phenom,none,true,free_board
+"Insurance","State Farm","https://www.statefarm.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Berkshire Hathaway","https://www.berkshirehathaway.com/careers.html",none,none,true,enrich_free_or_skip
+"Insurance","Progressive Corporation","https://progressive.taleo.net/careersection/2/jobsearch.ftl",none,none,true,enrich_free_or_skip
+"Insurance","Allstate Corporation","https://careers.allstate.com/",phenom,none,true,free_board
+"Insurance","Liberty Mutual Insurance Group","https://jobs.libertymutualgroup.com/",phenom,none,true,free_board
+"Insurance","USAA","https://www.usaajobs.com/",phenom,none,true,free_board
+"Insurance","Travelers Companies Inc.","https://careers.travelers.com/",phenom,none,true,free_board
+"Insurance","Farmers Insurance Group","https://jobs.farmersinsurance.com/",phenom,none,true,free_board
+"Insurance","Nationwide Mutual Insurance Company","https://careers.nationwide.com/",phenom,none,true,free_board
+"Insurance","Nationwide Mutual Insurance Company","https://nationwide.wd1.myworkdayjobs.com/Nationwide_Career",workday,none,true,free_board
+"Insurance","American Family Insurance Group","https://careers.amfam.com/",phenom,none,true,free_board
+"Insurance","Chubb Limited","https://careers.chubb.com/",phenom,none,true,free_board
+"Insurance","AIG (American International Group)","https://www.aig.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","MetLife  Inc.","https://jobs.metlife.com/",phenom,none,true,free_board
+"Insurance","Hartford Financial Services Group","https://www.thehartford.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Cigna Corporation","https://jobs.cigna.com/",phenom,none,true,free_board
+"Insurance","Aflac Incorporated","https://www.aflac.com/careers/default.aspx",none,none,true,enrich_free_or_skip
+"Insurance","Anthem  Inc.","https://antheminc.taleo.net/careersection/10021/jobsearch.ftl",none,none,true,enrich_free_or_skip
+"Insurance","New York Life Insurance Company","https://jobs.newyorklife.com/",phenom,none,true,free_board
+"Insurance","Pacific Life","https://www.pacificlife.com/about_pacific_life/careers.html",none,none,true,enrich_free_or_skip
+"Insurance","Genworth Financial","https://careers.genworth.com/",phenom,none,true,free_board
+"Insurance","Assurant  Inc.","https://jobs.assurant.com/",phenom,none,true,free_board
+"Insurance","The Principal Financial Group","https://www.principal.com/about-us/careers",none,none,true,enrich_free_or_skip
+"Insurance","American National Insurance Company","https://www.americannational.com/wps/portal/amnat/careers",none,none,true,enrich_free_or_skip
+"Insurance","Selective Insurance Group","https://careers-selective.icims.com/jobs/intro?hashed=-435743791",none,none,true,enrich_free_or_skip
+"Insurance","Erie Insurance Group","https://www.erieinsurance.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Unum Group","https://www.unum.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Ameriprise Financial","https://careers.ameriprise.com/",phenom,none,true,free_board
+"Insurance","Auto-Owners Insurance","https://careers.auto-owners.com/",phenom,none,true,free_board
+"Insurance","National General Holdings Corp.","https://jobs.nationalgeneral.com/",phenom,none,true,free_board
+"Insurance","Markel Corporation","https://www.markel.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Allianz Life Insurance Company of North America","https://careers.allianz.com/",phenom,none,true,free_board
+"Insurance","CNO Financial Group","https://careers-cnoinc.icims.com/jobs/intro?hashed=-435623245",none,none,true,enrich_free_or_skip
+"Insurance","Primerica  Inc.","https://www.primerica.com/public/primerica-careers.html",none,none,true,enrich_free_or_skip
+"Insurance","Kemper Corporation","https://www.kemper.com/wps/portal/KemperDirect/Home/Careers",none,none,true,enrich_free_or_skip
+"Insurance","The Hanover Insurance Group","https://www.hanover.com/about-us/careers",none,none,true,enrich_free_or_skip
+"Insurance","Arch Capital Group Ltd.","https://www.archcapgroup.com/careers.html",none,none,true,enrich_free_or_skip
+"Insurance","Horace Mann Educators Corporation","https://www.horacemann.com/about/careers",none,none,true,enrich_free_or_skip
+"Insurance","Fidelity & Guaranty Life","https://careers.fglife.com/",phenom,none,true,free_board
+"Insurance","Athene Holding Ltd.","https://athene.com/careers/",none,none,true,enrich_free_or_skip
+"Insurance","American Equity Investment Life Holding Company","https://www.american-equity.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","MGIC Investment Corporation","https://www.mgic.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","American Financial Group","https://www.afginc.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Global Atlantic Financial Group","https://www.globalatlantic.com/careers.html",none,none,true,enrich_free_or_skip
+"Insurance","American Strategic Insurance Corp.","https://www.americanstrategic.com/about-us/careers",none,none,true,enrich_free_or_skip
+"Insurance","RLI Corp.","https://www.rlicorp.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","FBL Financial Group  Inc.","https://www.fbfs.com/careers",none,none,true,enrich_free_or_skip
+"Insurance","Protective Life Corporation","https://www.protective.com/about-us/careers",none,none,true,enrich_free_or_skip
+"Insurance","Western & Southern Financial Group","https://careers.westernsouthernlife.com/",phenom,none,true,free_board
+"investment firms","BlackRock","https://careers.blackrock.com/",phenom,none,true,free_board
+"investment firms","Vanguard Group","https://about.vanguard.com/careers/",none,none,true,enrich_free_or_skip
+"investment firms","Fidelity Investments","https://jobs.fidelity.com/",phenom,none,true,free_board
+"investment firms","Capital Group","https://jobs.capitalgroup.com/",phenom,none,true,free_board
+"investment firms","T. Rowe Price Group  Inc.","https://www.troweprice.com/corporate/en/careers.html",none,none,true,enrich_free_or_skip
+"investment firms","Northern Trust Corporation","https://careers.northerntrust.com/",phenom,none,true,free_board
+"investment firms","Ameriprise Financial","https://www.ameriprise.com/careers/",none,none,true,enrich_free_or_skip
+"investment firms","UBS Group AG","https://www.ubs.com/global/en/careers.html",none,none,true,enrich_free_or_skip
+"investment firms","Raymond James Financial","https://www.raymondjames.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","TD Ameritrade","https://www.tdameritrade.com/careers.page",none,none,true,enrich_free_or_skip
+"investment firms","Invesco Ltd.","https://careers.invesco.com/",phenom,none,true,free_board
+"investment firms","Edward Jones","https://careers.edwardjones.com/",phenom,none,true,free_board
+"investment firms","Prudential Financial","https://www.prudential.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","Charles Schwab & Co.  Inc.","https://www.schwabjobs.com/",phenom,none,true,free_board
+"investment firms","Lazard Ltd.","https://www.lazard.com/careers/",none,none,true,enrich_free_or_skip
+"investment firms","American Express Company","https://careers.americanexpress.com/",phenom,none,true,free_board
+"investment firms","Franklin Templeton Investments","https://www.franklintempletoncareers.com/",none,none,true,enrich_free_or_skip
+"investment firms","Nomura Holdings","https://www.nomuraholdings.com/careers/index.html",none,none,true,enrich_free_or_skip
+"investment firms","Waddell & Reed Financial  Inc.","https://careers.waddell.com/",phenom,none,true,free_board
+"investment firms","E*TRADE","https://www.etrade.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","Federated Hermes  Inc.","https://careers.federatedinvestors.com/",phenom,none,true,free_board
+"investment firms","MSCI Inc.","https://www.msci.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","Voya Financial","https://www.voya.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","TIAA","https://careers.tiaa.org/",phenom,none,true,free_board
+"investment firms","Virtu Financial","https://www.virtu.com/careers/",none,none,true,enrich_free_or_skip
+"investment firms","S&P Global Inc.","https://careers.spglobal.com/",phenom,none,true,free_board
+"investment firms","CME Group Inc.","https://www.cmegroup.com/company/careers.html",none,none,true,enrich_free_or_skip
+"investment firms","Affiliated Managers Group  Inc.","https://www.amg.com/careers/",none,none,true,enrich_free_or_skip
+"investment firms","American Century Investments","https://careers.americancentury.com/",phenom,none,true,free_board
+"investment firms","Ares Management","https://www.aresmgmt.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","Eaton Vance","https://careers.eatonvance.com/",phenom,none,true,free_board
+"investment firms","Franklin Resources  Inc.","https://www.franklinresources.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","Moody's Corporation","https://www.moodys.com/careers",none,none,true,enrich_free_or_skip
+"investment firms","Synchrony Financial","https://jobs.synchrony.com/",phenom,none,true,free_board
+"FinTech","Lemonade","https://www.lemonade.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Kabbage","https://www.kabbage.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Affirm","https://www.affirm.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Hippo Insurance","https://www.hippo.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Stash","https://www.stash.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Brex","https://www.brex.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Ramp","https://ramp.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Betterment","https://www.betterment.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Acorns","https://www.acorns.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Klarna","https://www.klarna.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","AvidXchange","https://www.avidxchange.com/company/careers/",none,none,true,enrich_free_or_skip
+"FinTech","OnDeck","https://www.ondeck.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","LendingClub","https://www.lendingclub.com/about/careers",none,none,true,enrich_free_or_skip
+"FinTech","Varo Bank","https://www.varomoney.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Circle","https://www.circle.com/en/careers",none,none,true,enrich_free_or_skip
+"FinTech","Payoneer","https://www.payoneer.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Divvy","https://getdivvy.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Personal Capital","https://www.personalcapital.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Root Insurance","https://www.joinroot.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Socure","https://www.socure.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Current","https://current.com/careers",none,none,true,enrich_free_or_skip
+"FinTech","Policygenius","https://www.policygenius.com/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Rapyd","https://www.rapyd.net/careers/",none,none,true,enrich_free_or_skip
+"FinTech","Alloy","https://alloy.co/careers/",none,none,true,enrich_free_or_skip
+"Tech","Microsoft","https://careers.microsoft.com/",none,none,true,enrich_free_or_skip
+"Tech","Apple Inc.","https://www.apple.com/jobs/us/",none,careerhtml,true,enrich_free_or_skip
+"Tech","Google (Alphabet Inc.)","https://careers.google.com/",none,none,true,enrich_free_or_skip
+"Tech","Amazon","https://www.amazon.jobs/en/",none,none,true,enrich_free_or_skip
+"Tech","Facebook (Meta Platforms  Inc.)","https://www.facebook.com/careers/",none,none,true,enrich_free_or_skip
+"Tech","IBM","https://www.ibm.com/employment/",none,none,true,enrich_free_or_skip
+"Tech","Oracle Corporation","https://www.oracle.com/corporate/careers/",none,none,true,enrich_free_or_skip
+"Tech","Cisco Systems  Inc.","https://jobs.cisco.com/",none,none,true,enrich_free_or_skip
+"Tech","Intel Corporation","https://jobs.intel.com/",none,none,true,enrich_free_or_skip
+"Tech","Dell Technologies","https://jobs.dell.com/",none,none,true,enrich_free_or_skip
+"Tech","Twitter  Inc.","https://careers.twitter.com/",none,none,true,enrich_free_or_skip
+"Tech","LinkedIn (Microsoft)","https://careers.linkedin.com/",none,none,true,enrich_free_or_skip
+"Tech","Pinterest  Inc.","https://careers.pinterest.com/",none,none,true,enrich_free_or_skip
+"Tech","Snap Inc.","https://careers.snap.com/",none,none,true,enrich_free_or_skip
+"Tech","Reddit  Inc.","https://www.redditinc.com/careers",none,none,true,enrich_free_or_skip
+"Tech","TikTok","https://careers.tiktok.com/",none,none,true,enrich_free_or_skip
+"Tech","Yahoo (Verizon Media)","https://www.verizonmedia.com/careers/",none,none,true,enrich_free_or_skip
+"Tech","Amazon Web Services (AWS)","https://www.amazon.jobs/en/teams/aws",none,none,true,enrich_free_or_skip
+"Tech","Microsoft Azure","https://careers.microsoft.com/us/en/cloudandai",none,none,true,enrich_free_or_skip
+"Tech","Google Cloud","https://careers.google.com/teams/cloud/",none,none,true,enrich_free_or_skip
+"Tech","IBM Cloud","https://www.ibm.com/cloud/jobs",none,careerhtml,true,enrich_free_or_skip
+"Tech","Oracle Cloud","https://www.oracle.com/cloud/jobs/",none,careerhtml,true,enrich_free_or_skip
+"Tech","Amazon.com  Inc.","https://www.amazon.jobs/",none,none,true,enrich_free_or_skip
+"Tech","Tesla  Inc.","https://www.tesla.com/careers",none,none,true,enrich_free_or_skip
+"Tech","NVIDIA Corporation","https://www.nvidia.com/en-us/about-nvidia/careers/",none,none,true,enrich_free_or_skip
+"Tech","Qualcomm Incorporated","https://www.qualcomm.com/company/careers",none,none,true,enrich_free_or_skip
+"Tech","Adobe Inc.","https://www.adobe.com/careers.html",none,none,true,enrich_free_or_skip
+"Tech","Broadcom Inc.","https://www.broadcom.com/company/careers",none,none,true,enrich_free_or_skip
+"Tech","Salesforce.com  Inc.","https://www.salesforce.com/company/careers/",none,none,true,enrich_free_or_skip
+"Tech","Lyft  Inc.","https://www.lyft.com/careers",none,none,true,enrich_free_or_skip
+"Tech","Uber Technologies  Inc.","https://www.uber.com/us/en/careers/",none,none,true,enrich_free_or_skip
+"Tech","Airbnb  Inc.","https://careers.airbnb.com/",none,none,true,enrich_free_or_skip
+"Tech","PayPal Holdings  Inc.","https://www.paypal.com/us/webapps/mpp/jobs",none,careerhtml,true,enrich_free_or_skip
+"Tech","Zoom Video Communications  Inc.","https://zoom.us/careers",none,none,true,enrich_free_or_skip
+"Tech","Square  Inc.","https://careers.squareup.com/us/en",none,none,true,enrich_free_or_skip
+"Tech","Netflix  Inc.","https://jobs.netflix.com/",none,none,true,enrich_free_or_skip
+"Tech","Workday  Inc.","https://www.workday.com/en-us/company/careers.html",none,none,true,enrich_free_or_skip
+"Tech","Pinterest  Inc.","https://careers.pinterest.com/careers",phenom,none,true,free_board
+"Tech","Spotify Technology S.A.","https://www.spotifyjobs.com/",none,none,true,enrich_free_or_skip
+"Tech","Snap Inc.","https://www.snap.com/en-US/jobs/",none,careerhtml,true,enrich_free_or_skip
+"Tech","Intuit Inc.","https://careers.intuit.com/",none,none,true,enrich_free_or_skip
+"Tech","Hewlett Packard Enterprise Company","https://careers.hpe.com/",none,none,true,enrich_free_or_skip
+"Tech","Twilio Inc.","https://www.twilio.com/company/jobs",none,careerhtml,true,enrich_free_or_skip
+"Tech","DocuSign  Inc.","https://www.docusign.com/careers",none,none,true,enrich_free_or_skip
+"Tech","Slack Technologies  Inc.","https://slack.com/careers",none,none,true,enrich_free_or_skip
+"Tech","Palantir Technologies Inc.","https://www.palantir.com/careers/",none,none,true,enrich_free_or_skip
+"Tech","Dropbox  Inc.","https://www.dropbox.com/jobs",none,careerhtml,true,enrich_free_or_skip
+"Tech","Atlassian Corporation Plc","https://www.atlassian.com/company/careers",none,none,true,enrich_free_or_skip
+"Tech","MongoDB  Inc.","https://www.mongodb.com/careers",none,none,true,enrich_free_or_skip
+"Tech","GitLab Inc.","https://about.gitlab.com/jobs/",none,careerhtml,true,enrich_free_or_skip
+"Tech","RingCentral  Inc.","https://www.ringcentral.com/careers.html",none,none,true,enrich_free_or_skip
+"Tech","ServiceNow  Inc.","https://www.servicenow.com/careers.html",none,none,true,enrich_free_or_skip
+"Tech","Zscaler  Inc.","https://www.zscaler.com/careers",none,none,true,enrich_free_or_skip
+"Tech","Okta  Inc.","https://www.okta.com/company/careers/",none,none,true,enrich_free_or_skip
+"Tech","Nutanix  Inc.","https://www.nutanix.com/careers",none,none,true,enrich_free_or_skip
+"Tech","SquareSpace  Inc.","https://www.squarespace.com/about/careers",none,none,true,enrich_free_or_skip
+"Tech","Unity Technologies SF","https://careers.unity.com/",none,none,true,enrich_free_or_skip
+"Tech","Asana  Inc.","https://asana.com/jobs",none,careerhtml,true,enrich_free_or_skip
+"Tech","GitHub  Inc.","https://github.com/about/careers",none,none,true,enrich_free_or_skip
+"Tech","Stripe  Inc.","https://stripe.com/jobs",none,careerhtml,true,enrich_free_or_skip
+"Tech","Box  Inc.","https://www.box.com/careers",none,none,true,enrich_free_or_skip
+"Tech","Airbnb","https://airbnb.com/careers",none,none,true,enrich_free_or_skip
+"Tech","DoorDash","https://www.doordash.com/careers/",none,none,true,enrich_free_or_skip
+"Tech","Robinhood","https://careers.robinhood.com/",none,none,true,enrich_free_or_skip
+"Tech","Instacart","https://careers.instacart.com/",none,none,true,enrich_free_or_skip
+"HealthCare","UnitedHealth Group","https://careers.unitedhealthgroup.com/",phenom,none,true,free_board
+"HealthCare","McKesson Corporation","https://careers.mckesson.com/",phenom,none,true,free_board
+"HealthCare","CVS Health Corporation","https://jobs.cvshealth.com/",phenom,none,true,free_board
+"HealthCare","AmerisourceBergen Corporation","https://www.amerisourcebergen.com/careers",none,none,true,enrich_free_or_skip
+"HealthCare","Cardinal Health  Inc.","https://jobs.cardinalhealth.com/",phenom,none,true,free_board
+"HealthCare","Walgreens Boots Alliance  Inc.","https://jobs.walgreens.com/",phenom,none,true,free_board
+"HealthCare","Anthem  Inc.","https://careers.antheminc.com/",phenom,none,true,free_board
+"HealthCare","Kaiser Permanente","https://www.kaiserpermanentejobs.org/",none,none,true,enrich_free_or_skip
+"HealthCare","Ascension Health Alliance","https://jobs.ascension.org/",phenom,none,true,free_board
+"HealthCare","Humana Inc.","https://www.humana.com/about/careers/",none,none,true,enrich_free_or_skip
+"HealthCare","HCA Healthcare  Inc.","https://careers.hcahealthcare.com/",phenom,none,true,free_board
+"HealthCare","Tenet Healthcare Corporation","https://jobs.tenethealth.com/",phenom,none,true,free_board
+"HealthCare","Community Health Systems  Inc.","https://jobs.chs.net/",phenom,none,true,free_board
+"HealthCare","Universal Health Services  Inc.","https://jobs.uhsinc.com/",phenom,none,true,free_board
+"HealthCare","Centene Corporation","https://jobs.centene.com/",phenom,none,true,free_board
+"HealthCare","Laboratory Corporation of America Holdings","https://jobs.labcorp.com/",phenom,none,true,free_board
+"HealthCare","Molina Healthcare  Inc.","https://jobs.molinahealthcare.com/",phenom,none,true,free_board
+"HealthCare","Dignity Health","https://www.dignityhealthcareers.org/",none,none,true,enrich_free_or_skip
+"HealthCare","Kindred Healthcare  LLC","https://www.kindredhealthcare.com/careers",none,none,true,enrich_free_or_skip
+"HealthCare","Encompass Health Corporation","https://jobs.encompasshealth.com/",phenom,none,true,free_board
+"HealthCare","Quest Diagnostics Incorporated","https://careers.questdiagnostics.com/",phenom,none,true,free_board
+"HealthCare","Brookdale Senior Living Inc.","https://jobs.brookdale.com/",phenom,none,true,free_board
+"HealthCare","Acadia Healthcare Company  Inc.","https://careers.acadiahealthcare.com/",phenom,none,true,free_board
+"HealthCare","DaVita Inc.","https://careers.davita.com/",phenom,none,true,free_board
+"HealthCare","Select Medical Corporation","https://jobs.selectmedical.com/",phenom,none,true,free_board
+"HealthCare","Fresenius Medical Care AG & Co. KGaA","https://jobs.fmcna.com/",phenom,none,true,free_board
+"HealthCare","Magellan Health  Inc.","https://careers.magellanhealth.com/",phenom,none,true,free_board
+"HealthCare","Genesis Healthcare Inc.","https://genesiscareers.jobs.net/",none,none,true,enrich_free_or_skip
+"HealthCare","LifePoint Health  Inc.","https://lifepointhealth.jobs.net/",none,none,true,enrich_free_or_skip
+"HealthCare","TeamHealth Holdings  Inc.","https://careers.teamhealth.com/",phenom,none,true,free_board
+"HealthCare","Cerner Corporation","https://careers.cerner.com/",phenom,none,true,free_board
+"HealthCare","Change Healthcare Holdings  Inc.","https://careers.changehealthcare.com/",phenom,none,true,free_board
+"HealthCare","Health Care Service Corporation (HCSC)","https://jobs.hcsc.com/",phenom,none,true,free_board
+"HealthCare","Amedisys  Inc.","https://jobs.amedisys.com/",phenom,none,true,free_board
+"HealthCare","LHC Group  Inc.","https://jobs.lhcgroup.com/",phenom,none,true,free_board
+"HealthCare","Chemed Corporation","https://jobs.chemed.com/",phenom,none,true,free_board
+"HealthCare","Sun Healthcare Group  Inc.","https://jobs.kindredathome.com/",phenom,none,true,free_board
+"HealthCare","Envision Healthcare Corporation","https://www.evhc.net/careers",none,none,true,enrich_free_or_skip
+"HealthCare","Hanger  Inc.","https://jobs.hanger.com/",phenom,none,true,free_board
+"IT Consulting","Accenture","https://www.accenture.com/us-en/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Deloitte","https://jobs2.deloitte.com/us/en/",none,none,true,enrich_free_or_skip
+"IT Consulting","Cognizant","https://careers.cognizant.com/global/en",none,none,true,enrich_free_or_skip
+"IT Consulting","Infosys","https://www.infosys.com/careers/",none,none,true,enrich_free_or_skip
+"IT Consulting","Tata Consultancy Services (TCS)","https://www.tcs.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Capgemini","https://www.capgemini.com/careers/",none,none,true,enrich_free_or_skip
+"IT Consulting","Wipro Limited","https://careers.wipro.com/",none,none,true,enrich_free_or_skip
+"IT Consulting","HCL Technologies","https://www.hcltech.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","DXC Technology","https://www.dxc.technology/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Tech Mahindra","https://www.techmahindra.com/careers/",none,none,true,enrich_free_or_skip
+"IT Consulting","Ernst & Young (EY)","https://www.ey.com/en_us/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","PricewaterhouseCoopers (PwC)","https://www.pwc.com/us/en/careers.html",none,none,true,enrich_free_or_skip
+"IT Consulting","CGI Inc.","https://www.cgi.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Booz Allen Hamilton","https://www.boozallen.com/careers.html",none,none,true,enrich_free_or_skip
+"IT Consulting","LTI (L&T Infotech)","https://www.lntinfotech.com/careers/",none,none,true,enrich_free_or_skip
+"IT Consulting","Mindtree","https://www.mindtree.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Virtusa","https://www.virtusa.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","NTT DATA","https://careers-inc.nttdata.com/",none,none,true,enrich_free_or_skip
+"IT Consulting","Hitachi Consulting","https://www.hitachiconsulting.com/about-us/careers/",none,none,true,enrich_free_or_skip
+"IT Consulting","Mphasis","https://www.mphasis.com/careers.html",none,none,true,enrich_free_or_skip
+"IT Consulting","Zensar Technologies","https://www.zensar.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","EPAM Systems","https://www.epam.com/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Atos","https://atos.net/en/careers",none,none,true,enrich_free_or_skip
+"IT Consulting","Persistent Systems","https://www.persistent.com/careers/",none,none,true,enrich_free_or_skip
+"IT Consulting","Hexaware Technologies","https://hexaware.com/careers/",none,none,true,enrich_free_or_skip
+"Ecommerece","Walmart","https://careers.walmart.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","The Home Depot","https://careers.homedepot.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Best Buy","https://www.bestbuy-jobs.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Target","https://jobs.target.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Costco Wholesale","https://www.costco.com/jobs.html",none,careerhtml,true,enrich_free_or_skip
+"Ecommerece","Wayfair","https://www.wayfair.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Macy's","https://www.macysjobs.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Kohl's","https://careers.kohls.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Lowe's","https://jobs.lowes.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","eBay","https://careers.ebayinc.com/join-our-team/start-your-search/",none,none,true,enrich_free_or_skip
+"Ecommerece","Netflix","https://jobs.netflix.com/jobs",none,careerhtml,true,enrich_free_or_skip
+"Ecommerece","Nordstrom","https://careers.nordstrom.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Etsy","https://www.etsy.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Bed Bath & Beyond","https://www.bedbathandbeyond.jobs/",none,none,true,enrich_free_or_skip
+"Ecommerece","Qurate Retail Group","https://jobs.qurateretailgroup.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Chewy","https://careers.chewy.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Dollar General","https://careers.dollargeneral.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","TJX Companies","https://jobs.tjx.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Ross Stores","https://jobs.rossstores.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Petco","https://careers.petco.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Williams-Sonoma","https://www.williams-sonomainc.com/careers/",none,none,true,enrich_free_or_skip
+"Ecommerece","GameStop","https://careers.gamestop.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Overstock.com","https://www.overstock.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","BJ's Wholesale Club","https://careers.bjs.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Rite Aid","https://jobs.riteaid.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","AutoZone","https://careers.autozone.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Tractor Supply Company","https://tractorsupply.jobs/",none,none,true,enrich_free_or_skip
+"Ecommerece","Michaels","https://www.michaels.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Dollar Tree","https://www.dollartree.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Advance Auto Parts","https://www.advanceautoparts.jobs/",none,none,true,enrich_free_or_skip
+"Ecommerece","The Container Store","https://www.containerstore.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Revolve Group","https://www.revolvegroup.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Groupon","https://jobs.groupon.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","1-800-FLOWERS.COM","https://www.1800flowers.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","DICK'S Sporting Goods","https://careers.dickssportinggoods.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","L Brands","https://careers.lb.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Foot Locker","https://www.footlocker-inc.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Abercrombie & Fitch","https://corporate.abercrombie.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Build-A-Bear Workshop","https://careers.buildabear.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Lands' End","https://www.landsend.com/jobs/",none,careerhtml,true,enrich_free_or_skip
+"Ecommerece","Signet Jewelers","https://www.signetjewelers.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Office Depot","https://jobs.officedepot.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Party City","https://corporate.partycity.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","American Eagle Outfitters","https://aeo.jobs/",none,none,true,enrich_free_or_skip
+"Ecommerece","1stdibs","https://www.1stdibs.com/careers/",none,none,true,enrich_free_or_skip
+"Ecommerece","Ulta Beauty","https://careers.ulta.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Ascena Retail Group","https://www.ascenaretail.com/careers/",none,none,true,enrich_free_or_skip
+"Ecommerece","HSN (Home Shopping Network)","https://jobs.hsn.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Burlington Stores","https://www.burlingtonstores.jobs/",none,none,true,enrich_free_or_skip
+"Ecommerece","Zumiez","https://www.zumiez.com/jobs",none,careerhtml,true,enrich_free_or_skip
+"Ecommerece","Shoe Carnival","https://www.shoecarnival.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","The RealReal","https://www.therealreal.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Express","https://jobs.express.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Big Lots","https://www.biglots.com/corporate/careers/",none,none,true,enrich_free_or_skip
+"Ecommerece","Lululemon","https://info.lululemon.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Stitch Fix","https://www.stitchfix.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Levi Strauss & Co.","https://www.levistrauss.com/careers/",none,none,true,enrich_free_or_skip
+"Ecommerece","Sally Beauty Holdings","https://jobs.sallybeauty.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Hibbett Sports","https://www.hibbett.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Tailored Brands","https://jobs.tailoredbrands.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Designer Brands","https://www.designerbrands.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Francesca's","https://www.francescas.com/jobs",none,careerhtml,true,enrich_free_or_skip
+"Ecommerece","RH (Restoration Hardware)","https://jobs.rh.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","At Home","https://www.athome.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Academy Sports + Outdoors","https://careers.academy.com/",none,none,true,enrich_free_or_skip
+"Ecommerece","Citi Trends","https://www.cititrends.com/careers",none,none,true,enrich_free_or_skip
+"Ecommerece","Genesco","https://jobs.genesco.com/",none,none,true,enrich_free_or_skip
+"Telecommunications","AT&T Inc.","https://www.att.jobs/",none,none,true,enrich_free_or_skip
+"Telecommunications","Verizon Communications Inc.","https://www.verizon.com/about/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Comcast Corporation","https://jobs.comcast.com/",phenom,none,true,free_board
+"Telecommunications","Charter Communications  Inc.","https://jobs.spectrum.com/",phenom,none,true,free_board
+"Telecommunications","T-Mobile US  Inc.","https://www.t-mobile.com/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","CenturyLink  Inc. (now Lumen Technologies)","https://jobs.lumen.com/",phenom,none,true,free_board
+"Telecommunications","DISH Network Corporation","https://careers.dish.com/",phenom,none,true,free_board
+"Telecommunications","Cox Communications  Inc.","https://jobs.coxenterprises.com/category/cox-communications-jobs/1645/8063/1",phenom,none,true,free_board
+"Telecommunications","Frontier Communications Corporation","https://www.frontier.com/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","Altice USA  Inc.","https://alticeusacareers.com/",none,none,true,enrich_free_or_skip
+"Telecommunications","Windstream Holdings  Inc.","https://www.windstream.com/about/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","Cable One  Inc. (now Sparklight)","https://www.sparklight.com/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","Consolidated Communications Holdings  Inc.","https://www.consolidated.com/about-us/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","TDS Telecommunications LLC","https://tdstelecom.com/careers.html",none,none,true,enrich_free_or_skip
+"Telecommunications","Vonage Holdings Corp.","https://careers.vonage.com/",phenom,none,true,free_board
+"Telecommunications","Cincinnati Bell Inc.","https://www.cincinnatibell.com/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","WOW! Internet  Cable & Phone","https://jobs.wowway.com/",phenom,none,true,free_board
+"Telecommunications","Liberty Broadband Corporation","https://jobs.libertyglobal.com/",phenom,none,true,free_board
+"Telecommunications","Lumos Networks Corp.","https://www.lumosnetworks.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Alaska Communications Systems Group  Inc.","https://www.alaskacommunications.com/Careers",none,none,true,enrich_free_or_skip
+"Telecommunications","Shentel (Shenandoah Telecommunications Company)","https://careers.shentel.com/",phenom,none,true,free_board
+"Telecommunications","Uniti Group Inc.","https://www.uniti.com/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","Liberty Latin America Ltd.","https://www.lla.com/careers",none,none,true,enrich_free_or_skip
+"Telecommunications","United States Cellular Corporation","https://www.uscellular.jobs/",none,none,true,enrich_free_or_skip
+"Telecommunications","Hawaiian Telcom Holdco  Inc.","https://www.hawaiiantel.com/about-us/careers.html",none,none,true,enrich_free_or_skip
+"Telecommunications","Cable & Wireless Communications Limited (C&W Communications)","https://careers.libertylatinamerica.com/careers",phenom,none,true,free_board
+"Telecommunications","GTT Communications  Inc.","https://www.gtt.net/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Midco (Midcontinent Communications)","https://www.midco.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Blue Stream Fiber","https://bluestreamfiber.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Lingo Communications","https://www.lingotalk.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Wave Broadband","https://www.wavebroadband.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","MetroNet  Inc.","https://careers.metronetinc.com/",phenom,none,true,free_board
+"Telecommunications","Ziply Fiber","https://www.ziplyfiber.com/about-us/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Segra","https://www.segra.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Otelco Inc.","https://www.otelco.com/careers/",none,none,true,enrich_free_or_skip
+"Telecommunications","Fidelity Communications Co.","https://www.fidelitycommunications.com/careers/",none,none,true,enrich_free_or_skip
+"Retail","The Kroger Co.","https://jobs.kroger.com/",phenom,none,true,free_board
+"Retail","Target Corporation","https://corporate.target.com/careers/",none,none,true,enrich_free_or_skip
+"Retail","Albertsons Companies  Inc.","https://www.albertsonscompanies.com/careers.html",none,none,true,enrich_free_or_skip
+"Retail","Rite Aid Corporation","https://careers.info.riteaid.com/",phenom,none,true,free_board
+"Retail","McDonald's Corporation","https://careers.mcdonalds.com/us",phenom,none,true,free_board
+"Retail","7-Eleven  Inc.","https://careers.7-eleven.com/careers/home",phenom,none,true,free_board
+"Retail","Apple Inc.","https://jobs.apple.com/us/search",none,none,true,enrich_free_or_skip
+"Retail","Publix Super Markets  Inc.","https://jobs.publix.com/",phenom,none,true,free_board
+"Retail","Bed Bath & Beyond Inc.","https://jobs.bedbathandbeyond.com/",phenom,none,true,free_board
+"Retail","Kohl's Corporation","https://corporate.kohls.com/careers",none,none,true,enrich_free_or_skip
+"Retail","JCPenney","https://jobs.jcp.com/",phenom,none,true,free_board
+"Retail","Gap Inc.","https://corporate.gapinc.com/en-us/careers",none,none,true,enrich_free_or_skip
+"Retail","Foot Locker  Inc.","https://www.sneakerjobs.com/",phenom,none,true,free_board
+"Retail","O'Reilly Automotive  Inc.","https://corporate.oreillyauto.com/onlineapplication/careerpage",none,none,true,enrich_free_or_skip
+"Retail","Tractor Supply Company","https://careers.tractorsupply.com/",phenom,none,true,free_board
+"Manufacturing","General Motors Company","https://search-careers.gm.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","Ford Motor Company","https://corporate.ford.com/careers.html",none,none,true,enrich_free_or_skip
+"Manufacturing","General Electric Company","https://jobs.gecareers.com/global/en",none,none,true,enrich_free_or_skip
+"Manufacturing","Boeing Company","https://jobs.boeing.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","Lockheed Martin Corporation","https://www.lockheedmartinjobs.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","Honeywell International Inc.","https://www.honeywell.com/us/en/careers",none,none,true,enrich_free_or_skip
+"Manufacturing","Texas Instruments Incorporated","https://careers.ti.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","3M Company","https://www.3m.com/3M/en_US/careers-us/",none,none,true,enrich_free_or_skip
+"Manufacturing","United Technologies Corporation","https://www.utc.com/en/Careers",none,none,true,enrich_free_or_skip
+"Manufacturing","Emerson Electric Co.","https://www.emerson.com/en-us/careers",none,none,true,enrich_free_or_skip
+"Manufacturing","Eaton Corporation plc","https://www.eaton.com/us/en-us/company/careers.html",none,none,true,enrich_free_or_skip
+"Manufacturing","Cummins Inc.","https://careers.cummins.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","Micron Technology  Inc.","https://www.micron.com/about/careers",none,none,true,enrich_free_or_skip
+"Manufacturing","Applied Materials  Inc.","https://www.appliedmaterials.com/company/careers",none,none,true,enrich_free_or_skip
+"Manufacturing","Illinois Tool Works Inc.","https://careers.itw.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","Deere & Company","https://www.deere.com/en/our-company/john-deere-careers/",none,none,true,enrich_free_or_skip
+"Manufacturing","Corning Incorporated","https://www.corning.com/worldwide/en/careers.html",none,none,true,enrich_free_or_skip
+"Manufacturing","Parker-Hannifin Corporation","https://careers.parker.com/",none,none,true,enrich_free_or_skip
+"Manufacturing","Northrop Grumman Corporation","https://www.northropgrumman.com/careers/",none,none,true,enrich_free_or_skip
+"Manufacturing","Baker Hughes Company","https://jobs.bakerhughes.com/global/en",none,none,true,enrich_free_or_skip
+"Energy","Exxon Mobil Corporation","https://corporate.exxonmobil.com/Careers",none,none,true,enrich_free_or_skip
+"Energy","Chevron Corporation","https://www.chevron.com/careers",none,none,true,enrich_free_or_skip
+"Energy","ConocoPhillips","https://careers.conocophillips.com/",phenom,none,true,free_board
+"Energy","Phillips 66","https://www.phillips66.com/careers",none,none,true,enrich_free_or_skip
+"Energy","Valero Energy Corporation","https://www.valero.com/en-us/careers",none,none,true,enrich_free_or_skip
+"Energy","Marathon Petroleum Corporation","https://www.marathonpetroleum.com/Careers/",none,none,true,enrich_free_or_skip
+"Energy","Berkshire Hathaway Energy","https://www.berkshirehathawayenergyco.com/careers/",none,none,true,enrich_free_or_skip
+"Energy","NextEra Energy  Inc.","https://www.nexteraenergy.com/careers/",none,none,true,enrich_free_or_skip
+"Energy","Duke Energy Corporation","https://www.duke-energy.com/our-company/careers",none,none,true,enrich_free_or_skip
+"Energy","Dominion Energy  Inc.","https://careers.dominionenergy.com/",phenom,none,true,free_board
+"Energy","Exelon Corporation","https://www.exeloncorp.com/careers",none,none,true,enrich_free_or_skip
+"Energy","Enterprise Products Partners L.P.","https://careers.enterpriseproducts.com/",phenom,none,true,free_board
+"Energy","Occidental Petroleum Corporation","https://www.oxy.com/careers/Pages/default.aspx",none,none,true,enrich_free_or_skip
+"Energy","American Electric Power Company  Inc.","https://www.aep.com/careers/",none,none,true,enrich_free_or_skip
+"Energy","Williams Companies  Inc.","https://www.williams.com/careers/",none,none,true,enrich_free_or_skip
+"Energy","EOG Resources  Inc.","https://www.eogresources.com/careers/",none,none,true,enrich_free_or_skip
+"Energy","Kinder Morgan  Inc.","https://www.kindermorgan.com/about/careers/",none,none,true,enrich_free_or_skip
+"Energy","Con Edison  Inc.","https://careers.coned.com/",phenom,none,true,free_board
+"Energy","Schlumberger Limited","https://careers.slb.com/",phenom,none,true,free_board
+"Energy","National Grid plc","https://www.nationalgrid.com/careers",none,none,true,enrich_free_or_skip
+"Energy","Southern Company","https://www.southerncompany.com/careers.html",none,none,true,enrich_free_or_skip
+"Energy","Cheniere Energy  Inc.","https://cheniere.hua.hrsmart.com/hr/ats/JobSearch/index",none,none,true,enrich_free_or_skip
+"Energy","Devon Energy Corporation","https://www.devonenergy.com/careers",none,none,true,enrich_free_or_skip
+"Energy","EQT Corporation","https://www.eqt.com/careers",none,none,true,enrich_free_or_skip
+"Energy","ONEOK  Inc.","https://www.oneok.com/careers",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Walt Disney Company","https://jobs.disneycareers.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","AT&T Inc. (WarnerMedia)","https://www.warnermediacareers.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","ViacomCBS Inc.","https://viacomcbs.careers/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","NBCUniversal Media  LLC","https://www.nbcunicareers.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Sony Corporation of America","https://www.sonypicturesjobs.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Fox Corporation","https://www.foxcareers.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Discovery  Inc.","https://corporate.discovery.com/careers/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","The New York Times Company","https://nytimes.wd5.myworkdayjobs.com/NYT",workday,none,true,free_board
+"Media and Entertainment","Warner Music Group","https://www.wmg.com/careers",none,none,true,enrich_free_or_skip
+"Media and Entertainment","CBS Corporation","https://cbscorporation.jobs/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","The Walt Disney Studios","https://www.waltdisneystudios.com/careers/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","ESPN","https://jobs.espncareers.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Univision Communications Inc.","https://corporate.univision.com/corporate/careers/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Hearst Corporation","https://www.hearst.com/careers",none,none,true,enrich_free_or_skip
+"Media and Entertainment","AMC Networks Inc.","https://www.amcnetworks.com/careers/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Hulu  LLC","https://careers.hulu.com/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","BuzzFeed  Inc.","https://www.buzzfeed.com/about/jobs",none,careerhtml,true,enrich_free_or_skip
+"Media and Entertainment","Lions Gate Entertainment Corp.","https://jobs.jobvite.com/lionsgate",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Time Warner Inc.","https://www.timewarner.com/careers/",none,none,true,enrich_free_or_skip
+"Media and Entertainment","Meredith Corporation","https://meredith.wd5.myworkdayjobs.com/EXT",workday,none,true,free_board
+"Media and Entertainment","Bloomberg L.P.","https://careers.bloomberg.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Delta Air Lines","https://www.deltajobs.net/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","United Airlines","https://jobs.united.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","American Airlines","https://jobs.aa.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Southwest Airlines","https://careers.southwestair.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","FedEx Corporation","https://careers.fedex.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","UPS (United Parcel Service)","https://www.jobs-ups.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Alaska Airlines","https://careers.alaskaair.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","JetBlue Airways","https://careers.jetblue.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","DHL","https://www.dpdhl.jobs/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Spirit Airlines","https://careers.spirit.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Atlas Air Worldwide","https://www.atlasair.com/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Air Transport Services Group (ATSG)","https://www.airtransportjobs.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","SkyWest Airlines","https://www.skywest.com/skywest-airline-jobs/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Hawaiian Airlines","https://www.hawaiianairlines.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Allegiant Air","https://careers.allegiantair.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Republic Airways","https://rjetcareers.jobs/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Endeavor Air","https://www.endeavorair.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Frontier Airlines","https://flyfrontiercareers.silkroad.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Kalitta Air","https://www.kalittaair.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","XPO Logistics","https://jobs.xpo.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Ryder System  Inc.","https://ryder.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","J.B. Hunt Transport Services  Inc.","https://www.jbhunt.com/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Schneider National  Inc.","https://schneiderjobs.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Werner Enterprises","https://careers.werner.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Swift Transportation Company","https://drive4swift.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Landstar System  Inc.","https://www.landstar.com/landstar-careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","YRC Worldwide Inc.","https://careers.yrcw.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Old Dominion Freight Line  Inc.","https://www.odfl.com/Home/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Matson  Inc.","https://matson.com/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Expeditors International of Washington  Inc.","https://www.expeditors.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","C.H. Robinson Worldwide  Inc.","https://www.chrobinson.com/en-us/about-us/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Air Methods Corporation","https://www.airmethods.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Union Pacific Railroad","https://up.jobs/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Norfolk Southern Corporation","https://nscorp.com/content/nscorp/en/careers.html",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","CSX Corporation","https://www.csx.com/index.cfm/about-us/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","BNSF Railway","https://jobs.bnsf.com/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Canadian National Railway Company","https://jobs.cn.ca/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Canadian Pacific Railway Limited","https://www.cpr.ca/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Kansas City Southern Railway","https://www.kcsouthern.com/en/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Alaska Marine Lines","https://www.lynden.com/aml/employment.html",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Crowley Maritime Corporation","https://www.crowley.com/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","American President Lines (APL)","https://www.apl.com/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","TOTE Maritime","https://www.toteinc.com/careers/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Maersk Line","https://www.maersk.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Hapag-Lloyd AG","https://www.hapag-lloyd.com/en/career.html",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","OOCL (Orient Overseas Container Line)","https://www.oocl.com/eng/about/oocl/careeropportunities/",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","CMA CGM Group","https://www.cma-cgm.com/careers",none,none,true,enrich_free_or_skip
+"Aviation & Transportation","Evergreen Line","https://www.evergreen-line.com/employment.html",none,none,true,enrich_free_or_skip

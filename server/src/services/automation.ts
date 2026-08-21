@@ -69,6 +69,9 @@ export interface AutomationRuntimeConfig {
     proxyUsername?: string;
     proxyPassword?: string;
     proxyPool?: string[];
+    /** When true, future runs may attach last-resort proxy from attempt 0. */
+    needsProxy?: boolean;
+    needsProxyAt?: string;
   };
   userAgent?: string;
   userAgentPool?: string[];

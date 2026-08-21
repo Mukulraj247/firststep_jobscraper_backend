@@ -308,4 +308,15 @@ describe('automationConfigView', () => {
     expect(preserved.destinations.airtable.apiKey).toBe(secrets.airtableApiKey);
     expect(preserved.cookies[0].value).toBe(secrets.cookie);
   });
+
+  it('clears stored proxy credentials when clearProxy is set', () => {
+    const cleared = mergeMaskedAutomationConfig(runtimeConfig, {
+      browserLocation: { clearProxy: true },
+    });
+    expect(cleared.browserLocation?.proxyServer).toBeUndefined();
+    expect(cleared.browserLocation?.proxyUsername).toBeUndefined();
+    expect(cleared.browserLocation?.proxyPassword).toBeUndefined();
+    expect(cleared.browserLocation?.needsProxy).toBeUndefined();
+    expect(toPublicAutomationConfig(cleared).proxyConfigured).toBe(false);
+  });
 });

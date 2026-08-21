@@ -154,6 +154,7 @@ export const AutomationConfigPage = ({
   const [webhookUrl, setWebhookUrl] = useState('');
   const [webhookConfigured, setWebhookConfigured] = useState(false);
   const [proxyConfigured, setProxyConfigured] = useState(false);
+  const [clearProxy, setClearProxy] = useState(false);
   const [airtableConfigured, setAirtableConfigured] = useState(false);
   const [databaseConfigured, setDatabaseConfigured] = useState(false);
   const [cookiesConfigured, setCookiesConfigured] = useState(false);
@@ -253,6 +254,7 @@ export const AutomationConfigPage = ({
         const saas = automation.config || {};
         setWebhookConfigured(!!(automation.webhookConfigured || saas.webhookConfigured));
         setProxyConfigured(!!(automation.proxyConfigured || saas.proxyConfigured));
+        setClearProxy(false);
         setAirtableConfigured(!!saas.destinations?.airtable?.enabled);
         setDatabaseConfigured(!!saas.destinations?.database?.enabled);
         setCookiesConfigured(false);
@@ -427,17 +429,19 @@ export const AutomationConfigPage = ({
         && Object.keys(localStorageValue as Record<string, unknown>).length === 0
         ? undefined
         : localStorageValue;
-    const browserLocationPayload = {
-      ...(omitBlank(config.browserLocation?.proxyServer)
-        ? { proxyServer: config.browserLocation.proxyServer }
-        : {}),
-      ...(omitBlank(config.browserLocation?.proxyUsername)
-        ? { proxyUsername: config.browserLocation.proxyUsername }
-        : {}),
-      ...(omitBlank(config.browserLocation?.proxyPassword)
-        ? { proxyPassword: config.browserLocation.proxyPassword }
-        : {}),
-    };
+    const browserLocationPayload = clearProxy
+      ? { clearProxy: true as const }
+      : {
+          ...(omitBlank(config.browserLocation?.proxyServer)
+            ? { proxyServer: config.browserLocation.proxyServer }
+            : {}),
+          ...(omitBlank(config.browserLocation?.proxyUsername)
+            ? { proxyUsername: config.browserLocation.proxyUsername }
+            : {}),
+          ...(omitBlank(config.browserLocation?.proxyPassword)
+            ? { proxyPassword: config.browserLocation.proxyPassword }
+            : {}),
+        };
 
     const webhook =
       config.destinations?.webhook?.url || webhookUrl || '';
@@ -474,7 +478,9 @@ export const AutomationConfigPage = ({
         },
       },
       databaseTargetColumns: parsedTargets.list,
-      ...(Object.keys(browserLocationPayload).length ? { browserLocation: browserLocationPayload } : {}),
+      ...(Object.keys(browserLocationPayload).length || clearProxy
+        ? { browserLocation: browserLocationPayload }
+        : {}),
       dataCleanup: config.dataCleanup || {},
       userAgent: config.userAgent || '',
       ...(cookiesPayload !== undefined ? { cookies: cookiesPayload } : {}),
@@ -507,6 +513,16 @@ export const AutomationConfigPage = ({
         ...(webhook.trim() ? { webhookUrl: webhook } : {}),
         config: configPayload,
       });
+      if (clearProxy) {
+        setProxyConfigured(false);
+        setClearProxy(false);
+      } else if (
+        omitBlank(config.browserLocation?.proxyServer) ||
+        omitBlank(config.browserLocation?.proxyUsername) ||
+        omitBlank(config.browserLocation?.proxyPassword)
+      ) {
+        setProxyConfigured(true);
+      }
       notify('success', 'Automation configuration saved');
       close();
     } catch (error: any) {
@@ -1114,37 +1130,79 @@ export const AutomationConfigPage = ({
             }
           >
             <Typography variant="body2" color="text.secondary">
-              Optional per-automation proxy. Values are not shown again after save (that is
-              intentional). If you see the green Saved chip, Decodo is stored — leave the boxes
-              empty and click Run. Only fill them again to replace credentials.{' '}
+              Optional per-automation proxy used only as a last resort after a block-like
+              failure (CAPTCHA, challenge, site-closed browser). The first attempt stays
+              direct to avoid spend. If no UI or env proxy is configured, Scout-X keeps the
+              normal direct approach. Values are not shown again after save (that is
+              intentional). If you see the green Saved chip, Decodo is stored — leave the
+              boxes empty and click Run. Only fill them again to replace credentials.{' '}
               {!proxyConfigured ? (
                 <>
                   If empty, Scout-X falls back to your{' '}
                   <Link component={RouterLink} to="/proxy" underline="hover">
-                    account proxy settings
-                  </Link>
-                  .
+                    account / env proxy settings
+                  </Link>{' '}
+                  only when escalation fires.
                 </>
               ) : null}
             </Typography>
-            {proxyConfigured ? (
-              <Alert severity="success" sx={{ mb: 1 }}>
-                Proxy is on this automation. Empty fields after refresh does not mean it was lost.
+            {proxyConfigured && !clearProxy ? (
+              <Alert
+                severity="success"
+                sx={{ mb: 1 }}
+                action={
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => {
+                      setClearProxy(true);
+                      setProxyConfigured(false);
+                      updateNested(['browserLocation'], {
+                        proxyServer: '',
+                        proxyUsername: '',
+                        proxyPassword: '',
+                      });
+                    }}
+                  >
+                    Remove
+                  </Button>
+                }
+              >
+                Proxy credentials are stored for last-resort use on this automation — not on
+                every attempt. Empty fields after refresh does not mean it was lost. Click
+                Remove, then Save, to delete them.
+              </Alert>
+            ) : null}
+            {clearProxy ? (
+              <Alert severity="warning" sx={{ mb: 1 }}>
+                Saved proxy will be deleted when you click Save.
               </Alert>
             ) : null}
             <TextField
               label="Proxy server"
               fullWidth
               value={config.browserLocation?.proxyServer || ''}
-              placeholder={proxyConfigured ? 'Leave blank to keep saved server' : 'http://gate.decodo.com:7000'}
-              onChange={(event) => updateNested(['browserLocation', 'proxyServer'], event.target.value)}
+              placeholder={
+                clearProxy
+                  ? 'http://gate.decodo.com:7000'
+                  : proxyConfigured
+                    ? 'Leave blank to keep saved server'
+                    : 'http://gate.decodo.com:7000'
+              }
+              onChange={(event) => {
+                if (clearProxy) setClearProxy(false);
+                updateNested(['browserLocation', 'proxyServer'], event.target.value);
+              }}
             />
             <TextField
               label="Proxy username"
               fullWidth
               value={config.browserLocation?.proxyUsername || ''}
-              placeholder={proxyConfigured ? 'Leave blank to keep saved username' : ''}
-              onChange={(event) => updateNested(['browserLocation', 'proxyUsername'], event.target.value)}
+              placeholder={proxyConfigured && !clearProxy ? 'Leave blank to keep saved username' : ''}
+              onChange={(event) => {
+                if (clearProxy) setClearProxy(false);
+                updateNested(['browserLocation', 'proxyUsername'], event.target.value);
+              }}
             />
             <TextField
               label="Proxy password"
@@ -1152,8 +1210,11 @@ export const AutomationConfigPage = ({
               fullWidth
               autoComplete="new-password"
               value={config.browserLocation?.proxyPassword || ''}
-              placeholder={proxyConfigured ? 'Leave blank to keep existing password' : ''}
-              onChange={(event) => updateNested(['browserLocation', 'proxyPassword'], event.target.value)}
+              placeholder={proxyConfigured && !clearProxy ? 'Leave blank to keep existing password' : ''}
+              onChange={(event) => {
+                if (clearProxy) setClearProxy(false);
+                updateNested(['browserLocation', 'proxyPassword'], event.target.value);
+              }}
             />
           </SectionPaper>
 

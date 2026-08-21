@@ -34,6 +34,13 @@ import {
   type ProxyProfile,
 } from '../services/proxyManager';
 import {
+  classifyProxyEscalation,
+  hasConfiguredLastResortProxy,
+  isProxyAllowedForAttempt,
+  retryReasonFromEscalation,
+  type ScraperRetryReason,
+} from '../services/proxyEscalation';
+import {
   blockRetryIdentity,
   captchaRetryIdentity,
   isProxyTunnelFailure,
@@ -439,22 +446,10 @@ async function tryAtsBoardCollection(
     await appendRunLog(
       run,
       detected.provider === 'phenom'
-        ? `ATS board fetch threw for phenom: ${fetchErr?.message || fetchErr}; skipping browser extraction because Phenom list pages are CAPTCHA-gated`
+        ? `ATS board fetch threw for phenom: ${fetchErr?.message || fetchErr}; falling back to browser (keeping filtered start URL)`
         : `ATS board fetch threw for ${detected.provider}: ${fetchErr?.message || fetchErr}; falling back to browser`,
       { flush: true }
     );
-    if (detected.provider === 'phenom') {
-      await finalizeExtractedListRows({
-        run,
-        automation,
-        userId,
-        rows: [],
-        extractionMethod: 'ats_board',
-        atsProvider: 'phenom',
-        zeroRowsHint: `Phenom API failed: ${fetchErr?.message || fetchErr}`,
-      });
-      return true;
-    }
     return false;
   }
 
@@ -462,22 +457,10 @@ async function tryAtsBoardCollection(
     await appendRunLog(
       run,
       detected.provider === 'phenom'
-        ? `ATS board fetch returned no rows for phenom; skipping browser extraction because Phenom list pages are CAPTCHA-gated`
+        ? `ATS board fetch returned no rows for phenom; falling back to browser extraction (keeping filtered start URL)`
         : `ATS board fetch returned no rows for ${detected.provider}; falling back to browser extraction`,
       { flush: true }
     );
-    if (detected.provider === 'phenom') {
-      await finalizeExtractedListRows({
-        run,
-        automation,
-        userId,
-        rows: [],
-        extractionMethod: 'ats_board',
-        atsProvider: 'phenom',
-        zeroRowsHint: 'Phenom PCSX/widgets API returned zero jobs.',
-      });
-      return true;
-    }
     return false;
   }
 
@@ -679,6 +662,38 @@ async function persistSessionStateForRun(userId: string, automationId: string, b
 
 const PROXY_TUNNEL_RETRY_DELAY_MS = 5_000;
 
+async function markRobotNeedsProxy(automationId: string): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    await Robot.updateOne(
+      { 'recording_meta.id': automationId },
+      {
+        $set: {
+          'recording_meta.saasConfig.browserLocation.needsProxy': true,
+          'recording_meta.saasConfig.browserLocation.needsProxyAt': now,
+        },
+      }
+    );
+  } catch (error: any) {
+    logger.log(
+      'warn',
+      `Failed to persist needsProxy for automation ${automationId}: ${error?.message || error}`
+    );
+  }
+}
+
+/** True when UI/robot pool or enabled env proxy can be used for last-resort attach. */
+async function canUseLastResortProxy(
+  userId: string,
+  config: Record<string, any>
+): Promise<boolean> {
+  const proxyPool = await resolveProxyPool(String(userId), config);
+  return hasConfiguredLastResortProxy({
+    robotProxyAvailable: proxyPool.length > 0,
+    envProxyAvailable: !!getEnvFallbackProxy(),
+  });
+}
+
 async function buildIdentityProfile(
   userId: string,
   automationId: string,
@@ -687,12 +702,31 @@ async function buildIdentityProfile(
   opts?: {
     failedProxyServers?: string[];
     lastFailureWasProxyTunnel?: boolean;
-    retryReason?: 'captcha' | 'proxy-tunnel';
+    retryReason?: ScraperRetryReason;
   }
 ) {
   let failedProxyServers = normalizeFailedProxyServers(opts?.failedProxyServers);
+  const needsProxy = !!config?.browserLocation?.needsProxy;
+  const retryReason = opts?.retryReason;
+  const proxyAllowed = isProxyAllowedForAttempt({
+    attemptsMade,
+    needsProxy,
+    retryReason,
+  });
+
   const proxyPool = await resolveProxyPool(String(userId), config);
-  let selectedProxy = selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers);
+  const envFallbackCandidate = getEnvFallbackProxy();
+  const proxyConfigured = hasConfiguredLastResortProxy({
+    robotProxyAvailable: proxyPool.length > 0,
+    envProxyAvailable: !!envFallbackCandidate,
+  });
+  // Escalate intent without credentials → normal direct path (no spend, no tunnel burns).
+  const attachProxy = proxyAllowed && proxyConfigured;
+
+  // Resolve candidates only when last-resort proxy spend is allowed and configured.
+  let selectedProxy = attachProxy
+    ? selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers)
+    : null;
   const userAgent = config?.userAgent || selectRotatedUserAgent(attemptsMade, config?.userAgentPool);
   const shouldReuseSession = config?.reuseSession !== false;
   const targetUrl = config?.targetUrl;
@@ -705,15 +739,26 @@ async function buildIdentityProfile(
   let headless = config?.headless !== false;
   let useStealth = config?.useStealth !== false;
   let identityStrategy = antiBotTarget ? 'baseline-antibot' : 'baseline';
+  if (attachProxy && attemptsMade === 0) {
+    identityStrategy = antiBotTarget ? 'baseline-antibot-proxy' : 'baseline-proxy';
+  }
   let poolIsolationKey: string | undefined;
   const disableHttp2 = shouldDisableChromiumHttp2(targetUrl);
-  const envFallbackProxy = getEnvFallbackProxy();
+  const envFallbackProxy = attachProxy ? envFallbackCandidate : null;
   const sidecarProxyServer = normalizeProxyServer(process.env.CAMOUFOX_PROXY_SERVER);
   let sidecarProxyReachable: boolean | undefined;
 
   // Probe before Camoufox escalate. A dead CAMOUFOX_PROXY_SERVER used to burn
   // every remaining attempt with ERR_TUNNEL_CONNECTION_FAILED.
-  if (attemptsMade >= 1 && sidecarProxyServer && !failedProxyServers.includes(sidecarProxyServer)) {
+  const mayUseCamoufox =
+    (retryReason === 'block' || retryReason === 'proxy-tunnel' || opts?.lastFailureWasProxyTunnel) &&
+    attemptsMade >= 1;
+  if (
+    mayUseCamoufox &&
+    attachProxy &&
+    sidecarProxyServer &&
+    !failedProxyServers.includes(sidecarProxyServer)
+  ) {
     sidecarProxyReachable = await probeProxyTcp(sidecarProxyServer);
     if (!sidecarProxyReachable) {
       failedProxyServers = rememberFailedProxy(failedProxyServers, sidecarProxyServer);
@@ -721,30 +766,47 @@ async function buildIdentityProfile(
         'warn',
         `Camoufox sidecar proxy ${sidecarProxyServer} is unreachable; retrying without it`
       );
-      selectedProxy = selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers);
+      selectedProxy = attachProxy
+        ? selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers)
+        : null;
     }
   }
 
-  const retryPlan =
-    opts?.retryReason === 'captcha'
-      ? captchaRetryIdentity({
-          attemptsMade,
-          selectedProxy,
-          envFallbackProxy,
-          configBrowserType: config?.browserType,
-          failedProxyServers,
-        })
-      : blockRetryIdentity({
-          attemptsMade,
-          selectedProxy,
-          envFallbackProxy,
-          configBrowserType: config?.browserType,
-          failedProxyServers,
-          sidecarProxyServer,
-          sidecarProxyReachable,
-          lastFailureWasProxyTunnel:
-            opts?.lastFailureWasProxyTunnel || opts?.retryReason === 'proxy-tunnel',
-        });
+  let retryPlan = null;
+  if (retryReason === 'captcha') {
+    retryPlan = captchaRetryIdentity({
+      attemptsMade,
+      selectedProxy,
+      envFallbackProxy,
+      configBrowserType: config?.browserType,
+      failedProxyServers,
+    });
+  } else if (retryReason === 'block') {
+    retryPlan = blockRetryIdentity({
+      attemptsMade,
+      selectedProxy,
+      envFallbackProxy,
+      configBrowserType: config?.browserType,
+      failedProxyServers,
+      sidecarProxyServer: attachProxy ? sidecarProxyServer : null,
+      sidecarProxyReachable: attachProxy ? sidecarProxyReachable : undefined,
+      lastFailureWasProxyTunnel: false,
+    });
+  } else if (retryReason === 'proxy-tunnel' || opts?.lastFailureWasProxyTunnel) {
+    // Drop the dead tunnel; do not attach a fresh env proxy unless needsProxy
+    // still allows a different pool entry.
+    retryPlan = blockRetryIdentity({
+      attemptsMade,
+      selectedProxy,
+      envFallbackProxy,
+      configBrowserType: config?.browserType,
+      failedProxyServers,
+      sidecarProxyServer: attachProxy ? sidecarProxyServer : null,
+      sidecarProxyReachable: attachProxy ? sidecarProxyReachable : undefined,
+      lastFailureWasProxyTunnel: true,
+    });
+  }
+  // retryReason === 'network': keep baseline identity, no proxy escalate.
 
   if (retryPlan) {
     browserType = retryPlan.browserType;
@@ -753,6 +815,17 @@ async function buildIdentityProfile(
     identityStrategy = retryPlan.identityStrategy;
     poolIsolationKey = retryPlan.poolIsolationKey;
     selectedProxy = retryPlan.proxy;
+  } else if (attachProxy && !selectedProxy && envFallbackProxy) {
+    selectedProxy = envFallbackProxy;
+  }
+
+  // No UI/env proxy configured — keep / restore normal direct approach.
+  if (proxyAllowed && !proxyConfigured) {
+    selectedProxy = null;
+    if (!retryPlan) {
+      identityStrategy = antiBotTarget ? 'baseline-antibot' : 'baseline';
+      browserType = config?.browserType;
+    }
   }
 
   // Known Chromium HTTP/2 breakage (e.g. Persistent): force HTTP/1.1 from attempt 0
@@ -761,7 +834,12 @@ async function buildIdentityProfile(
     poolIsolationKey = poolIsolationKey
       ? `${poolIsolationKey}|no-http2`
       : 'chromium-no-http2';
-    if (identityStrategy === 'baseline' || identityStrategy === 'baseline-antibot') {
+    if (
+      identityStrategy === 'baseline' ||
+      identityStrategy === 'baseline-antibot' ||
+      identityStrategy === 'baseline-proxy' ||
+      identityStrategy === 'baseline-antibot-proxy'
+    ) {
       identityStrategy = `${identityStrategy}-no-http2`;
     }
   }
@@ -779,6 +857,8 @@ async function buildIdentityProfile(
     poolIsolationKey,
     disableHttp2,
     failedProxyServers,
+    proxyConfigured,
+    proxyAllowed,
   };
 }
 
@@ -1020,13 +1100,25 @@ export async function runScraperJobPayload(
         retryReason: data._retryReason,
       }
     );
-    const { failedProxyServers: probedFailed, ...selectedIdentity } = builtIdentity;
+    const {
+      failedProxyServers: probedFailed,
+      proxyConfigured,
+      proxyAllowed,
+      ...selectedIdentity
+    } = builtIdentity;
     identityProfile = selectedIdentity;
     failedProxyServers = probedFailed;
     await appendRunLog(
       run,
       `Identity selected: strategy=${selectedIdentity.identityStrategy || 'baseline'}, browser=${selectedIdentity.browserType || 'playwright-default'}, proxy ${selectedIdentity.contextProxy?.server || 'none'}, headless=${selectedIdentity.headless}${selectedIdentity.disableHttp2 ? ', http2=disabled' : ''}`
     );
+    if (proxyAllowed && !proxyConfigured) {
+      await appendRunLog(
+        run,
+        'No UI/env proxy configured — continuing with normal direct approach',
+        { flush: true }
+      );
+    }
 
     if (!useListExtraction) {
       browserId = createRemoteBrowserForRun(String(userId), selectedIdentity);
@@ -1223,6 +1315,16 @@ export async function runScraperJobPayload(
         : `Agenda job ${queueJobId} completed successfully`,
       { flush: true }
     );
+
+    if (identityProfile?.contextProxy?.server) {
+      await markRobotNeedsProxy(automationId);
+      await appendRunLog(
+        refreshedRun,
+        'Remembered needsProxy on this automation (succeeded with last-resort proxy)',
+        { flush: true }
+      );
+    }
+
     // Preserve drift fields written by list extraction (soft drop keeps errorMessage/anomaly).
     // Map in-flight statuses to completed; never leave a finished job stuck on "running".
     if (
@@ -1330,9 +1432,15 @@ export async function runScraperJobPayload(
       if (hasRemainingAttempts) {
         const delayMs = computeScrapeRetryDelayMs(attemptsMade);
         const delaySec = Math.round(delayMs / 1000);
+        const proxyReady = await canUseLastResortProxy(String(userId), config);
+        if (proxyReady) {
+          await markRobotNeedsProxy(automationId);
+        }
         await appendRunLog(
           latestRun,
-          `CAPTCHA encountered — retrying Playwright with residential proxy if configured (${attemptsMade + 2}/${MAX_ATTEMPTS}); Retry scheduled in ${delaySec}s`
+          proxyReady
+            ? `CAPTCHA encountered — retrying Playwright with residential proxy if configured (${attemptsMade + 2}/${MAX_ATTEMPTS}); Retry scheduled in ${delaySec}s`
+            : `CAPTCHA encountered — no UI/env proxy configured; retrying with normal direct approach (${attemptsMade + 2}/${MAX_ATTEMPTS}); Retry scheduled in ${delaySec}s`
         );
         latestRun.status = 'pending';
         latestRun.errorMessage = `CAPTCHA on attempt ${attemptsMade + 1}; retry in ${delaySec}s`;
@@ -1410,7 +1518,9 @@ export async function runScraperJobPayload(
         }
       }
 
-      const tunnelFailure = isProxyTunnelFailure(message);
+      const escalationKind = classifyProxyEscalation(message);
+      const nextRetryReason = retryReasonFromEscalation(escalationKind);
+      const tunnelFailure = escalationKind === 'proxyTunnel';
       if (tunnelFailure) {
         failedProxyServers = rememberFailedProxy(
           failedProxyServers,
@@ -1421,18 +1531,33 @@ export async function runScraperJobPayload(
           process.env.CAMOUFOX_PROXY_SERVER
         );
       }
+      if (escalationKind === 'blockLike') {
+        const proxyReady = await canUseLastResortProxy(String(userId), config);
+        if (proxyReady) {
+          await markRobotNeedsProxy(automationId);
+        } else if (hasRemainingAttempts) {
+          await appendRunLog(
+            latestRun,
+            'Block-like failure but no UI/env proxy configured — next attempt uses normal direct approach'
+          );
+        }
+      }
       const delayMs = hasRemainingAttempts
         ? tunnelFailure
           ? Math.min(computeScrapeRetryDelayMs(attemptsMade), PROXY_TUNNEL_RETRY_DELAY_MS)
           : computeScrapeRetryDelayMs(attemptsMade)
         : 0;
       const delaySec = Math.round(delayMs / 1000);
+      const retryHint =
+        nextRetryReason === 'block'
+          ? `retrying with last-resort proxy if configured in ${delaySec}s`
+          : tunnelFailure
+            ? `retrying without the failed proxy in ${delaySec}s`
+            : `retrying without proxy escalate (${nextRetryReason}) in ${delaySec}s`;
       await markFailed(
         latestRun,
         hasRemainingAttempts
-          ? tunnelFailure
-            ? `${message} - retrying without the failed proxy in ${delaySec}s`
-            : `${message} - retrying with a new identity profile in ${delaySec}s`
+          ? `${message} - ${retryHint}`
           : `Dead letter: attempts exhausted (${MAX_ATTEMPTS}/${MAX_ATTEMPTS}). ${message}`,
         hasRemainingAttempts ? 'pending' : 'dead'
       );
@@ -1450,13 +1575,13 @@ export async function runScraperJobPayload(
               _attemptsMade: attemptsMade + 1,
               _failedProxyServers: failedProxyServers,
               _lastFailureWasProxyTunnel: tunnelFailure,
-              _retryReason: tunnelFailure ? 'proxy-tunnel' : undefined,
+              _retryReason: nextRetryReason,
             },
             { force: true, delayMs }
           );
           await appendRunLog(
             latestRun,
-            `Retry scheduled in ${delaySec}s (attempt ${attemptsMade + 2}/${MAX_ATTEMPTS})`
+            `Retry scheduled in ${delaySec}s (attempt ${attemptsMade + 2}/${MAX_ATTEMPTS}, reason=${nextRetryReason})`
           );
         } catch (requeueError: any) {
           logger.log(

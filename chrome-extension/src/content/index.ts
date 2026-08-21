@@ -372,9 +372,11 @@ function init() {
     console.log('[Maxun] Second pick:', secondPick);
 
     // Re-find the first pick using the stored signature, in case React re-rendered.
+    // Do NOT re-run resolveListItemCandidate on a still-live first pick — that can
+    // climb to a different ancestor than the one the user actually selected.
     let liveFirstPick: HTMLElement | null = null;
     if (firstPick && document.body.contains(firstPick)) {
-      liveFirstPick = resolveListItemCandidate(firstPick);
+      liveFirstPick = firstPick;
       console.log('[Maxun] First pick still live');
     } else if (firstPickSignature) {
       try {
@@ -462,7 +464,7 @@ function init() {
           type: detected.type,
           selector: detected.selector,
           confidence: detected.confidence || 'medium',
-          maxPages: 20,
+          maxPages: 2,
           pageDelayMs: detected.type === 'clickLoadMore' ? 2000 : 1500,
         };
         console.log('[Maxun] Auto-detected pagination:', pagination);
@@ -561,29 +563,63 @@ function init() {
  * Promote a click/hover target up to the list-item "card" when the user hits
  * nested chrome (Save, Share, icons, titles). Without this, Hiring Cafe second
  * picks often land on Save/Share and fail containment / common-pattern checks.
+ *
+ * Important: many list cards ARE the `<a>` (or a heading/`li`). Never climb out
+ * of an already card-sized node — that made the overlay jump to a different
+ * item and caused bare-tag selectors to match the whole page.
  */
+function isCardSizedRect(rect: DOMRectReadOnly): boolean {
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  return (
+    rect.width >= 160 &&
+    rect.height >= 72 &&
+    rect.width < viewportW * 0.95 &&
+    rect.height < viewportH * 0.85
+  );
+}
+
 function resolveListItemCandidate(el: HTMLElement): HTMLElement {
+  // Pure chrome — always climb. `<a>` is handled separately (cards are often links).
   const INTERACTIVE = new Set([
-    'BUTTON', 'SVG', 'PATH', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'IMG', 'USE',
+    'BUTTON', 'SVG', 'PATH', 'INPUT', 'SELECT', 'TEXTAREA', 'IMG', 'USE',
   ]);
   const INLINE = new Set([
-    'SPAN', 'STRONG', 'EM', 'B', 'I', 'LABEL', 'TIME', 'SMALL', 'P', 'H1', 'H2',
-    'H3', 'H4', 'H5', 'H6', 'LI',
+    'SPAN', 'STRONG', 'EM', 'B', 'I', 'LABEL', 'TIME', 'SMALL',
   ]);
+  // Title / list-text nodes: climb only while they are NOT card-sized.
+  const TEXTUAL = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI']);
 
   let cur: HTMLElement | null = el;
 
-  // Climb out of icons / buttons / inline text nodes.
+  // Climb out of icons / buttons / tiny inline text — stop at card-sized nodes.
   while (cur && cur.parentElement && cur !== document.body) {
-    const svg = cur.closest('svg');
-    if (svg && svg.parentElement) {
+    if (isCardSizedRect(cur.getBoundingClientRect())) {
+      break;
+    }
+
+    const svg = (cur as Element).closest('svg');
+    if (svg?.parentElement) {
       cur = svg.parentElement as HTMLElement;
       continue;
     }
+
+    if (cur.tagName === 'A') {
+      // Tiny action links (Save/Share) → climb. Card-sized anchors → keep.
+      cur = cur.parentElement;
+      continue;
+    }
+
     if (INTERACTIVE.has(cur.tagName) || INLINE.has(cur.tagName)) {
       cur = cur.parentElement;
       continue;
     }
+
+    if (TEXTUAL.has(cur.tagName)) {
+      cur = cur.parentElement;
+      continue;
+    }
+
     const role = cur.getAttribute('role');
     if (role === 'button' || role === 'link' || role === 'img') {
       cur = cur.parentElement;
@@ -596,19 +632,13 @@ function resolveListItemCandidate(el: HTMLElement): HTMLElement {
     return el;
   }
 
-  const viewportW = window.innerWidth;
-  const viewportH = window.innerHeight;
   let best = cur;
   let walk: HTMLElement | null = cur;
 
   for (let i = 0; i < 14 && walk && walk !== document.body; i++) {
     const rect = walk.getBoundingClientRect();
-    const wideEnough = rect.width >= 160;
-    const tallEnough = rect.height >= 72;
-    const notFullPage =
-      rect.width < viewportW * 0.95 && rect.height < viewportH * 0.85;
 
-    if (wideEnough && tallEnough && notFullPage) {
+    if (isCardSizedRect(rect)) {
       best = walk;
       const parent = walk.parentElement;
       if (parent) {
@@ -813,6 +843,8 @@ function tryBuildSelector(
     const classes2 = Array.from(item2.classList).filter(isStableClass);
     const sharedClasses = classes1.filter((c) => classes2.includes(c));
 
+    // Classed selectors first. Bare tag is last-resort and must not expand to
+    // every descendant (that selected the whole page when LCA was too high).
     const candidates: string[] = [];
     if (sharedClasses.length > 0) {
       candidates.push(`${tag}.${sharedClasses.slice(0, 3).map(cssEscape).join('.')}`);
@@ -821,9 +853,24 @@ function tryBuildSelector(
     candidates.push(tag);
 
     for (const rel of candidates) {
+      const isBareTag = rel === tag;
       const elements = queryChildren(lca, rel);
       if (elements.length >= 2 && elements.includes(item1) && elements.includes(item2)) {
-        // Also try to search beyond direct children for the same pattern
+        // Bare tag: keep direct children only — never queryAll(div) under LCA.
+        if (isBareTag) {
+          const similarKids = elements.filter(
+            (m) => m === item1 || m === item2 || hasSimilarStructure(m, item1)
+          );
+          if (similarKids.includes(item1) && similarKids.includes(item2) && similarKids.length >= 2) {
+            return {
+              selector: buildAbsoluteChildSelector(lca, rel),
+              elements: similarKids,
+            };
+          }
+          continue;
+        }
+
+        // Classed: allow descendant search, but reject absurd over-matches.
         const allMatches = queryAll(lca, rel);
         const filtered = allMatches.filter(
           (m) =>
@@ -831,7 +878,12 @@ function tryBuildSelector(
             m === item2 ||
             hasSimilarStructure(m, item1)
         );
-        if (filtered.length >= 2 && filtered.includes(item1) && filtered.includes(item2)) {
+        if (
+          filtered.length >= 2 &&
+          filtered.includes(item1) &&
+          filtered.includes(item2) &&
+          filtered.length <= Math.max(elements.length * 4, 80)
+        ) {
           return {
             selector: buildAbsoluteChildSelector(lca, rel),
             elements: filtered,

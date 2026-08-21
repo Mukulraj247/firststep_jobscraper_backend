@@ -416,6 +416,48 @@ describe('detectAtsBoard', () => {
   it('returns null for non-board hosts', () => {
     expect(detectAtsBoard('https://careers.example.com/jobs')).toBeNull();
   });
+
+  it('detects Workday CXS career boards from site path', () => {
+    const d = detectAtsBoard(
+      'https://intel.wd1.myworkdayjobs.com/en-US/External'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.listApiUrl).toBe(
+      'https://intel.wd1.myworkdayjobs.com/wday/cxs/intel/External/jobs'
+    );
+    const fromJob = detectAtsBoard(
+      'https://td.wd3.myworkdayjobs.com/TD_Bank_Careers/job/Toronto/Analyst_R12345'
+    );
+    expect(fromJob?.provider).toBe('workday');
+    expect(fromJob?.listApiUrl).toContain('/wday/cxs/td/TD_Bank_Careers/jobs');
+  });
+
+  it('detects Workable / Recruitee / BambooHR / Personio / Breezy boards', () => {
+    expect(detectAtsBoard('https://apply.workable.com/acme/')?.provider).toBe('workable');
+    expect(detectAtsBoard('https://acme.recruitee.com/')?.provider).toBe('recruitee');
+    expect(detectAtsBoard('https://acme.bamboohr.com/careers')?.provider).toBe('bamboohr');
+    expect(detectAtsBoard('https://acme.jobs.personio.com/')?.provider).toBe('personio');
+    expect(detectAtsBoard('https://acme.breezy.hr/')?.provider).toBe('breezy');
+  });
+
+  it('detects Google Careers and IBM SearchJobs boards (not detail pages)', () => {
+    const g = detectAtsBoard(
+      'https://www.google.com/about/careers/applications/jobs/results?location=United%20States&q=Software'
+    );
+    expect(g?.provider).toBe('googlecareers');
+    expect(
+      detectAtsBoard(
+        'https://www.google.com/about/careers/applications/jobs/results/114533168161137350-staff-swe'
+      )
+    ).toBeNull();
+    const ibm = detectAtsBoard(
+      'https://careers.ibm.com/SearchJobs?location=United+States'
+    );
+    expect(ibm?.provider).toBe('ibmcareers');
+    expect(
+      detectAtsBoard('https://careers.ibm.com/job/123/JobDetail?jobId=456')
+    ).toBeNull();
+  });
 });
 
 describe('Oracle vanity helpers', () => {

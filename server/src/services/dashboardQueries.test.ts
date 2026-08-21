@@ -259,9 +259,15 @@ describe('buildRunListPaginationPipeline', () => {
       $addFields: { listSortAt: { $ifNull: unknown[] } };
     };
     const first = stage.$addFields.listSortAt.$ifNull[0] as {
-      $convert: { input: string };
+      $cond: [unknown, { $convert: { input: string } }, null];
     };
-    expect(first.$convert.input).toBe('$finishedAt');
+    expect(first.$cond[1].$convert.input).toBe('$finishedAt');
+  });
+
+  it('refuses to convert ambiguous locale finishedAt strings into listSortAt', () => {
+    const stageJson = JSON.stringify(buildRunListSortAtStage());
+    expect(stageJson).toContain('$regexMatch');
+    expect(stageJson).toContain('\\\\d{4}-\\\\d{2}-\\\\d{2}T');
   });
 
   it('suppresses healed failures when excludeHealedFailures is set', () => {

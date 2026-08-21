@@ -26,6 +26,12 @@ describe('normalizeAutomationUrl', () => {
     expect(a).not.toBe(b);
   });
 
+  it('does not rewrite career filter URLs (USA / keywords stay intact)', () => {
+    const filtered =
+      'https://careers.bankofamerica.com/en-us/job-search?searchstring=United+States&keywords=data';
+    expect(normalizeAutomationUrl(filtered)).toBe(filtered);
+  });
+
   it('rejects non-http schemes', () => {
     expect(() => normalizeAutomationUrl('ftp://example.com')).toThrow(/http/);
   });

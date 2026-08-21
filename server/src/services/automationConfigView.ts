@@ -121,6 +121,7 @@ const deleteBlank = (record: AnyRecord | undefined, key: string) => {
 /**
  * Public reads mask credentials. A subsequent save therefore sends blank
  * placeholders; preserve stored values unless a non-empty replacement arrives.
+ * Set `browserLocation.clearProxy: true` to wipe stored proxy credentials.
  */
 export const mergeMaskedAutomationConfig = (
   currentInput: unknown,
@@ -131,13 +132,19 @@ export const mergeMaskedAutomationConfig = (
     ? JSON.parse(JSON.stringify(incomingInput)) as AnyRecord
     : {};
 
+  const clearProxy =
+    isRecord(incoming.browserLocation) && incoming.browserLocation.clearProxy === true;
+  if (clearProxy && isRecord(incoming.browserLocation)) {
+    delete incoming.browserLocation.clearProxy;
+  }
+
   deleteBlank(incoming, 'webhookUrl');
   if (isRecord(incoming.destinations?.webhook)) deleteBlank(incoming.destinations.webhook, 'url');
   if (isRecord(incoming.destinations?.airtable)) deleteBlank(incoming.destinations.airtable, 'apiKey');
   if (isRecord(incoming.destinations?.database)) {
     deleteBlank(incoming.destinations.database, 'connectionString');
   }
-  if (isRecord(incoming.browserLocation)) {
+  if (isRecord(incoming.browserLocation) && !clearProxy) {
     for (const key of ['proxyServer', 'proxyUsername', 'proxyPassword']) {
       deleteBlank(incoming.browserLocation, key);
     }
@@ -153,7 +160,25 @@ export const mergeMaskedAutomationConfig = (
     delete incoming.browserLocation;
   }
 
-  return mergeRecords(current, incoming);
+  const merged = mergeRecords(current, incoming);
+  if (clearProxy) {
+    if (!isRecord(merged.browserLocation)) {
+      merged.browserLocation = {};
+    }
+    for (const key of [
+      'proxyServer',
+      'proxyUsername',
+      'proxyPassword',
+      'proxyPool',
+      'needsProxy',
+      'needsProxyAt',
+      'clearProxy',
+    ]) {
+      delete merged.browserLocation[key];
+    }
+    // Keep an empty object so callers that spread prev+incoming overwrite stored secrets.
+  }
+  return merged;
 };
 
 /**

@@ -13,6 +13,9 @@ import {
 } from './jobPageParser';
 import { resolveSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/outboundUrlPolicy';
 import { assertPinnedPeerInAllowlist, createPinnedLookup } from './safeOutboundHttp';
+import { DIRECTORY_CAREER_HTML_HOST_COMPANIES } from './careerHtmlHostsDirectory';
+import { DIRECTORY_PHENOM_BOARD_HOSTS } from './phenomBoardHostsDirectory';
+import { detectExtraAtsBoard, fetchExtraAtsBoardJobs } from './atsFreeBoardExtras';
 
 export type AtsProvider =
   | 'greenhouse'
@@ -464,6 +467,7 @@ const CAREER_HTML_HOST_COMPANIES: Record<string, string> = {
   'recruiting.paylocity.com': 'Paylocity',
   'salesforce.com': 'Salesforce',
   'careers.salesforce.com': 'Salesforce',
+  ...DIRECTORY_CAREER_HTML_HOST_COMPANIES,
 };
 
 const CAREER_HTML_SUFFIXES = [
@@ -540,6 +544,12 @@ const SKIP_SCRAPE_DO_SUFFIXES = [
   'eightfold.ai',
   'oraclecloud.com',
   'njoyn.com',
+  'workable.com',
+  'recruitee.com',
+  'bamboohr.com',
+  'breezy.hr',
+  'personio.com',
+  'personio.de',
   ...CAREER_HTML_SUFFIXES,
 ];
 
@@ -576,6 +586,7 @@ export function shouldSkipScrapeDoUrl(url: string): boolean {
   }
   if (isHiringCafeHost(host)) return false;
   if (detectAts(url)) return true;
+  if (detectAtsBoard(url)) return true;
   if (!host) return false;
   if (SKIP_SCRAPE_DO_HOSTS.has(host)) return true;
   return SKIP_SCRAPE_DO_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
@@ -1450,7 +1461,15 @@ export type AtsBoardProvider =
   | 'successfactors'
   | 'oraclecloud'
   | 'bankofamerica'
-  | 'phenom';
+  | 'phenom'
+  | 'workday'
+  | 'workable'
+  | 'recruitee'
+  | 'bamboohr'
+  | 'personio'
+  | 'breezy'
+  | 'googlecareers'
+  | 'ibmcareers';
 
 export interface AtsBoardDetection {
   provider: AtsBoardProvider;
@@ -1743,6 +1762,10 @@ export function looksLikePhenomBoard(url: string): boolean {
   if (/\/careers\/job\/\d+/i.test(path)) return true;
   // Qualcomm / NVIDIA-style PCS shells: careers.<brand>.com/careers
   if (host.startsWith('careers.') && /^\/careers$/i.test(path)) return true;
+  // Phenom list shells commonly use …/search-results (filters stay on this URL)
+  if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results\/?$/i.test(path)) return true;
+  // Directory allowlist — exact robot URL preserved; widgets/PCSX use that URL as referer
+  if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) return true;
   return false;
 }
 
@@ -2697,15 +2720,22 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
   }
 
   // Bank of America renders its job list client-side, but exposes the same public
-  // search endpoint used by its own career page.
-  if (
-    host === 'careers.bankofamerica.com' &&
-    /^\/(?:[a-z]{2}-[a-z]{2}\/)?job-search(?:\.html)?\/?$/i.test(path)
-  ) {
+  // search endpoint used by its own career page. Accept homepage or job-search paths.
+  if (host === 'careers.bankofamerica.com') {
     return {
       provider: 'bankofamerica',
       companyHint: 'Bank of America',
       listApiUrl: `https://${host}/services/jobssearchservlet`,
+    };
+  }
+
+  // Workday CXS, Workable, Recruitee, BambooHR, Personio, Breezy, Google/IBM boards
+  const extra = detectExtraAtsBoard(url);
+  if (extra) {
+    return {
+      provider: extra.provider,
+      companyHint: extra.companyHint,
+      listApiUrl: extra.listApiUrl,
     };
   }
 
@@ -3238,6 +3268,33 @@ export async function fetchAtsBoardJobs(
   if (!detected) return null;
 
   try {
+    if (
+      detected.provider === 'workday' ||
+      detected.provider === 'workable' ||
+      detected.provider === 'recruitee' ||
+      detected.provider === 'bamboohr' ||
+      detected.provider === 'personio' ||
+      detected.provider === 'breezy' ||
+      detected.provider === 'googlecareers' ||
+      detected.provider === 'ibmcareers'
+    ) {
+      const extra = await fetchExtraAtsBoardJobs(
+        pageUrl,
+        {
+          provider: detected.provider,
+          companyHint: detected.companyHint,
+          listApiUrl: detected.listApiUrl,
+        },
+        httpClient,
+        options
+      );
+      if (!extra?.rows?.length) return null;
+      return {
+        provider: extra.provider,
+        companyHint: extra.companyHint,
+        rows: extra.rows as AtsBoardJobRow[],
+      };
+    }
     if (detected.provider === 'findly') {
       return await fetchFindlyBoardJobs(pageUrl, detected.companyHint, options);
     }
