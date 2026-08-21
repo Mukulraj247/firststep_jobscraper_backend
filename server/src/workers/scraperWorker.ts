@@ -886,7 +886,7 @@ export async function runScraperJobPayload(
   let failedProxyServers = normalizeFailedProxyServers(data._failedProxyServers);
   let identityProfile: Omit<
     Awaited<ReturnType<typeof buildIdentityProfile>>,
-    'failedProxyServers'
+    'failedProxyServers' | 'proxyConfigured' | 'proxyAllowed'
   > | null = null;
   const queueJobId = data.queueJobId || 'unknown';
   const agendaJob = options?.agendaJob;
