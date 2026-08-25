@@ -86,7 +86,13 @@ import {
 import {
   detectAtsBoard,
   fetchAtsBoardJobs,
+  looksLikePhenomBoard,
+  looksLikeHappyDanceBoard,
+  looksLikeWorkdayBoard,
+  looksLikeGreenhouseBoard,
+  startUrlHasCollectionFilters,
   shouldSkipAtsBoardForUiPagination,
+  shouldPreferAtsBoardOverUiPagination,
 } from '../services/atsAdapters';
 import { getScrapeHeartbeatMs } from '../utils/scrapeHeartbeat';
 import { isTerminalRunStatus } from '../services/runLifecycle';
@@ -414,10 +420,35 @@ async function tryAtsBoardCollection(
     return false;
   }
 
-  if (
-    shouldSkipAtsBoardForUiPagination(config) ||
-    shouldSkipAtsBoardForUiPagination(saasConfig)
-  ) {
+  const startUrl = String(automation?.recording_meta?.url || '').trim();
+  if (!startUrl) {
+    await appendRunLog(run, 'ATS board collection skipped (automation has no URL)', { flush: true });
+    return false;
+  }
+
+  if (!startUrlHasCollectionFilters(startUrl)) {
+    await appendRunLog(
+      run,
+      'ATS board skipped (start URL has no collection filters); using browser extraction',
+      { flush: true }
+    );
+    return false;
+  }
+
+  // Phenom / HappyDance / Workday / Greenhouse APIs honor start-URL filters and
+  // maxPages. Recorded next-button would only send Chromium into Cloudflare or
+  // SPA markup drift (Salesforce marketing careers closes the browser). Keep ATS.
+  const skipUiPagination =
+    shouldSkipAtsBoardForUiPagination(config) || shouldSkipAtsBoardForUiPagination(saasConfig);
+  const paginationMode = String(
+    config?.listExtraction?.pagination?.mode ||
+      saasConfig?.listExtraction?.pagination?.mode ||
+      'next-button'
+  ).toLowerCase();
+  const skipForUiPagination =
+    skipUiPagination &&
+    (paginationMode === 'infinite-scroll' || !shouldPreferAtsBoardOverUiPagination(startUrl));
+  if (skipForUiPagination) {
     const mode = String(
       config?.listExtraction?.pagination?.mode ||
         saasConfig?.listExtraction?.pagination?.mode ||
@@ -428,12 +459,6 @@ async function tryAtsBoardCollection(
       `ATS board collection skipped (${mode} pagination is configured; using browser Load More / Show More clicks)`,
       { flush: true }
     );
-    return false;
-  }
-
-  const startUrl = String(automation?.recording_meta?.url || '').trim();
-  if (!startUrl) {
-    await appendRunLog(run, 'ATS board collection skipped (automation has no URL)', { flush: true });
     return false;
   }
 
@@ -452,17 +477,29 @@ async function tryAtsBoardCollection(
     saasConfig?.listExtraction?.pagination?.maxPages;
   const maxPages =
     typeof maxPagesRaw === 'number' && maxPagesRaw > 0 ? Math.floor(maxPagesRaw) : undefined;
+  const maxItemsRaw =
+    config?.listExtraction?.maxItems ?? saasConfig?.listExtraction?.maxItems;
+  const maxItems =
+    typeof maxItemsRaw === 'number' && maxItemsRaw > 0 ? Math.floor(maxItemsRaw) : undefined;
+  const fetchOpts: { maxPages?: number; maxItems?: number } = {
+    ...(maxPages ? { maxPages } : {}),
+    ...(maxItems ? { maxItems } : {}),
+  };
 
   await appendRunLog(
     run,
     `ATS board detected (${detected.provider}/${detected.companyHint}); fetching public job list without Chromium` +
-      `${maxPages ? ` (maxPages=${maxPages} from robot config)` : ''}…`,
+      `${maxPages ? ` (maxPages=${maxPages} from robot config)` : ''}` +
+      `${maxItems ? ` (maxItems=${maxItems})` : ''}…`,
     { flush: true }
   );
 
   let board: Awaited<ReturnType<typeof fetchAtsBoardJobs>> = null;
   try {
-    board = await fetchAtsBoardJobs(startUrl, maxPages ? { maxPages } : undefined);
+    board = await fetchAtsBoardJobs(
+      startUrl,
+      Object.keys(fetchOpts).length ? fetchOpts : undefined
+    );
   } catch (fetchErr: any) {
     await appendRunLog(
       run,
@@ -485,11 +522,22 @@ async function tryAtsBoardCollection(
     return false;
   }
 
+  const persistRows =
+    typeof maxItems === 'number' && maxItems > 0 ? board.rows.slice(0, maxItems) : board.rows;
+  if (!persistRows.length) {
+    await appendRunLog(
+      run,
+      `ATS board fetch returned no rows for ${detected.provider}; falling back to browser extraction`,
+      { flush: true }
+    );
+    return false;
+  }
+
   await finalizeExtractedListRows({
     run,
     automation,
     userId,
-    rows: board.rows,
+    rows: persistRows,
     extractionMethod: 'ats_board',
     atsProvider: board.provider,
     zeroRowsHint: `ATS board API for ${board.provider} returned zero jobs.`,
@@ -525,7 +573,8 @@ async function processConfiguredListExtraction(
   try {
     await appendRunLog(
       run,
-      `Starting configured list extraction on ${safeOutboundUrlLogLabel(automation.recording_meta.url)}`
+      `Starting configured list extraction on ${safeOutboundUrlLogLabel(automation.recording_meta.url)}`,
+      { flush: true }
     );
     await applyAutomationRuntimeConfig(page, automation);
 
@@ -765,36 +814,37 @@ async function buildIdentityProfile(
   }
   let poolIsolationKey: string | undefined;
   const disableHttp2 = shouldDisableChromiumHttp2(targetUrl);
-  const envFallbackProxy = attachProxy ? envFallbackCandidate : null;
+  const envFallbackProxyRaw = attachProxy ? envFallbackCandidate : null;
   const sidecarProxyServer = normalizeProxyServer(process.env.CAMOUFOX_PROXY_SERVER);
   let sidecarProxyReachable: boolean | undefined;
 
-  // Probe before attaching last-resort/env proxy (captcha Playwright retry or
-  // Camoufox escalate). TCP-open then CONNECT-fail used to burn a whole attempt.
-  const mayAttachLastResortProxy =
-    attachProxy &&
-    attemptsMade >= 1 &&
-    (retryReason === 'captcha' ||
-      retryReason === 'block' ||
-      retryReason === 'proxy-tunnel' ||
-      opts?.lastFailureWasProxyTunnel);
-  if (
-    mayAttachLastResortProxy &&
-    sidecarProxyServer &&
-    !failedProxyServers.includes(sidecarProxyServer)
-  ) {
-    sidecarProxyReachable = await probeProxyHttpConnect(sidecarProxyServer);
+  // Probe any last-resort HTTP proxy before attach — including attempt 0 when
+  // needsProxy is remembered. A dead CAMOUFOX_PROXY used to fail goto in ~4s.
+  const proxyToProbe =
+    (selectedProxy?.server && !failedProxyServers.includes(normalizeProxyServer(selectedProxy.server) || ''))
+      ? selectedProxy.server
+      : sidecarProxyServer || envFallbackProxyRaw?.server;
+  if (attachProxy && proxyToProbe && !failedProxyServers.includes(normalizeProxyServer(proxyToProbe) || '')) {
+    sidecarProxyReachable = await probeProxyHttpConnect(proxyToProbe, 2500, {
+      connectHost: hostnameFromUrl(targetUrl) || undefined,
+    });
     if (!sidecarProxyReachable) {
-      failedProxyServers = rememberFailedProxy(failedProxyServers, sidecarProxyServer);
+      failedProxyServers = rememberFailedProxy(failedProxyServers, proxyToProbe);
       logger.log(
         'warn',
-        `Camoufox sidecar proxy ${sidecarProxyServer} is unreachable; retrying without it`
+        `Last-resort proxy ${proxyToProbe} failed CONNECT probe; continuing without it`
       );
       selectedProxy = attachProxy
         ? selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers)
         : null;
     }
   }
+
+  const envFallbackProxy =
+    envFallbackProxyRaw &&
+    !failedProxyServers.includes(normalizeProxyServer(envFallbackProxyRaw.server) || '')
+      ? envFallbackProxyRaw
+      : null;
 
   let retryPlan = null;
   if (retryReason === 'captcha') {
@@ -814,7 +864,7 @@ async function buildIdentityProfile(
       failedProxyServers,
       sidecarProxyServer: attachProxy ? sidecarProxyServer : null,
       sidecarProxyReachable: attachProxy ? sidecarProxyReachable : undefined,
-      lastFailureWasProxyTunnel: false,
+      lastFailureWasProxyTunnel: !!opts?.lastFailureWasProxyTunnel,
     });
   } else if (retryReason === 'proxy-tunnel' || opts?.lastFailureWasProxyTunnel) {
     // Drop the dead tunnel; do not attach a fresh env proxy unless needsProxy
@@ -841,6 +891,10 @@ async function buildIdentityProfile(
     selectedProxy = retryPlan.proxy;
   } else if (attachProxy && !selectedProxy && envFallbackProxy) {
     selectedProxy = envFallbackProxy;
+  }
+
+  if (!retryPlan && attachProxy && !selectedProxy) {
+    identityStrategy = antiBotTarget ? 'baseline-antibot' : 'baseline';
   }
 
   // No UI/env proxy configured — keep / restore normal direct approach.
@@ -1134,7 +1188,8 @@ export async function runScraperJobPayload(
     failedProxyServers = probedFailed;
     await appendRunLog(
       run,
-      `Identity selected: strategy=${selectedIdentity.identityStrategy || 'baseline'}, browser=${selectedIdentity.browserType || 'playwright-default'}, proxy ${selectedIdentity.contextProxy?.server || 'none'}, headless=${selectedIdentity.headless}${selectedIdentity.disableHttp2 ? ', http2=disabled' : ''}`
+      `Identity selected: strategy=${selectedIdentity.identityStrategy || 'baseline'}, browser=${selectedIdentity.browserType || 'playwright-default'}, proxy ${selectedIdentity.contextProxy?.server || 'none'}, headless=${selectedIdentity.headless}${selectedIdentity.disableHttp2 ? ', http2=disabled' : ''}`,
+      { flush: true }
     );
     if (proxyAllowed && !proxyConfigured) {
       await appendRunLog(

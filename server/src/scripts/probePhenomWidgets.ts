@@ -10,6 +10,7 @@ import {
   detectAtsBoard,
   discoverPhenomSiteConfig,
   fetchAtsBoardJobs,
+  startUrlHasCollectionFilters,
 } from '../services/atsAdapters';
 
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -18,6 +19,11 @@ async function main() {
   const pageUrl = String(process.env.PHENOM_PROBE_URL || 'https://hiring.jhu.edu/careers').trim();
   console.log('Phenom probe (HTTP only, no Playwright)');
   console.log(`  url: ${pageUrl}`);
+  if (!startUrlHasCollectionFilters(pageUrl)) {
+    console.log('  refused: start URL has no collection filters (would dump the full board)');
+    process.exitCode = 2;
+    return;
+  }
 
   const detected = detectAtsBoard(pageUrl);
   console.log(`  detectAtsBoard: ${detected ? `${detected.provider}/${detected.companyHint}` : 'none'}`);

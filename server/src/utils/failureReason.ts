@@ -45,7 +45,10 @@ export function classifyFailureReason(errorMessage: string | null | undefined): 
     lower.includes('captcha') ||
     lower.includes('re-captcha') ||
     lower.includes('recaptcha') ||
-    lower.includes('hcaptcha')
+    lower.includes('hcaptcha') ||
+    lower.includes('cloudflare') ||
+    lower.includes('just a moment') ||
+    lower.includes('cf-challenge')
   ) {
     return 'captcha';
   }
@@ -231,7 +234,7 @@ export function buildNormalizedFailureReasonExpression(): Record<string, any> {
                     $switch: {
                       branches: [
                         {
-                          case: messageMatches('(captcha|re-captcha|recaptcha|hcaptcha)'),
+                          case: messageMatches('(captcha|re-captcha|recaptcha|hcaptcha|cloudflare|just a moment|cf-challenge)'),
                           then: 'captcha',
                         },
                         {

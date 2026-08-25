@@ -37,7 +37,60 @@ export type ExtraBoardJobRow = {
   description?: string;
 };
 
-type FetchOpts = { maxPages?: number };
+type FetchOpts = { maxPages?: number; maxItems?: number };
+
+const WORKDAY_PAGINATION_KEYS = new Set([
+  'page',
+  'pagesize',
+  'pg',
+  'p',
+  'start',
+  'startrow',
+  'offset',
+  'from',
+  'limit',
+  'rows',
+  'sort',
+  'sort_by',
+  'sortby',
+  'descending',
+]);
+
+const WORKDAY_SEARCH_TEXT_KEYS = new Set(['q', 'query', 'search', 'searchtext', 'searchstring']);
+
+const WORKDAY_KNOWN_FACETS = new Set([
+  'locationcountry',
+  'jobfamilygroup',
+  'workersubtype',
+  'timetype',
+  'locationhierarchy',
+  'jobfamily',
+  'workertype',
+]);
+
+/** Salesforce marketing query keys are human labels, not Workday facet IDs. */
+const WORKDAY_SKIP_FACET_KEYS = new Set(['team', 'country', 'location', 'locations', 'department', 'category']);
+
+export function workdayAppliedFacetsFromUrl(pageUrl: string): Record<string, string[]> {
+  const facets: Record<string, string[]> = {};
+  try {
+    const parsed = new URL(pageUrl);
+    for (const [key, raw] of parsed.searchParams.entries()) {
+      const value = String(raw || '').trim();
+      if (!value) continue;
+      const kl = key.toLowerCase();
+      if (WORKDAY_PAGINATION_KEYS.has(kl) || WORKDAY_SEARCH_TEXT_KEYS.has(kl)) continue;
+      if (WORKDAY_SKIP_FACET_KEYS.has(kl)) continue;
+      const looksHashed = /^[a-f0-9]{16,}$/i.test(value);
+      if (!WORKDAY_KNOWN_FACETS.has(kl) && !looksHashed) continue;
+      if (!facets[key]) facets[key] = [];
+      if (!facets[key].includes(value)) facets[key].push(value);
+    }
+  } catch {
+    return {};
+  }
+  return facets;
+}
 
 function titleCaseToken(token: string): string {
   const key = token.toLowerCase();
@@ -92,6 +145,39 @@ function limitedPages(opts?: FetchOpts): number {
   return Math.max(1, parseInt(process.env.ATS_BOARD_MAX_PAGES || '50', 10) || 50);
 }
 
+/** Placeholder site slug when the robot URL is only the Workday host. */
+export const WORKDAY_SITE_RESOLVE = '__resolve__';
+
+const WORKDAY_TENANT_SITES: Record<string, string> = {
+  broadcom: 'External_Career',
+};
+
+const WORKDAY_SITE_GUESSES = [
+  'External_Career',
+  'External',
+  'External_Career_Site',
+  'External_Careers',
+];
+
+function workdayListApiUrl(host: string, tenant: string, site: string): string {
+  return `https://${host}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}/jobs`;
+}
+
+function workdaySiteCandidates(tenant: string, detectedSite: string): string[] {
+  const decoded = decodeURIComponent(detectedSite || '');
+  if (decoded && decoded !== WORKDAY_SITE_RESOLVE) return [decoded];
+  const ordered: string[] = [];
+  const add = (value?: string) => {
+    const site = String(value || '').trim();
+    if (!site || site === WORKDAY_SITE_RESOLVE || ordered.includes(site)) return;
+    ordered.push(site);
+  };
+  add(WORKDAY_TENANT_SITES[tenant.toLowerCase()]);
+  for (const guess of WORKDAY_SITE_GUESSES) add(guess);
+  add(tenant);
+  return ordered;
+}
+
 /** Detect Workday CXS board from myworkdayjobs URL (site path preserved). */
 export function detectWorkdayBoard(url: string): ExtraBoardDetection | null {
   let parsed: URL;
@@ -108,11 +194,12 @@ export function detectWorkdayBoard(url: string): ExtraBoardDetection | null {
   const localeLike = /^(?:en|fr|de|es|pt|zh|ja|ko|it|nl|sv|da|fi|pl|tr)(?:-[a-z]{2})?$/i;
   const filtered = parts.filter((p) => !localeLike.test(p) && !/^(wday|cxs)$/i.test(p));
   const site = filtered[0];
-  if (!site || /^(job|jobs|details)$/i.test(site)) return null;
+  if (site && /^(job|jobs|details)$/i.test(site)) return null;
+  const siteKey = site || WORKDAY_SITE_RESOLVE;
   return {
     provider: 'workday',
     companyHint: workdayCompanyHint(tenant),
-    listApiUrl: `https://${host}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}/jobs`,
+    listApiUrl: workdayListApiUrl(host, tenant, siteKey),
   };
 }
 
@@ -337,6 +424,23 @@ export async function fetchExtraAtsBoardJobs(
   }
 }
 
+function parseWorkdayCxsJobsUrl(
+  listApiUrl: string
+): { host: string; tenant: string; site: string } | null {
+  try {
+    const parsed = new URL(listApiUrl);
+    const match = parsed.pathname.match(/^\/wday\/cxs\/([^/]+)\/([^/]+)\/jobs\/?$/i);
+    if (!match) return null;
+    return {
+      host: parsed.hostname,
+      tenant: decodeURIComponent(match[1]),
+      site: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchWorkdayBoard(
   pageUrl: string,
   detected: ExtraBoardDetection,
@@ -349,52 +453,150 @@ async function fetchWorkdayBoard(
     source.searchParams.get('q') ||
     source.searchParams.get('query') ||
     '';
-  const host = source.hostname;
-  const site = detected.listApiUrl.split('/').filter(Boolean).slice(-2, -1)[0] || '';
+  const cxs = parseWorkdayCxsJobsUrl(detected.listApiUrl);
+  const host = cxs?.host || source.hostname;
+  const tenant = cxs?.tenant || host.match(/^([a-z0-9-]+)\.wd\d+\./i)?.[1] || '';
+  const detectedSite =
+    cxs?.site || detected.listApiUrl.split('/').filter(Boolean).slice(-2, -1)[0] || '';
   const maxPages = limitedPages(options);
   const maxJobs = boardMaxJobs();
-  const all: ExtraBoardJobRow[] = [];
-  let offset = 0;
   const limit = 20;
-  for (let page = 0; page < maxPages && all.length < maxJobs; page++) {
-    const res = await httpClient.post(
-      detected.listApiUrl,
-      { appliedFacets: {}, limit, offset, searchText },
-      {
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-    if (res.status >= 400 || !res.data) break;
-    const postings = Array.isArray(res.data?.jobPostings) ? res.data.jobPostings : [];
-    if (!postings.length) break;
-    for (const job of postings) {
-      const externalPath = String(job.externalPath || job.externalUrl || '').trim();
-      let jobUrl = '';
-      if (/^https?:\/\//i.test(externalPath)) jobUrl = externalPath;
-      else if (externalPath.startsWith('/')) jobUrl = `https://${host}${externalPath}`;
-      else if (externalPath && site)
-        jobUrl = `https://${host}/${site}${externalPath.startsWith('/') ? '' : '/'}${externalPath}`;
-      if (!jobUrl) continue;
-      all.push(
-        rowFrom(
-          jobUrl,
-          job.title || job.jobTitle || '',
-          detected.companyHint,
-          job.locationsText || job.location || '',
-          { date: job.postedOn || job.startDate || '' }
-        )
+  const hasExplicitWorkdayGeo =
+    source.searchParams.has('country') ||
+    source.searchParams.has('locationCountry') ||
+    source.searchParams.getAll('location').some((v) => String(v).trim());
+  const wantsFacets =
+    source.searchParams.has('country') ||
+    source.searchParams.has('team') ||
+    source.searchParams.has('jobFamilyGroup') ||
+    !hasExplicitWorkdayGeo;
+
+  for (const site of workdaySiteCandidates(tenant, detectedSite)) {
+    const listApiUrl = workdayListApiUrl(host, tenant, site);
+    let appliedFacets: Record<string, string[]> = {};
+
+    const postPage = async (offset: number, facets: Record<string, string[]>) =>
+      httpClient.post(
+        listApiUrl,
+        { appliedFacets: facets, limit, offset, searchText },
+        {
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        }
       );
+
+    appliedFacets = { ...workdayAppliedFacetsFromUrl(pageUrl) };
+    if (wantsFacets) {
+      const probe = await postPage(0, {});
+      if (probe.status < 400 && probe.data) {
+        appliedFacets = {
+          ...appliedFacets,
+          ...workdayAppliedFacetsFromPageUrl(pageUrl, probe.data?.facets),
+        };
+      }
     }
-    offset += limit;
-    const total = typeof res.data?.total === 'number' ? res.data.total : Infinity;
-    if (offset >= total || postings.length < limit) break;
-    await sleepMs(150);
+
+    const all: ExtraBoardJobRow[] = [];
+    let offset = 0;
+    for (let page = 0; page < maxPages && all.length < maxJobs; page++) {
+      const res = await postPage(offset, appliedFacets);
+      if (res.status >= 400 || !res.data) break;
+      const postings = Array.isArray(res.data?.jobPostings) ? res.data.jobPostings : [];
+      if (!postings.length) break;
+      for (const job of postings) {
+        const externalPath = String(job.externalPath || job.externalUrl || '').trim();
+        let jobUrl = '';
+        if (/^https?:\/\//i.test(externalPath)) jobUrl = externalPath;
+        else if (externalPath.startsWith('/')) jobUrl = `https://${host}${externalPath}`;
+        else if (externalPath && site)
+          jobUrl = `https://${host}/${site}${externalPath.startsWith('/') ? '' : '/'}${externalPath}`;
+        if (!jobUrl) continue;
+        all.push(
+          rowFrom(
+            jobUrl,
+            job.title || job.jobTitle || '',
+            detected.companyHint,
+            job.locationsText || job.location || '',
+            { date: job.postedOn || job.startDate || '' }
+          )
+        );
+      }
+      offset += limit;
+      const total = typeof res.data?.total === 'number' ? res.data.total : Infinity;
+      if (offset >= total || postings.length < limit) break;
+      await sleepMs(150);
+    }
+    if (all.length) {
+      return { provider: 'workday' as const, companyHint: detected.companyHint, rows: all.slice(0, maxJobs) };
+    }
   }
-  if (!all.length) return null;
-  return { provider: 'workday' as const, companyHint: detected.companyHint, rows: all.slice(0, maxJobs) };
+  return null;
+}
+
+function workdayNormToken(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function workdayFacetIdsForLabels(
+  facet: { values?: Array<{ descriptor?: string; id?: string }> } | undefined,
+  labels: string[]
+): string[] {
+  if (!facet || !labels.length) return [];
+  const values = Array.isArray(facet.values) ? facet.values : [];
+  const ids: string[] = [];
+  for (const label of labels) {
+    const want = workdayNormToken(label);
+    if (!want) continue;
+    const hit = values.find((entry) => {
+      const have = workdayNormToken(String(entry?.descriptor || ''));
+      return have === want || have.includes(want) || want.includes(have);
+    });
+    if (hit?.id && !ids.includes(hit.id)) ids.push(hit.id);
+  }
+  return ids;
+}
+
+function workdayAppliedFacetsFromPageUrl(pageUrl: string, facets: unknown): Record<string, string[]> {
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return {};
+  }
+  const countries = parsed.searchParams.getAll('country').map((v) => v.trim()).filter(Boolean);
+  const hasExplicitGeo =
+    countries.length > 0 ||
+    parsed.searchParams.getAll('location').some((v) => v.trim()) ||
+    !!(parsed.searchParams.get('locationCountry') || '').trim();
+  if (!countries.length && !hasExplicitGeo) countries.push('United States');
+  const teams = parsed.searchParams
+    .getAll('team')
+    .concat(parsed.searchParams.getAll('jobFamilyGroup'))
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (!countries.length && !teams.length) return {};
+  const list = Array.isArray(facets) ? facets : [];
+  const applied: Record<string, string[]> = {};
+  for (const facet of list) {
+    const param = String(facet?.facetParameter || '').trim();
+    if (!param) continue;
+    const descriptor = workdayNormToken(String(facet?.descriptor || ''));
+    if (countries.length && (/country/i.test(param) || descriptor === 'country')) {
+      const ids = workdayFacetIdsForLabels(facet, countries);
+      if (ids.length) applied[param] = ids;
+    }
+    if (teams.length && (param === 'jobFamilyGroup' || descriptor === 'job category')) {
+      const ids = workdayFacetIdsForLabels(facet, teams);
+      if (ids.length) applied[param] = ids;
+    }
+  }
+  return applied;
 }
 
 async function fetchWorkableBoard(detected: ExtraBoardDetection, httpClient: AxiosInstance) {

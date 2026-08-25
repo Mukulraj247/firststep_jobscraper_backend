@@ -27,13 +27,16 @@ describe('classifyProxyEscalation', () => {
     expect(classifyProxyEscalation('page.goto: net::ERR_NAME_NOT_RESOLVED')).toBe('networkOrOom');
   });
 
-  it('detects block-like challenges and closed browsers', () => {
+  it('detects block-like challenges without treating a closed browser as proxy spend', () => {
     expect(classifyProxyEscalation('Cloudflare challenge did not clear before extraction')).toBe(
       'blockLike'
     );
     expect(
       classifyProxyEscalation('locator.count: Target page, context or browser has been closed')
-    ).toBe('blockLike');
+    ).toBe('networkOrOom');
+    expect(
+      classifyProxyEscalation('page.waitForTimeout: Target page, context or browser has been closed')
+    ).toBe('networkOrOom');
     expect(classifyProxyEscalation('Amazon anti-bot challenge did not clear')).toBe('blockLike');
   });
 

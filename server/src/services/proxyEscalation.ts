@@ -11,8 +11,11 @@ const OOM_RE =
 const NETWORK_RE =
   /net::ERR_FAILED|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_TIMED_OUT|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_ADDRESS_UNREACHABLE|ERR_TIMED_OUT|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i;
 
+const BROWSER_CLOSED_RE =
+  /Target page, context or browser has been closed|browser has been closed/i;
+
 const BLOCK_RE =
-  /captcha|cloudflare|challenge|access denied|blocked|forbidden|anti-?bot|verification required|attention required|just a moment|Target page, context or browser has been closed|browser has been closed|empty\/blocked|empty extraction|soft.?block/i;
+  /captcha|cloudflare|challenge|access denied|blocked|forbidden|anti-?bot|verification required|attention required|just a moment|empty\/blocked|empty extraction|soft.?block/i;
 
 /**
  * Classify a scrape failure so we only spend proxy on block-like signals.
@@ -26,6 +29,7 @@ export const classifyProxyEscalation = (
   const text = String(message || '');
   if (isProxyTunnelFailure(text)) return 'proxyTunnel';
   if (OOM_RE.test(text)) return 'networkOrOom';
+  if (BROWSER_CLOSED_RE.test(text)) return 'networkOrOom';
   if (NETWORK_RE.test(text)) return 'networkOrOom';
   if (BLOCK_RE.test(text)) return 'blockLike';
   // Navigation timeouts without challenge markers: do not burn proxy.

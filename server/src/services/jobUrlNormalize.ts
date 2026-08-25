@@ -123,6 +123,11 @@ export function normalizeJobUrl(raw: unknown): string | null {
   canonicalizePhenomPcsxJobUrl(parsed);
   pathname = parsed.pathname;
 
+  if (/\.myworkdayjobs\.com$/i.test(parsed.hostname) && /\/apply$/i.test(pathname)) {
+    parsed.pathname = pathname.replace(/\/apply$/i, '');
+    pathname = parsed.pathname;
+  }
+
   // Google Careers: the numeric id in the path uniquely identifies the job.
   // Drop all query noise from list pagination / locale / search filters.
   if (

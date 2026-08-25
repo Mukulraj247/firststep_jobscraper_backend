@@ -118,7 +118,8 @@
     "repack:schedules": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/repackAllSchedules.ts",
     "sync:agenda:production": "cross-env TS_NODE_TRANSPILE_ONLY=1 AGENDA_COLLECTION=agendaJobs npx ts-node --project server/tsconfig.json server/src/scripts/syncProductionAgenda.ts",
     "probe:decodo": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/probeDecodoTrial.ts",
-    "probe:phenom": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/probePhenomWidgets.ts"
+    "probe:phenom": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/probePhenomWidgets.ts",
+    "probe:happydance": "cross-env TS_NODE_TRANSPILE_ONLY=1 npx ts-node --project server/tsconfig.json server/src/scripts/probeHappyDanceRss.ts"
   },
   "overrides": {
     "playwright-core": "1.58.0"

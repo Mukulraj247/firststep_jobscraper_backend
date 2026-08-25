@@ -4,8 +4,17 @@ import logger from '../logger';
 export const randomBetween = (min: number, max: number): number =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
+const isPageClosed = (page: Page): boolean => {
+  try {
+    return typeof page.isClosed === 'function' && page.isClosed();
+  } catch {
+    return true;
+  }
+};
+
 export const applyHumanDelay = async (page: Page, minMs: number = 250, maxMs: number = 1250) => {
-  await page.waitForTimeout(randomBetween(minMs, maxMs));
+  if (isPageClosed(page)) return;
+  await page.waitForTimeout(randomBetween(minMs, maxMs)).catch(() => undefined);
 };
 
 export const simulateHumanMouse = async (page: Page) => {
@@ -17,8 +26,8 @@ export const simulateHumanMouse = async (page: Page) => {
   ];
 
   for (const point of points) {
-    await page.mouse.move(point.x, point.y, { steps: randomBetween(8, 20) });
-    await page.waitForTimeout(randomBetween(80, 220));
+    await page.mouse.move(point.x, point.y, { steps: randomBetween(8, 20) }).catch(() => undefined);
+    await page.waitForTimeout(randomBetween(80, 220)).catch(() => undefined);
   }
 };
 
@@ -185,7 +194,10 @@ export async function detectMicrosoftChallengeAndWait(
       return { detected: true, cleared: true };
     }
     await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-    await page.waitForTimeout(pollMs);
+    if (isPageClosed(page)) {
+      return { detected: true, cleared: false };
+    }
+    await page.waitForTimeout(pollMs).catch(() => undefined);
   }
 
   return { detected: true, cleared: false };
@@ -210,7 +222,10 @@ export async function detectAmazonChallengeAndWait(
       return { detected: true, cleared: true };
     }
     await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-    await page.waitForTimeout(pollMs);
+    if (isPageClosed(page)) {
+      return { detected: true, cleared: false };
+    }
+    await page.waitForTimeout(pollMs).catch(() => undefined);
   }
 
   return { detected: true, cleared: false };
@@ -272,12 +287,14 @@ export const waitForCloudflareToClear = async (
   const started = Date.now();
 
   while (Date.now() - started < timeoutMs) {
+    if (isPageClosed(page)) return false;
     const challenged = await detectCloudflareChallenge(page);
     if (!challenged) return true;
 
     // Give the challenge page room to complete checks and redirect.
     await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-    await page.waitForTimeout(pollMs);
+    if (isPageClosed(page)) return false;
+    await page.waitForTimeout(pollMs).catch(() => undefined);
   }
 
   return !(await detectCloudflareChallenge(page));

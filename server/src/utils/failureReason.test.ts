@@ -61,6 +61,14 @@ describe('classifyFailureReason', () => {
     ).toBe('captcha');
   });
 
+  it('classifies Cloudflare challenge as captcha', () => {
+    expect(
+      classifyFailureReason(
+        'Dead letter: attempts exhausted (3/3). Cloudflare challenge did not clear after navigating to https://careers.box.com'
+      )
+    ).toBe('captcha');
+  });
+
   it('classifies browser closed', () => {
     expect(
       classifyFailureReason('browserContext.newPage: Target page, context or browser has been closed')

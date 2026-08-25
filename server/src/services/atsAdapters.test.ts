@@ -2,11 +2,15 @@
 import {
   detectAts,
   detectAtsBoard,
+  normalizeCareerSearchKeywords,
+  parseSmartRecruitersBoardFilters,
+  filterSmartRecruitersPostings,
   shouldSkipScrapeDoUrl,
   shouldNeverScrapeDoUrl,
   fetchAtsJob,
   fetchAtsBoardJobs,
   shouldSkipAtsBoardForUiPagination,
+  shouldPreferAtsBoardOverUiPagination,
   atsHttpClient,
   parseFindlyConfigFromHtml,
   findlyFacetsFromUrl,
@@ -23,11 +27,116 @@ import {
   resolveOracleHashVanityFusionHost,
   assertSafeFindlyApiBase,
   looksLikePhenomBoard,
+  looksLikeNasActivateBoard,
+  looksLikeHappyDanceBoard,
+  looksLikeWorkdayBoard,
+  looksLikeGreenhouseBoard,
+  applyAtsBoardSearchAndPageLimits,
+  startUrlHasCollectionFilters,
   parsePhenomConfigFromHtml,
   buildPhenomWidgetsRequest,
 } from './atsAdapters';
 import fs from 'fs';
 import path from 'path';
+
+describe('startUrlHasCollectionFilters', () => {
+  const cases: Array<{ url: string; expect: boolean; name: string }> = [
+    {
+      name: 'Box filtered Engineering URL',
+      url: 'https://careers.box.com/en/jobs/?search=&location=Austin%2C+Texas%2C+United+States&team=Engineering&pagesize=20#results',
+      expect: true,
+    },
+    {
+      name: 'Box unfiltered list',
+      url: 'https://careers.box.com/en/jobs/',
+      expect: false,
+    },
+    {
+      name: 'pagesize and hash only',
+      url: 'https://careers.box.com/en/jobs/?pagesize=20#results',
+      expect: false,
+    },
+    {
+      name: 'Greenhouse board token only',
+      url: 'https://boards.greenhouse.io/stripe',
+      expect: false,
+    },
+    {
+      name: 'Greenhouse location query',
+      url: 'https://boards.greenhouse.io/stripe?location=New+York',
+      expect: true,
+    },
+    {
+      name: 'Workday host only',
+      url: 'https://intel.wd1.myworkdayjobs.com/External',
+      expect: false,
+    },
+    {
+      name: 'Workday searchText',
+      url: 'https://intel.wd1.myworkdayjobs.com/External?q=engineer',
+      expect: true,
+    },
+    {
+      name: 'Workday locationCountry facet',
+      url: 'https://intel.wd1.myworkdayjobs.com/External?locationCountry=bc33aa3152ec42d4995f4791a106ed09',
+      expect: true,
+    },
+    {
+      name: 'Google results without q',
+      url: 'https://careers.google.com/jobs/results/',
+      expect: false,
+    },
+    {
+      name: 'Google results with q',
+      url: 'https://careers.google.com/jobs/results/?q=Software',
+      expect: true,
+    },
+    {
+      name: 'BoA without searchstring',
+      url: 'https://careers.bankofamerica.com/en-us/job-search',
+      expect: false,
+    },
+    {
+      name: 'BoA with keywords',
+      url: 'https://careers.bankofamerica.com/en-us/job-search?keywords=data',
+      expect: true,
+    },
+    {
+      name: 'SmartRecruiters board only',
+      url: 'https://jobs.smartrecruiters.com/AcmeCorp',
+      expect: false,
+    },
+    {
+      name: 'SmartRecruiters categories',
+      url: 'https://jobs.smartrecruiters.com/AcmeCorp?categories=Engineering',
+      expect: true,
+    },
+    {
+      name: 'Phenom category landing path',
+      url: 'https://careers.adobe.com/us/en/c/engineering-and-product-jobs',
+      expect: true,
+    },
+    {
+      name: 'empty search param is not a filter',
+      url: 'https://careers.box.com/en/jobs/?search=',
+      expect: false,
+    },
+    {
+      name: 'SX81AH65 Box robot URL',
+      url: 'https://careers.box.com/en/jobs/?search=&location=Austin%2C+Texas%2C+United+States&location=US+Remote+-+California+-+San+Diego+Area&team=Engineering&team=IT&team=Security&pagesize=20#results',
+      expect: true,
+    },
+    {
+      name: 'Cardinal Health NAS Activate category + country',
+      url: 'https://jobs.cardinalhealth.com/search/searchjobs?regionalcountry=United+States&categoryid=a266442d-10a4-4adf-9806-354dc8644a33',
+      expect: true,
+    },
+  ];
+
+  it.each(cases)('$name', ({ url, expect: want }) => {
+    expect(startUrlHasCollectionFilters(url)).toBe(want);
+  });
+});
 
 describe('Findly API base validation', () => {
   it('rejects an HTML-derived internal API base', () => {
@@ -178,6 +287,17 @@ describe('detectAts', () => {
     );
     expect(d?.provider).toBe('workday');
     expect(d?.apiUrl).toContain('/wday/cxs/td/TD_Bank_Careers');
+  });
+
+  it('detects Adobe Workday apply URLs used on the Phenom career site', () => {
+    const d = detectAts(
+      'https://adobe.wd5.myworkdayjobs.com/external_experienced/job/San-Jose/Senior-Software-Engineer_R147125-1/apply'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Adobe');
+    expect(d?.apiUrl).toBe(
+      'https://adobe.wd5.myworkdayjobs.com/wday/cxs/adobe/external_experienced'
+    );
   });
 
   it('detects Oracle requisition preview URLs as HCM details', () => {
@@ -437,6 +557,17 @@ describe('detectAtsBoard', () => {
     expect(fromJob?.companyHint).toBe('stripe');
   });
 
+  it('detects DocuSign Greenhouse vanity career boards', () => {
+    const d = detectAtsBoard('https://careers.docusign.com');
+    expect(d?.provider).toBe('greenhouse');
+    expect(d?.companyHint).toBe('docusign');
+    expect(d?.listApiUrl).toContain('/boards/docusign/jobs');
+    expect(looksLikeGreenhouseBoard('https://careers.docusign.com/jobs?query=software+developer')).toBe(
+      true
+    );
+    expect(detectAtsBoard('https://stripe.com')?.provider).not.toBe('greenhouse');
+  });
+
   it('detects Lever company board', () => {
     const d = detectAtsBoard('https://jobs.lever.co/netflix');
     expect(d?.provider).toBe('lever');
@@ -453,6 +584,81 @@ describe('detectAtsBoard', () => {
     const d = detectAtsBoard('https://jobs.smartrecruiters.com/AcmeCorp');
     expect(d?.provider).toBe('smartrecruiters');
     expect(d?.listApiUrl).toContain('companies/AcmeCorp/postings');
+  });
+
+  it('detects GitHub SmartRecruiters connected career site (careers-home)', () => {
+    const url =
+      'https://www.github.careers/careers-home/jobs?keywords=untied%20states&categories=Engineering%7CIT%7CMachine%20learning%20%26%20AI%7CSecurity&page=1&sortBy=posted_date&descending=true';
+    const d = detectAtsBoard(url);
+    expect(d?.provider).toBe('smartrecruiters');
+    expect(d?.companyHint).toBe('GitHub');
+    expect(d?.listApiUrl).toBe('https://api.smartrecruiters.com/v1/companies/GitHub/postings');
+    expect(detectAtsBoard('https://www.github.careers/careers-home')?.provider).toBe(
+      'smartrecruiters'
+    );
+  });
+
+  it('autofixes untied→united and parses SR location + category filters', () => {
+    const url =
+      'https://www.github.careers/careers-home/jobs?keywords=untied%20states&categories=Engineering%7CIT%7CMachine%20learning%20%26%20AI%7CSecurity';
+    expect(normalizeCareerSearchKeywords('untied states')).toBe('united states');
+    const filters = parseSmartRecruitersBoardFilters(url);
+    expect(filters.keywords).toBe('united states');
+    expect(filters.countryCode).toBe('us');
+    expect(filters.categories).toEqual([
+      'Engineering',
+      'IT',
+      'Machine learning & AI',
+      'Security',
+    ]);
+    expect(filters.q).toBeUndefined();
+  });
+
+  it('keeps SmartRecruiters jobs that match US and selected categories', () => {
+    const url =
+      'https://www.github.careers/careers-home/jobs?keywords=untied%20states&categories=Engineering%7CIT%7CMachine%20learning%20%26%20AI%7CSecurity';
+    const kept = filterSmartRecruitersPostings(
+      [
+        {
+          id: '1',
+          name: 'SWE',
+          department: { label: 'Engineering' },
+          location: { country: 'United States', countryCode: 'us', city: 'Austin' },
+        },
+        {
+          id: '2',
+          name: 'AE',
+          department: { label: 'Sales' },
+          location: { country: 'United States', countryCode: 'us' },
+        },
+        {
+          id: '3',
+          name: 'SWE IN',
+          department: { label: 'Engineering' },
+          location: { country: 'India', countryCode: 'in' },
+        },
+        {
+          id: '4',
+          name: 'Sec',
+          department: { label: 'Security' },
+          location: { country: 'United States', countryCode: 'US' },
+        },
+        {
+          id: '5',
+          name: 'IT Ops',
+          department: { label: 'IT' },
+          location: { country: 'United States of America' },
+        },
+        {
+          id: '6',
+          name: 'ML',
+          department: { label: 'Machine Learning & AI' },
+          location: { countryCode: 'us' },
+        },
+      ],
+      url
+    );
+    expect(kept.map((j: any) => j.id)).toEqual(['1', '4', '5', '6']);
   });
 
   it('detects Findly / job-search-results boards', () => {
@@ -532,6 +738,86 @@ describe('detectAtsBoard', () => {
     expect(shouldSkipAtsBoardForUiPagination({ listExtraction: {} })).toBe(false);
   });
 
+  it('treats Greenhouse vanity hosts as ATS-capable even when next-button skip would apply', () => {
+    expect(looksLikeGreenhouseBoard('https://careers.docusign.com')).toBe(true);
+    expect(looksLikeGreenhouseBoard('https://boards.greenhouse.io/stripe')).toBe(true);
+    expect(
+      shouldSkipAtsBoardForUiPagination({
+        listExtraction: {
+          pagination: {
+            mode: 'next-button',
+            nextButtonSelector: 'button:has-text("Next")',
+            maxPages: 3,
+          },
+        },
+      })
+    ).toBe(true);
+  });
+
+  it('treats Workday hosts as ATS-capable even when next-button skip would apply', () => {
+    expect(looksLikeWorkdayBoard('https://broadcom.wd1.myworkdayjobs.com')).toBe(true);
+    expect(looksLikeWorkdayBoard('https://intel.wd1.myworkdayjobs.com/en-US/External')).toBe(
+      true
+    );
+    expect(looksLikeWorkdayBoard('https://boards.greenhouse.io/stripe')).toBe(false);
+    expect(
+      looksLikeWorkdayBoard(
+        'https://www.salesforce.com/company/careers/jobs/?country=United+States+of+America&team=Software+Engineering'
+      )
+    ).toBe(true);
+  });
+
+  it('detects Salesforce marketing careers search as the public Workday CXS board', () => {
+    const d = detectAtsBoard(
+      'https://www.salesforce.com/company/careers/jobs/?country=United+States+of+America&team=Data&team=Software+Engineering&page=1'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Salesforce');
+    expect(d?.listApiUrl).toBe(
+      'https://salesforce.wd12.myworkdayjobs.com/wday/cxs/salesforce/External_Career_Site/jobs'
+    );
+  });
+
+  it('prefers Salesforce Workday CXS over recorded next-button browser pagination', () => {
+    const url =
+      'https://www.salesforce.com/company/careers/jobs/?country=United+States+of+America&team=Data&team=Software+Engineering&team=Development+%26+Strategy&team=Enterprise+Technology+%26+Infrastructure&page=1';
+    expect(shouldPreferAtsBoardOverUiPagination(url)).toBe(true);
+    expect(shouldPreferAtsBoardOverUiPagination('https://www.salesforce.com')).toBe(false);
+    expect(shouldPreferAtsBoardOverUiPagination('https://careers.example.com/jobs')).toBe(false);
+  });
+
+  it('still matches Pinterest Phenom while next-button skip would apply in the worker', () => {
+    const url =
+      'https://www.pinterestcareers.com/jobs/?search=&location=Chicago&team=Engineering&pagesize=20#results';
+    expect(looksLikePhenomBoard(url)).toBe(true);
+    expect(
+      shouldSkipAtsBoardForUiPagination({
+        listExtraction: {
+          pagination: {
+            mode: 'next-button',
+            nextButtonSelector: 'button:has-text("Show More")',
+          },
+        },
+      })
+    ).toBe(true);
+  });
+
+  it('still matches Box HappyDance while next-button skip would apply in the worker', () => {
+    const url =
+      'https://careers.box.com/en/jobs/?search=&team=Engineering&pagesize=20#results';
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(
+      shouldSkipAtsBoardForUiPagination({
+        listExtraction: {
+          pagination: {
+            mode: 'next-button',
+            nextButtonSelector: 'button:has-text("Show More")',
+          },
+        },
+      })
+    ).toBe(true);
+  });
+
   it('detects Bank of America career job search', () => {
     const d = detectAtsBoard(
       'https://careers.bankofamerica.com/en-us/job-search?ref=search&search=jobsByLocation&start=0&rows=10&searchstring=United+States&keywords=data+analytics'
@@ -558,6 +844,9 @@ describe('detectAtsBoard', () => {
     );
     expect(fromJob?.provider).toBe('workday');
     expect(fromJob?.listApiUrl).toContain('/wday/cxs/td/TD_Bank_Careers/jobs');
+    const fromHost = detectAtsBoard('https://broadcom.wd1.myworkdayjobs.com');
+    expect(fromHost?.provider).toBe('workday');
+    expect(fromHost?.listApiUrl).toContain('/wday/cxs/broadcom/__resolve__/jobs');
   });
 
   it('detects Workable / Recruitee / BambooHR / Personio / Breezy boards', () => {
@@ -750,6 +1039,156 @@ describe('fetchAtsBoardJobs', () => {
     getSpy.mockRestore();
   });
 
+  it('fetches NAS Activate SearchResults JSON for Cardinal Health instead of Phenom', async () => {
+    const start =
+      'https://jobs.cardinalhealth.com/search/searchjobs?regionalcountry=United+States&geolocationstring=39.5036%2C-99.0184_United+States&categoryid=a266442d-10a4-4adf-9806-354dc8644a33';
+    expect(looksLikePhenomBoard(start)).toBe(false);
+    expect(looksLikeNasActivateBoard(start)).toBe(true);
+    expect(detectAtsBoard(start)?.provider).toBe('nasactivate');
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        Result: 'OK',
+        TotalRecordCount: 1,
+        Records: [
+          {
+            ID: 'ec9c27f4-d8b0-42ab-9cc6-eb7cff8e1f12',
+            Title: '<span>Sr Engineering Analyst</span>',
+            TrackingObject: {
+              TitleJson: 'Sr Engineering Analyst',
+              PostedDateJson: '8/24/2026',
+              TypeNameJson: 'Full time',
+              LocationNamesJson: ['Regional'],
+              CityStatesDataJson: ['Massachusetts', 'Missouri'],
+              CountryNamesJson: ['United States'],
+              ActivateCategoryNamesJson: ['Engineering'],
+            },
+          },
+        ],
+      },
+    } as any);
+    const result = await fetchAtsBoardJobs(start);
+    expect(String(getSpy.mock.calls[0][0])).toContain('/Search/SearchResults');
+    expect(String(getSpy.mock.calls[0][0])).toContain('categoryid=a266442d-10a4-4adf-9806-354dc8644a33');
+    expect(String(getSpy.mock.calls[0][0])).toContain('regionalcountry=United');
+    expect(result?.provider).toBe('nasactivate');
+    expect(result?.companyHint).toBe('Cardinal Health');
+    expect(result?.rows).toHaveLength(1);
+    expect(result?.rows[0].jobTitle).toBe('Sr Engineering Analyst');
+    expect(result?.rows[0].department).toBe('Engineering');
+    expect(result?.rows[0].jobUrl).toContain(
+      '/search/jobdetails/sr-engineering-analyst/ec9c27f4-d8b0-42ab-9cc6-eb7cff8e1f12'
+    );
+  });
+
+  it('maps HappyDance RSS jobs and honors team/location filters from the start URL', async () => {
+    const rss = fs.readFileSync(path.join(__dirname, 'fixtures/happydance-rss.xml'), 'utf8');
+    getSpy.mockResolvedValue({ status: 200, data: rss } as any);
+    const filtered = await fetchAtsBoardJobs(
+      'https://careers.box.com/en/jobs/?search=&location=Redwood+City%2C+California%2C+United+States&location=US+Remote+-+California+-+San+Diego+Area&team=Engineering&team=IT&team=Security&pagesize=20#results'
+    );
+    expect(getSpy).toHaveBeenCalled();
+    expect(String(getSpy.mock.calls[0][0])).toBe('https://careers.box.com/en/jobs/xml/?rss=true');
+    expect(filtered?.provider).toBe('happydance');
+    expect(filtered?.rows.map((r) => r.jobTitle)).toEqual([
+      'Senior Software Engineer, ISF',
+      'IT Security Analyst',
+    ]);
+    expect(filtered?.rows[0].jobUrl).toContain('/en/jobs/8147786/');
+    expect(filtered?.rows[0].location).toContain('Redwood City');
+    expect(filtered?.rows[1].department).toBe('IT');
+    expect(filtered?.rows.some((r) => r.jobTitle === 'Account Executive')).toBe(false);
+    expect(filtered?.rows.some((r) => r.jobTitle.includes('Organizational'))).toBe(false);
+
+    const unfiltered = await fetchAtsBoardJobs('https://careers.box.com/en/jobs/');
+    expect(unfiltered?.rows.map((r) => r.jobTitle)).toEqual([
+      'Senior Software Engineer, ISF',
+      'IT Security Analyst',
+      'Senior Organizational Effectiveness Manager',
+    ]);
+    expect(unfiltered?.rows.some((r) => r.jobTitle === 'Account Executive')).toBe(false);
+  });
+
+  it('maps Salesforce Workday country and team query params onto CXS appliedFacets', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+    postSpy.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        total: 2,
+        jobPostings: [
+          {
+            title: 'Account Executive',
+            externalPath: '/job/United-Kingdom/ae_JR1',
+            locationsText: 'United Kingdom - London',
+          },
+        ],
+        facets: [
+          {
+            facetParameter: 'CF_-_Country',
+            descriptor: 'Country',
+            values: [{ descriptor: 'United States of America', id: 'us-id', count: 1 }],
+          },
+          {
+            facetParameter: 'jobFamilyGroup',
+            descriptor: 'Job Category',
+            values: [
+              { descriptor: 'Software Engineering', id: 'eng-id', count: 1 },
+              { descriptor: 'Data', id: 'data-id', count: 1 },
+            ],
+          },
+        ],
+      },
+    } as any);
+    postSpy.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        total: 1,
+        jobPostings: [
+          {
+            title: 'Software Engineer',
+            externalPath: '/job/United-States/se_JR2',
+            locationsText: 'United States - California',
+            postedOn: 'Posted Today',
+          },
+        ],
+        facets: [],
+      },
+    } as any);
+
+    const result = await fetchAtsBoardJobs(
+      'https://www.salesforce.com/company/careers/jobs/?country=United+States+of+America&team=Software+Engineering&team=Data&page=1'
+    );
+    expect(postSpy.mock.calls[0][1]).toMatchObject({ appliedFacets: {}, offset: 0 });
+    expect(postSpy.mock.calls[1][1].appliedFacets).toEqual({
+      'CF_-_Country': ['us-id'],
+      jobFamilyGroup: ['eng-id', 'data-id'],
+    });
+    expect(result?.provider).toBe('workday');
+    expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Software Engineer']);
+  } finally {
+    postSpy.mockRestore();
+  }
+  });
+
+  it('maps ServiceNow locale-less HappyDance RSS and honors country plus team filters', async () => {
+    const rss = fs.readFileSync(path.join(__dirname, 'fixtures/happydance-rss.xml'), 'utf8');
+    getSpy.mockResolvedValue({ status: 200, data: rss } as any);
+    const filtered = await fetchAtsBoardJobs(
+      'https://careers.servicenow.com/jobs/?search=&team=Engineering&team=IT&country=United+States&pagesize=20#results'
+    );
+    expect(String(getSpy.mock.calls[0][0])).toBe(
+      'https://careers.servicenow.com/jobs/xml/?rss=true'
+    );
+    expect(filtered?.provider).toBe('happydance');
+    expect(filtered?.companyHint).toBe('ServiceNow');
+    expect(filtered?.rows.map((r) => r.jobTitle)).toEqual([
+      'Senior Software Engineer, ISF',
+      'IT Security Analyst',
+    ]);
+    expect(filtered?.rows.some((r) => r.jobTitle === 'Account Executive')).toBe(false);
+  });
+
   it('maps Greenhouse board jobs', async () => {
     getSpy.mockResolvedValue({
       status: 200,
@@ -772,6 +1211,107 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.rows[0].jobUrl).toContain('/jobs/1');
     expect(result?.rows[0].url).toBe(result?.rows[0].jobUrl);
     expect(result?.rows[0].jobDescription).toContain('Build payments infrastructure');
+  });
+
+  it('filters Greenhouse jobs by search query and caps to maxPages of UI-sized chunks', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        jobs: [
+          {
+            title: 'Software Developer',
+            absolute_url: 'https://boards.greenhouse.io/docusign/jobs/1',
+            location: { name: 'Seattle' },
+          },
+          {
+            title: 'Account Executive',
+            absolute_url: 'https://boards.greenhouse.io/docusign/jobs/2',
+            location: { name: 'Seattle' },
+          },
+          {
+            title: 'Senior Software Developer',
+            absolute_url: 'https://boards.greenhouse.io/docusign/jobs/3',
+            location: { name: 'Austin' },
+          },
+          {
+            title: 'Software Developer II',
+            absolute_url: 'https://boards.greenhouse.io/docusign/jobs/4',
+            location: { name: 'Remote' },
+          },
+        ],
+      },
+    } as any);
+    const byLocation = await fetchAtsBoardJobs(
+      'https://boards.greenhouse.io/docusign?location=Austin'
+    );
+    expect(byLocation?.rows.map((r) => r.jobTitle)).toEqual(['Senior Software Developer']);
+
+    const result = await fetchAtsBoardJobs(
+      'https://careers.docusign.com/jobs?query=software+developer',
+      { maxPages: 1 }
+    );
+    expect(result?.provider).toBe('greenhouse');
+    expect(result?.rows.map((r) => r.jobTitle)).toEqual([
+      'Software Developer',
+      'Senior Software Developer',
+      'Software Developer II',
+    ]);
+    const limited = applyAtsBoardSearchAndPageLimits(result!.rows, 'https://careers.docusign.com/jobs?query=software+developer&pagesize=2', {
+      maxPages: 1,
+    });
+    expect(limited.map((r) => r.jobTitle)).toEqual(['Software Developer', 'Senior Software Developer']);
+  });
+
+  it('defaults missing location filters to United States', () => {
+    const rows = applyAtsBoardSearchAndPageLimits(
+      [
+        { jobTitle: 'US Eng', location: 'Austin, TX, United States', department: 'Engineering' },
+        { jobTitle: 'JP Eng', location: 'Tokyo, Japan', department: 'Engineering' },
+        { jobTitle: 'UK Eng', location: 'London, United Kingdom', department: 'Engineering' },
+      ] as any,
+      'https://boards.greenhouse.io/acme?department=Engineering'
+    );
+    expect(rows.map((r) => r.jobTitle)).toEqual(['US Eng']);
+  });
+
+  it('fetches GitHub SmartRecruiters with US country and category filters; autofixes untied', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        totalFound: 3,
+        content: [
+          {
+            id: 'keep-eng',
+            name: 'Backend Engineer',
+            department: { label: 'Engineering' },
+            location: { city: 'Remote', country: 'United States', countryCode: 'us' },
+          },
+          {
+            id: 'drop-sales',
+            name: 'Account Exec',
+            department: { label: 'Sales' },
+            location: { country: 'United States', countryCode: 'us' },
+          },
+          {
+            id: 'drop-india',
+            name: 'Backend Engineer',
+            department: { label: 'Engineering' },
+            location: { country: 'India', countryCode: 'in' },
+          },
+        ],
+      },
+    } as any);
+    const result = await fetchAtsBoardJobs(
+      'https://www.github.careers/careers-home/jobs?keywords=untied%20states&categories=Engineering%7CIT%7CSecurity&page=1&sortBy=posted_date'
+    );
+    expect(getSpy).toHaveBeenCalled();
+    const requested = String(getSpy.mock.calls[0][0]);
+    expect(requested).toContain('/companies/GitHub/postings');
+    expect(requested).toMatch(/[?&]country=us\b/i);
+    expect(requested).not.toMatch(/untied/i);
+    expect(result?.provider).toBe('smartrecruiters');
+    expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Backend Engineer']);
+    expect(result?.rows[0].department).toBe('Engineering');
   });
 
   it('maps Lever postings array', async () => {
@@ -1104,7 +1644,7 @@ describe('fetchAtsBoardJobs', () => {
     });
 
     const result = await fetchAtsBoardJobs(
-      'https://careers.dxc.com/job-search-results/?compliment[]=United%20States%20of%20America&category[]=Software%20Engineering&pg=1'
+      'https://careers.dxc.com/job-search-results/?compliment[]=United%20States%20of%20America&category[]=Software%20Engineering&keywords=java&pg=1'
     );
     expect(result?.provider).toBe('findly');
     expect(result?.rows).toHaveLength(1);
@@ -1113,6 +1653,7 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.rows[0].location).toContain('New York');
     expect(result?.rows[0].jobUrl).toContain('/job/99/');
     expect(getSpy.mock.calls.some((c) => String(c[0]).includes('facet'))).toBe(true);
+    expect(getSpy.mock.calls.some((c) => String(c[0]).includes('keyword=java'))).toBe(true);
   });
 
   it('paginates SuccessFactors HTML by startrow', async () => {
@@ -1229,12 +1770,45 @@ describe('Phenom board adapter', () => {
     expect(cfg?.refNum).not.toBe('1133910207165');
   });
 
+  it('detects Intuit Phenom /search-jobs boards so collection skips reCAPTCHA', () => {
+    const url =
+      'https://jobs.intuit.com/search-jobs?cid=directBookmarked_directBookmarked&_gl=1*9qw10m*_gcl_au*NDIxNDI2NjkyLjE3ODc2NDUyMzg.*_ga*OTQ3MDE5NTg5LjE3ODc2NDUyNDI.*_ga_B0XHEYG9RN*czE3ODc2NDUyNDIkbzEkZzAkdDE3ODc2NDUyNDIkajYwJGwwJGgw';
+    expect(looksLikePhenomBoard(url)).toBe(true);
+    expect(detectAtsBoard(url)?.provider).toBe('phenom');
+    expect(detectAtsBoard(url)?.companyHint).toBe('Intuit');
+    expect(looksLikePhenomBoard('https://jobs.intuit.com/search-jobs')).toBe(true);
+  });
+
   it('detects Pinterest Phenom vanity hosts so filtered /jobs URLs skip Cloudflare browser scrape', () => {
     const url =
       'https://www.pinterestcareers.com/jobs/?search=&location=Chicago&location=Los+Angeles&team=Engineering&pagesize=20#results';
     expect(looksLikePhenomBoard(url)).toBe(true);
     expect(detectAtsBoard(url)?.provider).toBe('phenom');
     expect(detectAtsBoard('https://careers.pinterest.com/careers')?.provider).toBe('phenom');
+  });
+
+  it('detects Box HappyDance /en/jobs lists so filtered RSS collection skips Cloudflare', () => {
+    const url =
+      'https://careers.box.com/en/jobs/?search=&location=Austin%2C+Texas%2C+United+States&team=Engineering&team=IT&team=Security&pagesize=20#results';
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(detectAtsBoard(url)?.provider).toBe('happydance');
+    expect(detectAtsBoard(url)?.companyHint).toBe('Box');
+    expect(detectAtsBoard('https://careers.box.com')?.provider).toBe('happydance');
+    const unmarked =
+      'https://careers.acme.com/en/jobs/?search=&location=Austin&team=Engineering&pagesize=20#results';
+    expect(looksLikeHappyDanceBoard(unmarked)).toBe(true);
+    expect(detectAtsBoard(unmarked)?.provider).toBe('happydance');
+    expect(detectAtsBoard('https://careers.example.com/jobs')).toBeNull();
+  });
+
+  it('detects Nutanix HappyDance /en/jobs lists (not Phenom widgets)', () => {
+    const url =
+      'https://careers.nutanix.com/en/jobs/?search=&country=United+States&team=Engineering&team=Information+Technology&pagesize=20#results';
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(detectAtsBoard(url)?.provider).toBe('happydance');
+    expect(detectAtsBoard(url)?.companyHint).toBe('Nutanix');
   });
 
   it('detects Qualcomm / NVIDIA-style careers.brand.com/careers PCS URLs', () => {
@@ -1244,6 +1818,14 @@ describe('Phenom board adapter', () => {
     expect(detectAtsBoard(qualcomm)?.provider).toBe('phenom');
     expect(detectAtsBoard(qualcomm)?.companyHint).toBe('Qualcomm');
     expect(looksLikePhenomBoard('https://careers.nvidia.com/careers?pid=123456789012')).toBe(true);
+  });
+
+  it('detects Adobe Phenom category landing pages as a Phenom board', () => {
+    const adobe =
+      'https://careers.adobe.com/us/en/c/engineering-and-product-jobs';
+    expect(looksLikePhenomBoard(adobe)).toBe(true);
+    expect(detectAtsBoard(adobe)?.provider).toBe('phenom');
+    expect(detectAtsBoard(adobe)?.companyHint).toBe('Adobe');
   });
 
   it('parsePhenomConfigFromHtml discovers PCSX domain from embedded JSON', () => {
@@ -1345,7 +1927,7 @@ describe('Phenom board adapter', () => {
       expect(result?.rows[0].jobTitle).toBe('SWE');
     });
 
-    it('retries PCSX search without filters when the filtered query is empty', async () => {
+    it('does not retry PCSX search without filters when the filtered query is empty', async () => {
       getSpy.mockImplementation(async (url: string) => {
         if (String(url).includes('/api/pcsx/search')) {
           const parsed = new URL(String(url));
@@ -1367,7 +1949,7 @@ describe('Phenom board adapter', () => {
       const result = await fetchAtsBoardJobs(
         'https://careers.qualcomm.com/careers?location=usa&filter_job_family=software+engineering,hardware+engineering'
       );
-      expect(result?.rows[0].jobTitle).toBe('Fallback SWE');
+      expect(result).toBeNull();
     });
 
     it('paginates PCSX search by start offset', async () => {
@@ -1429,6 +2011,43 @@ describe('Phenom board adapter', () => {
       expect(body).toMatchObject({ refNum: 'REF-ACME-99', from: 0 });
       expect(result?.rows[0].jobTitle).toBe('Engineer');
       expect(result?.rows[0].jobUrl).toContain('/us/en/job/12345/engineer');
+    });
+
+    it('maps widgets keywords and selected_fields from the start URL and post-filters department', async () => {
+      getSpy.mockResolvedValue({ status: 200, data: widgetsHtml } as any);
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          refineSearch: {
+            data: {
+              totalHits: 2,
+              jobs: [
+                {
+                  title: 'Backend Engineer',
+                  category: 'Engineering',
+                  applyUrl: '/us/en/job/1/be',
+                  location: 'Remote',
+                },
+                {
+                  title: 'Recruiter',
+                  category: 'People',
+                  applyUrl: '/us/en/job/2/hr',
+                  location: 'Remote',
+                },
+              ],
+            },
+          },
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs(
+        'https://careers.acme.phenompeople.com/us/en/search-results?search=engineer&team=Engineering'
+      );
+      const [, body] = postSpy.mock.calls[0];
+      expect(body).toMatchObject({
+        keywords: 'engineer',
+        selected_fields: { category: ['Engineering'] },
+      });
+      expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Backend Engineer']);
     });
 
     it('dedupes duplicate job URLs from widgets responses', async () => {
@@ -1501,5 +2120,112 @@ describe('mapIbmCareersHtml', () => {
     expect(fields.jobCategory).toMatch(/Data/i);
     expect(fields.salaryRange).toMatch(/144/);
     expect(fields.location).toMatch(/Virginia|United States/i);
+  });
+});
+
+describe('ATS vs browser gate (provider table)', () => {
+  const rows: Array<{
+    name: string;
+    url: string;
+    expectAts: boolean;
+    expectProvider?: string;
+  }> = [
+    {
+      name: 'Box SX81AH65',
+      url: 'https://careers.box.com/en/jobs/?search=&location=Austin%2C+Texas%2C+United+States&team=Engineering&team=IT&team=Security&pagesize=20#results',
+      expectAts: true,
+      expectProvider: 'happydance',
+    },
+    {
+      name: 'Box unfiltered host allowlist',
+      url: 'https://careers.box.com/en/jobs/',
+      expectAts: false,
+      expectProvider: 'happydance',
+    },
+    {
+      name: 'Greenhouse Stripe board',
+      url: 'https://boards.greenhouse.io/stripe',
+      expectAts: false,
+      expectProvider: 'greenhouse',
+    },
+    {
+      name: 'Greenhouse location',
+      url: 'https://boards.greenhouse.io/stripe?location=New+York',
+      expectAts: true,
+      expectProvider: 'greenhouse',
+    },
+    {
+      name: 'Workday host only',
+      url: 'https://intel.wd1.myworkdayjobs.com/External',
+      expectAts: false,
+      expectProvider: 'workday',
+    },
+    {
+      name: 'Workday q',
+      url: 'https://intel.wd1.myworkdayjobs.com/External?q=engineer',
+      expectAts: true,
+      expectProvider: 'workday',
+    },
+    {
+      name: 'Lever company only',
+      url: 'https://jobs.lever.co/acme',
+      expectAts: false,
+      expectProvider: 'lever',
+    },
+    {
+      name: 'Ashby org only',
+      url: 'https://jobs.ashbyhq.com/acme',
+      expectAts: false,
+      expectProvider: 'ashby',
+    },
+    {
+      name: 'SmartRecruiters categories',
+      url: 'https://jobs.smartrecruiters.com/AcmeCorp?categories=Engineering',
+      expectAts: true,
+      expectProvider: 'smartrecruiters',
+    },
+    {
+      name: 'Google q',
+      url: 'https://careers.google.com/jobs/results/?q=Software',
+      expectAts: true,
+      expectProvider: 'googlecareers',
+    },
+    {
+      name: 'Google no q',
+      url: 'https://careers.google.com/jobs/results/',
+      expectAts: false,
+      expectProvider: 'googlecareers',
+    },
+    {
+      name: 'IBM location',
+      url: 'https://careers.ibm.com/SearchJobs?location=US',
+      expectAts: true,
+      expectProvider: 'ibmcareers',
+    },
+    {
+      name: 'BoA keywords',
+      url: 'https://careers.bankofamerica.com/en-us/job-search?keywords=data',
+      expectAts: true,
+      expectProvider: 'bankofamerica',
+    },
+    {
+      name: 'BoA pagination only',
+      url: 'https://careers.bankofamerica.com/en-us/job-search',
+      expectAts: false,
+      expectProvider: 'bankofamerica',
+    },
+    {
+      name: 'Cardinal Health SX94RZ41',
+      url: 'https://jobs.cardinalhealth.com/search/searchjobs?regionalcountry=United+States&geolocationstring=39.5036%2C-99.0184_United+States&categoryid=a266442d-10a4-4adf-9806-354dc8644a33',
+      expectAts: true,
+      expectProvider: 'nasactivate',
+    },
+  ];
+
+  it.each(rows)('$name', ({ url, expectAts, expectProvider }) => {
+    expect(startUrlHasCollectionFilters(url)).toBe(expectAts);
+    if (expectProvider) {
+      expect(detectAtsBoard(url)?.provider).toBe(expectProvider);
+    }
   });
 });

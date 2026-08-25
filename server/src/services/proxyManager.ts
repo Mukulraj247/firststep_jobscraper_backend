@@ -150,7 +150,22 @@ export const probeProxyTcp = async (server: string, timeoutMs = 2500): Promise<b
  * TCP-open is not enough: last-resort HTTP proxies often accept a socket then
  * fail CONNECT (net::ERR_TUNNEL_CONNECTION_FAILED). Probe the tunnel verb.
  */
-export const probeProxyHttpConnect = async (server: string, timeoutMs = 2500): Promise<boolean> => {
+const sanitizeConnectHost = (host?: string): string => {
+  const trimmed = String(host || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\.+/, '');
+  if (/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(trimmed) && trimmed.includes('.')) {
+    return trimmed;
+  }
+  return 'example.com';
+};
+
+export const probeProxyHttpConnect = async (
+  server: string,
+  timeoutMs = 2500,
+  opts?: { connectHost?: string }
+): Promise<boolean> => {
   const endpoint = parseProxyEndpoint(server);
   if (!endpoint) return false;
   const normalized = normalizeProxyServer(server) || '';
@@ -158,6 +173,7 @@ export const probeProxyHttpConnect = async (server: string, timeoutMs = 2500): P
     return probeProxyTcp(server, timeoutMs);
   }
 
+  const connectHost = sanitizeConnectHost(opts?.connectHost);
   const budget = Math.max(400, timeoutMs);
   return new Promise((resolve) => {
     const socket = net.connect({ host: endpoint.host, port: endpoint.port });
@@ -173,7 +189,7 @@ export const probeProxyHttpConnect = async (server: string, timeoutMs = 2500): P
     socket.once('error', () => finish(false));
     socket.once('connect', () => {
       socket.write(
-        'CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Connection: close\r\n\r\n'
+        `CONNECT ${connectHost}:443 HTTP/1.1\r\nHost: ${connectHost}:443\r\nProxy-Connection: close\r\n\r\n`
       );
     });
     socket.once('data', (buf: Buffer) => {

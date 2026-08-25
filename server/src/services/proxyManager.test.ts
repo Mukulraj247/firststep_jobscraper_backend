@@ -132,4 +132,23 @@ describe('probeProxyHttpConnect', () => {
       close();
     }
   });
+
+  it('CONNECT-probes the scrape target host, not example.com', async () => {
+    let request = '';
+    const { port, close } = await listen((socket) => {
+      socket.on('data', (buf) => {
+        request += buf.toString('utf8');
+        socket.write('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n');
+      });
+    });
+    try {
+      await expect(
+        probeProxyHttpConnect(`http://127.0.0.1:${port}`, 800, { connectHost: 'jobs.uber.com' })
+      ).resolves.toBe(false);
+      expect(request).toContain('CONNECT jobs.uber.com:443');
+      expect(request).not.toContain('CONNECT example.com:443');
+    } finally {
+      close();
+    }
+  });
 });

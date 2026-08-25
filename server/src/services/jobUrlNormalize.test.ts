@@ -72,6 +72,16 @@ describe('normalizeJobUrl', () => {
       )
     ).toBe('https://jobs.nvidia.com/careers/job/893394926415');
   });
+
+  it('strips Workday /apply tails used on Phenom Adobe listings', () => {
+    expect(
+      normalizeJobUrl(
+        'https://adobe.wd5.myworkdayjobs.com/external_experienced/job/San-Jose/Senior-Software-Engineer_R147125-1/apply'
+      )
+    ).toBe(
+      'https://adobe.wd5.myworkdayjobs.com/external_experienced/job/San-Jose/Senior-Software-Engineer_R147125-1'
+    );
+  });
 });
 
 describe('jobUrlKey', () => {

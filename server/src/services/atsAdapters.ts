@@ -69,11 +69,18 @@ const GREENHOUSE_VANITY_BOARDS: Record<string, string> = {
   'asana.com': 'asana',
   'okta.com': 'okta',
   'github.com': 'github',
-  'github.careers': 'github',
   'docusign.com': 'docusign',
   'careers.docusign.com': 'docusign',
   'jobs.twilio.com': 'twilio',
   'twilio.com': 'twilio',
+};
+
+/**
+ * SmartRecruiters Connected career sites (vanity host → posting-API company id).
+ * Path is typically /careers-home/jobs — not jobs.smartrecruiters.com/{company}.
+ */
+const SMARTRECRUITERS_VANITY_HOSTS: Record<string, string> = {
+  'github.careers': 'GitHub',
 };
 
 const SALESFORCE_WORKDAY_BASE =
@@ -156,6 +163,33 @@ function greenhouseBoardForHost(hostname: string): string | null {
   return GREENHOUSE_VANITY_BOARDS[host] || null;
 }
 
+export function looksLikeGreenhouseBoard(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (host.includes('greenhouse.io')) return true;
+    const board = GREENHOUSE_VANITY_BOARDS[host];
+    if (!board) return false;
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (host.startsWith('careers.') || host.startsWith('jobs.')) return true;
+    return /\/(careers|jobs)(\/|$)/i.test(path);
+  } catch {
+    return false;
+  }
+}
+
+function greenhouseVanityListDetection(parsed: URL): AtsBoardDetection | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const board = GREENHOUSE_VANITY_BOARDS[host];
+  if (!board) return null;
+  if (!looksLikeGreenhouseBoard(parsed.href)) return null;
+  return {
+    provider: 'greenhouse',
+    companyHint: board,
+    listApiUrl: `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs?content=true`,
+  };
+}
+
 /** Resolve Greenhouse job id + board from vanity career URLs. */
 export function detectGreenhouseVanity(
   parsed: URL
@@ -184,6 +218,19 @@ export function detectGreenhouseVanity(
  * generic landing page. The actual posting is available from its public Workday
  * CXS JSON API, keyed by its JR requisition id.
  */
+function detectSalesforceWorkdayBoard(parsed: URL): AtsBoardDetection | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./i, '');
+  if (host !== 'salesforce.com' && host !== 'careers.salesforce.com') return null;
+  if (!/\/company\/careers\/jobs/i.test(parsed.pathname)) return null;
+  // JR posting URLs are handled by detectSalesforceWorkday (detail fetch).
+  if (/\bjr\d+\b/i.test(parsed.pathname)) return null;
+  return {
+    provider: 'workday',
+    companyHint: 'Salesforce',
+    listApiUrl: `${SALESFORCE_WORKDAY_BASE}/jobs`,
+  };
+}
+
 function detectSalesforceWorkday(
   parsed: URL
 ): { provider: 'workday'; apiUrl: string; companyHint: string } | null {
@@ -1709,6 +1756,7 @@ export type AtsBoardProvider =
   | 'oraclecloud'
   | 'bankofamerica'
   | 'phenom'
+  | 'happydance'
   | 'workday'
   | 'workable'
   | 'recruitee'
@@ -1716,7 +1764,8 @@ export type AtsBoardProvider =
   | 'personio'
   | 'breezy'
   | 'googlecareers'
-  | 'ibmcareers';
+  | 'ibmcareers'
+  | 'nasactivate';
 
 export interface AtsBoardDetection {
   provider: AtsBoardProvider;
@@ -1821,7 +1870,7 @@ export function findlyFacetsFromUrl(pageUrl: string): string[] {
   } catch {
     return [];
   }
-  const skip = new Set(['pg', 'page', 'p', 'startrow', 'offset', 'from', 'limit', 'q', 'keywords', 'search']);
+  const skip = new Set(['pg', 'page', 'p', 'startrow', 'offset', 'from', 'limit']);
   const facets: string[] = [];
   const seen = new Set<string>();
 
@@ -1892,6 +1941,101 @@ function mapFindlyBoardJobs(
 export interface AtsBoardFetchOptions {
   /** When > 0, stop after this many list pages (matches extension Max Pages). */
   maxPages?: number;
+  /** When > 0, persist at most this many rows (listExtraction.maxItems). */
+  maxItems?: number;
+}
+
+const ATS_PAGINATION_QUERY_KEYS = new Set([
+  'page',
+  'pagesize',
+  'pg',
+  'p',
+  'start',
+  'startrow',
+  'offset',
+  'from',
+  'limit',
+  'rows',
+  'sort',
+  'sort_by',
+  'sortby',
+  'descending',
+]);
+
+const ATS_COLLECTION_FILTER_KEYS = new Set([
+  'location',
+  'locations',
+  'country',
+  'team',
+  'department',
+  'category',
+  'categories',
+  'keywords',
+  'q',
+  'query',
+  'searchstring',
+  'searchtext',
+  'keyword',
+  'locationid',
+  'locationcountry',
+  'jobfamilygroup',
+  'workersubtype',
+  'timetype',
+  'regionalcountry',
+  'geolocationstring',
+  'categoryid',
+  'industryid',
+  'familyid',
+  'remotejobs',
+]);
+
+/**
+ * True when the start URL carries list filters the ATS path must honor.
+ * Pagination-only keys (`page`, `pagesize`, `#results`) are not filters.
+ */
+export function startUrlHasCollectionFilters(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  if (/\/c\/[^/]+/i.test(path)) return true;
+  for (const [rawKey, rawValue] of parsed.searchParams.entries()) {
+    const key = rawKey.replace(/\[\]$/, '');
+    const kl = key.toLowerCase();
+    const value = String(rawValue || '').trim();
+    if (ATS_PAGINATION_QUERY_KEYS.has(kl)) continue;
+    if (kl === 'jtstartindex' || kl === 'jtpagesize' || kl === 'jtsorting') continue;
+    if (kl === 'gh_src' || kl === 'ashby_jid' || kl === 'pid') continue;
+    if (kl === 'search' || kl === 'q' || kl === 'query' || kl === 'keywords') {
+      if (value) return true;
+      continue;
+    }
+    if (!value) continue;
+    if (ATS_COLLECTION_FILTER_KEYS.has(kl)) return true;
+    if (kl.startsWith('filter_')) return true;
+    if (kl.startsWith('facet')) return true;
+    if (kl.startsWith('optionsfacetsdd_')) return true;
+    if (kl.startsWith('field_keyword_')) return true;
+    if (kl.startsWith('selected') && kl.includes('facet')) return true;
+  }
+  return false;
+}
+
+export function findlySearchKeywordFromUrl(pageUrl: string): string {
+  try {
+    const parsed = new URL(pageUrl);
+    return (
+      parsed.searchParams.get('keywords') ||
+      parsed.searchParams.get('q') ||
+      parsed.searchParams.get('search') ||
+      ''
+    ).trim();
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -1901,12 +2045,52 @@ export interface AtsBoardFetchOptions {
  * board instead of ~3 extra result chunks. Skip ATS so the browser extractor
  * can honor the recorded control.
  */
+/** Workday CXS JSON is more reliable than recorded CSS next-buttons on SPA boards. */
+export function looksLikeWorkdayBoard(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (/^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$/i.test(host)) return true;
+    return detectSalesforceWorkdayBoard(parsed) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldSkipAtsBoardForUiPagination(config?: Record<string, any> | null): boolean {
   const pagination = config?.listExtraction?.pagination;
   const mode = String(pagination?.mode || '').toLowerCase();
   if (mode === 'infinite-scroll') return true;
   if (mode !== 'next-button') return false;
   return Boolean(String(pagination?.nextButtonSelector || '').trim());
+}
+
+const ATS_PROVIDERS_THAT_HONOR_START_URL_FILTERS = new Set([
+  'phenom',
+  'happydance',
+  'workday',
+  'greenhouse',
+  'lever',
+  'ashby',
+  'findly',
+  'smartrecruiters',
+  'workable',
+  'recruitee',
+  'bamboohr',
+  'personio',
+  'breezy',
+  'googlecareers',
+  'ibmcareers',
+  'bankofamerica',
+  'successfactors',
+  'oraclecloud',
+  'nasactivate',
+]);
+
+/** True when public ATS JSON can honor this start URL — skip Chromium Load More. */
+export function shouldPreferAtsBoardOverUiPagination(url: string): boolean {
+  const detected = detectAtsBoard(url);
+  return !!(detected && ATS_PROVIDERS_THAT_HONOR_START_URL_FILTERS.has(detected.provider));
 }
 
 async function fetchFindlyBoardJobs(
@@ -1955,6 +2139,8 @@ async function fetchFindlyBoardJobs(
     api.searchParams.set('Organization', cfg.orgId);
     api.searchParams.set('limit', String(limit));
     api.searchParams.set('offset', String(offset));
+    const keyword = findlySearchKeywordFromUrl(pageUrl);
+    if (keyword) api.searchParams.set('keyword', keyword);
     for (const facet of facets) {
       api.searchParams.append('facet[]', facet);
     }
@@ -2006,6 +2192,411 @@ function phenomQueryLooksLikePcsx(parsed: URL): boolean {
   return false;
 }
 
+/**
+ * Phenom widgets lists: `/jobs` with pagesize / #results (Pinterest).
+ * Locale-prefixed `/en/jobs` is HappyDance PHB (Box, Nutanix), not Phenom.
+ */
+function phenomQueryLooksLikeWidgets(parsed: URL): boolean {
+  if (!parsed.searchParams.has('pagesize')) return false;
+  const hash = parsed.hash.replace(/^#/, '').toLowerCase();
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (HAPPYDANCE_BOARD_HOSTS.has(host) || happyDanceJobsPath(path)) return false;
+  const jobsPath = /\/jobs$/i.test(path);
+  if (hash === 'results' && jobsPath) return true;
+  if (
+    jobsPath &&
+    parsed.searchParams.has('search') &&
+    (parsed.searchParams.has('team') ||
+      parsed.searchParams.has('location') ||
+      parsed.searchParams.has('country'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+const HAPPYDANCE_BOARD_HOSTS = new Set([
+  'careers.box.com',
+  'careers.nutanix.com',
+  'careers.servicenow.com',
+]);
+
+/** Hosts whose PHB RSS lives at /jobs/xml (not /en/jobs/xml). Axios does not follow ATS redirects. */
+const HAPPYDANCE_LOCALELESS_RSS_HOSTS = new Set(['careers.servicenow.com']);
+
+function happyDanceJobsPath(path: string): boolean {
+  return /^\/[a-z]{2}(?:-[a-z]{2})?\/jobs(?:\/xml)?$/i.test(path);
+}
+
+function happyDanceCompanyHint(host: string): string {
+  const stripped = host.toLowerCase().replace(/^www\./, '').replace(/^(careers|jobs)\./, '');
+  const token = stripped.split('.')[0] || host;
+  if (token === 'box') return 'Box';
+  if (token === 'servicenow') return 'ServiceNow';
+  return titleCaseToken(token);
+}
+
+export function happyDanceRssUrl(pageUrl: string): string {
+  try {
+    const parsed = new URL(pageUrl);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (HAPPYDANCE_LOCALELESS_RSS_HOSTS.has(host) || /^\/jobs(?:\/xml)?$/i.test(path)) {
+      return `${parsed.origin}/jobs/xml/?rss=true`;
+    }
+    const locale = path.match(/^\/([a-z]{2}(?:-[a-z]{2})?)(?:\/|$)/i)?.[1] || 'en';
+    return `${parsed.origin}/${locale}/jobs/xml/?rss=true`;
+  } catch {
+    return '';
+  }
+}
+
+/** True when the career URL is a HappyDance PHB job list (RSS at /{locale}/jobs/xml/?rss=true). */
+export function looksLikeHappyDanceBoard(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (HAPPYDANCE_BOARD_HOSTS.has(host)) return true;
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  if (HAPPYDANCE_LOCALELESS_RSS_HOSTS.has(host) && /^\/jobs(?:\/xml)?$/i.test(path)) return true;
+  if (!happyDanceJobsPath(path)) return false;
+  if (/\/xml$/i.test(path) || parsed.searchParams.has('rss')) return true;
+  if (parsed.searchParams.has('pagesize')) return true;
+  const hash = parsed.hash.replace(/^#/, '').toLowerCase();
+  if (hash === 'results') return true;
+  return (
+    parsed.searchParams.has('team') ||
+    parsed.searchParams.has('location') ||
+    parsed.searchParams.has('search') ||
+    parsed.searchParams.has('country')
+  );
+}
+
+function uniqueQueryValues(parsed: URL, key: string): string[] {
+  return parsed.searchParams
+    .getAll(key)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+const ATS_DEFAULT_LOCATION_COUNTRY = 'United States';
+
+const ATS_US_STATE_ABBREVS = new Set([
+  'al', 'ak', 'az', 'ar', 'ca', 'co', 'ct', 'de', 'fl', 'ga', 'hi', 'id', 'il', 'in', 'ia', 'ks',
+  'ky', 'la', 'me', 'md', 'ma', 'mi', 'mn', 'ms', 'mo', 'mt', 'ne', 'nv', 'nh', 'nj', 'nm', 'ny',
+  'nc', 'nd', 'oh', 'ok', 'or', 'pa', 'ri', 'sc', 'sd', 'tn', 'tx', 'ut', 'vt', 'va', 'wa', 'wv',
+  'wi', 'wy', 'dc',
+]);
+
+const ATS_NON_US_LOCATION_MARKERS = [
+  'united kingdom', 'great britain', 'england', 'scotland', 'wales', 'northern ireland',
+  'canada', 'mexico', 'india', 'japan', 'china', 'germany', 'france', 'australia', 'singapore',
+  'netherlands', 'ireland', 'brazil', 'poland', 'spain', 'italy', 'sweden', 'israel',
+  'switzerland', 'hong kong', 'korea', 'philippines', 'vietnam', 'indonesia', 'malaysia',
+  'thailand', 'united arab emirates', 'dubai', 'saudi', 'nigeria', 'kenya', 'south africa',
+  'new zealand', 'austria', 'belgium', 'denmark', 'norway', 'finland', 'portugal',
+  'czech', 'romania', 'hungary', 'ukraine', 'russia', 'turkey', 'pakistan', 'bangladesh',
+  'taiwan', 'argentina', 'chile', 'colombia', 'peru',
+];
+
+function startUrlHasExplicitGeoFilter(parsed: URL): boolean {
+  if ((parsed.searchParams.get('locationId') || '').trim()) return true;
+  if ((parsed.searchParams.get('locationCountry') || '').trim()) return true;
+  for (const [rawKey, rawValue] of parsed.searchParams.entries()) {
+    if (!String(rawValue || '').trim()) continue;
+    const kl = rawKey.replace(/\[\]$/, '').toLowerCase();
+    if (kl === 'location' || kl === 'locations' || kl === 'country' || kl === 'regionalcountry' || kl === 'geolocationstring') return true;
+  }
+  return false;
+}
+
+function atsRowMatchesUnitedStates(row: { location?: string }): boolean {
+  const loc = String(row.location || '').trim();
+  if (!loc) return true;
+  if (happyDanceCountryMatches(loc, [ATS_DEFAULT_LOCATION_COUNTRY])) return true;
+  const n = happyDanceNorm(loc);
+  if (ATS_NON_US_LOCATION_MARKERS.some((marker) => n.includes(marker))) return false;
+  if (/(^| )uk( |$)/.test(` ${n} `) || /(^| )gb( |$)/.test(` ${n} `)) return false;
+  const tokens = n.split(' ').filter(Boolean);
+  if (tokens.some((tok) => ATS_US_STATE_ABBREVS.has(tok))) return true;
+  if (/\bremote\b/.test(n)) return true;
+  return true;
+}
+
+function happyDanceNorm(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function happyDanceTeamMatches(category: string, teams: string[]): boolean {
+  if (!teams.length) return true;
+  const cat = happyDanceNorm(category);
+  if (!cat) return false;
+  const itAliases = new Set(['it', 'information technology']);
+  return teams.some((team) => {
+    const want = happyDanceNorm(team);
+    if (!want) return false;
+    if (cat === want) return true;
+    return itAliases.has(want) && itAliases.has(cat);
+  });
+}
+
+function happyDanceCountryMatches(jobCountry: string, countries: string[]): boolean {
+  if (!countries.length) return true;
+  const have = happyDanceNorm(jobCountry);
+  return countries.some((country) => {
+    const want = happyDanceNorm(country);
+    if (!want) return false;
+    const us = (value: string) =>
+      value === 'united states' ||
+      value === 'united states of america' ||
+      value === 'us' ||
+      value === 'usa' ||
+      value === 'u s';
+    if (us(want) && (us(have) || /\bunited states\b|\busa\b|\bu s\b/.test(have))) return true;
+    return have === want || have.includes(want) || want.includes(have);
+  });
+}
+
+function happyDanceLocationMatches(
+  job: { city: string; state: string; country: string },
+  locations: string[]
+): boolean {
+  if (!locations.length) return true;
+  const city = happyDanceNorm(job.city);
+  const state = happyDanceNorm(job.state);
+  const country = happyDanceNorm(job.country);
+  return locations.some((loc) => {
+    const locNorm = happyDanceNorm(loc);
+    if (!locNorm) return false;
+    if (/remote/.test(locNorm)) {
+      if (!city) {
+        return !country || country.includes('united states') || country === 'us' || country === 'usa';
+      }
+      return locNorm.includes(city);
+    }
+    const parts = loc.split(',').map((part) => happyDanceNorm(part)).filter(Boolean);
+    if (city && (parts[0] === city || locNorm.startsWith(`${city} `))) return true;
+    if (state && parts.length <= 2 && parts[0] === state) return true;
+    return false;
+  });
+}
+
+function parseHappyDanceRssJobs(xml: string, companyHint: string): Array<{
+  row: AtsBoardJobRow;
+  city: string;
+  state: string;
+  country: string;
+}> {
+  const $ = cheerio.load(String(xml || ''), { xmlMode: true });
+  const parsed: Array<{ row: AtsBoardJobRow; city: string; state: string; country: string }> = [];
+  $('job').each((_, node) => {
+    const text = (tag: string) => $(node).children(tag).first().text().trim();
+    const rawUrl = text('url');
+    let jobUrl = rawUrl;
+    try {
+      jobUrl = new URL(rawUrl).toString();
+    } catch {
+      jobUrl = rawUrl;
+    }
+    const city = text('city');
+    const state = text('state');
+    const country = text('country');
+    const row = rowFromParts({
+      jobUrl,
+      title: text('title'),
+      company: text('company') || companyHint,
+      location: [city, state, country].filter(Boolean).join(', '),
+      date: text('date') || undefined,
+      department: text('category') || undefined,
+      jobDescription: stripHtmlTags(text('description')) || undefined,
+      employmentType: text('jobtype') || text('remotetype') || undefined,
+    });
+    if (row.jobUrl && row.jobTitle) parsed.push({ row, city, state, country });
+  });
+  return parsed;
+}
+
+async function fetchHappyDanceBoardJobs(
+  pageUrl: string,
+  companyHint: string,
+  listApiUrl: string,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  const rssUrl = listApiUrl || happyDanceRssUrl(pageUrl);
+  if (!rssUrl) return null;
+  const res = await httpClient.get(rssUrl, {
+    headers: {
+      Accept: 'application/xml, text/xml, */*',
+      'User-Agent': PHENOM_BROWSER_UA,
+    },
+    maxContentLength: 4 * 1024 * 1024,
+    maxBodyLength: 4 * 1024 * 1024,
+    responseType: 'text',
+    transformResponse: [(data) => data],
+  });
+  if (res.status >= 400 || typeof res.data !== 'string' || !res.data.includes('<job')) return null;
+  const parsed = new URL(pageUrl);
+  const teams = uniqueQueryValues(parsed, 'team');
+  const locations = uniqueQueryValues(parsed, 'location');
+  const countries = startUrlHasExplicitGeoFilter(parsed)
+    ? uniqueQueryValues(parsed, 'country')
+    : [ATS_DEFAULT_LOCATION_COUNTRY];
+  const hint = companyHint || happyDanceCompanyHint(parsed.hostname);
+  const allRows = parseHappyDanceRssJobs(res.data, hint);
+  let matched = allRows.filter(
+    ({ row, city, state, country }) =>
+      happyDanceTeamMatches(row.department || '', teams) &&
+      happyDanceLocationMatches({ city, state, country }, locations) &&
+      happyDanceCountryMatches(country, countries)
+  );
+  if (!matched.length) return null;
+  const maxJobs = boardMaxJobs();
+  const maxPages = limitedPages(options);
+  const cap = Math.min(maxJobs, Math.max(1, maxPages) * 50);
+  const rows = matched.slice(0, cap).map(({ row }) => row);
+  if (!rows.length) return null;
+  return { provider: 'happydance', companyHint: hint, rows };
+}
+
+/** NAS Recruitment ACTIVATE career sites (`/search/searchjobs`, jTable SearchResults JSON). */
+export function looksLikeNasActivateBoard(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    return /\/search\/searchjobs$/i.test(path) || /\/search\/jobdetails\//i.test(path);
+  } catch {
+    return false;
+  }
+}
+
+function nasActivateCompanyHint(host: string): string {
+  const stripped = host.toLowerCase().replace(/^www\./, '').replace(/^jobs\./, '');
+  const token = stripped.split('.')[0] || host;
+  if (token === 'cardinalhealth') return 'Cardinal Health';
+  return titleCaseToken(token);
+}
+
+function nasActivateSlug(title: string): string {
+  return (
+    String(title || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'job'
+  );
+}
+
+function nasActivateStripHtml(value: unknown): string {
+  return String(value || '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function mapNasActivateRecords(records: any[], origin: string, companyHint: string): AtsBoardJobRow[] {
+  return (Array.isArray(records) ? records : [])
+    .map((job) => {
+      const track = job?.TrackingObject || {};
+      const title = String(track.TitleJson || nasActivateStripHtml(job?.Title) || '').trim();
+      const id = String(job?.ID || '').trim();
+      const jobUrl = id
+        ? `${origin.replace(/\/$/, '')}/search/jobdetails/${nasActivateSlug(title)}/${id}`
+        : '';
+      const countries = Array.isArray(track.CountryNamesJson)
+        ? track.CountryNamesJson.map((v: unknown) => String(v || '').trim()).filter(Boolean)
+        : [];
+      const cities = Array.isArray(track.CityStatesDataJson)
+        ? track.CityStatesDataJson.map((v: unknown) => String(v || '').trim()).filter(Boolean)
+        : [];
+      const locNames = Array.isArray(track.LocationNamesJson)
+        ? track.LocationNamesJson.map((v: unknown) => String(v || '').trim()).filter(Boolean)
+        : [];
+      const location = [...new Set([...cities, ...locNames, ...countries])].join(', ');
+      const cats = [
+        ...(Array.isArray(track.ActivateCategoryNamesJson) ? track.ActivateCategoryNamesJson : []),
+        ...(Array.isArray(track.AtsCategoryNamesJson) ? track.AtsCategoryNamesJson : []),
+      ]
+        .map((v: unknown) => String(v || '').trim())
+        .filter(Boolean);
+      return rowFromParts({
+        jobUrl,
+        title,
+        company: companyHint,
+        location,
+        date: String(track.PostedDateJson || job?.PostedDateRaw || '').trim() || undefined,
+        department: cats[0],
+        employmentType: String(track.TypeNameJson || '').trim() || undefined,
+      });
+    })
+    .filter((row) => row.jobUrl && row.jobTitle);
+}
+
+async function fetchNasActivateBoardJobs(
+  pageUrl: string,
+  companyHint: string,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  let source: URL;
+  try {
+    source = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  const origin = source.origin;
+  const hint = companyHint || nasActivateCompanyHint(source.hostname);
+  const pageSize = 50;
+  const maxPages = limitedPages(options);
+  const maxJobs = boardMaxJobs();
+  const all: any[] = [];
+  let total = Infinity;
+  for (let page = 0; page < maxPages && all.length < maxJobs; page++) {
+    const api = new URL(`${origin}/Search/SearchResults`);
+    for (const [key, value] of source.searchParams.entries()) {
+      if (key.toLowerCase().startsWith('jt')) continue;
+      api.searchParams.append(key, value);
+    }
+    if (!startUrlHasExplicitGeoFilter(source) && !api.searchParams.get('regionalcountry')) {
+      api.searchParams.set('regionalcountry', ATS_DEFAULT_LOCATION_COUNTRY);
+    }
+    api.searchParams.set('jtStartIndex', String(page * pageSize));
+    api.searchParams.set('jtPageSize', String(pageSize));
+    const res = await httpClient.get(api.toString(), {
+      headers: {
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        Referer: pageUrl,
+        'User-Agent': PHENOM_BROWSER_UA,
+      },
+    });
+    if (res.status >= 400 || !res.data) break;
+    let data = res.data;
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch {
+        break;
+      }
+    }
+    if (String(data?.Result || '').toUpperCase() !== 'OK') break;
+    const batch = Array.isArray(data?.Records) ? data.Records : [];
+    if (typeof data?.TotalRecordCount === 'number' && Number.isFinite(data.TotalRecordCount)) {
+      total = data.TotalRecordCount;
+    }
+    all.push(...batch);
+    if (!batch.length) break;
+    if (all.length >= total) break;
+    if (batch.length < pageSize) break;
+    if (page + 1 < maxPages && all.length < maxJobs) await sleepMs(boardPageDelayMs());
+  }
+  const rows = mapNasActivateRecords(all, origin, hint).slice(0, maxJobs);
+  if (!rows.length) return null;
+  return { provider: 'nasactivate', companyHint: hint, rows };
+}
+
 /** True when the career URL looks like Phenom / Phenom Career Site (Eightfold PCS). */
 export function looksLikePhenomBoard(url: string): boolean {
   let parsed: URL;
@@ -2016,6 +2607,8 @@ export function looksLikePhenomBoard(url: string): boolean {
   }
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  if (HAPPYDANCE_BOARD_HOSTS.has(host)) return false;
+  if (looksLikeNasActivateBoard(url)) return false;
   // Google Careers uses sort_by=relevance and careers.google.com — not Phenom PCS.
   if (host === 'google.com' || host.endsWith('.google.com') || host === 'goo.gle') {
     return false;
@@ -2024,12 +2617,16 @@ export function looksLikePhenomBoard(url: string): boolean {
   if (host === 'eightfold.ai' || host.endsWith('.eightfold.ai')) return true;
   if (host.startsWith('hiring.')) return true;
   if (phenomQueryLooksLikePcsx(parsed)) return true;
+  if (phenomQueryLooksLikeWidgets(parsed)) return true;
   if (/\/job\/[^/]+\/[^/]+\/\d+\/\d+\/?$/i.test(path)) return true;
   if (/\/careers\/job\/\d+/i.test(path)) return true;
   // Qualcomm / NVIDIA-style PCS shells: careers.<brand>.com/careers
   if (host.startsWith('careers.') && /^\/careers$/i.test(path)) return true;
-  // Phenom list shells commonly use …/search-results (filters stay on this URL)
+  // Phenom list shells: …/search-results or …/search-jobs (Intuit)
   if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results\/?$/i.test(path)) return true;
+  if (/\/search-jobs\/?$/i.test(path)) return true;
+  // Phenom category landings: /us/en/c/engineering-and-product-jobs (Adobe, etc.)
+  if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)+c\/[a-z0-9-]+$/i.test(path)) return true;
   // Directory allowlist — exact robot URL preserved; widgets/PCSX use that URL as referer
   if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) return true;
   return false;
@@ -2208,8 +2805,39 @@ export function parsePhenomConfigFromHtml(html: string, pageUrl = ''): PhenomSit
 export function buildPhenomWidgetsRequest(
   config: PhenomSiteConfig,
   from: number,
-  size = PHENOM_WIDGETS_PAGE_SIZE
+  size = PHENOM_WIDGETS_PAGE_SIZE,
+  pageUrl = ''
 ): Record<string, unknown> {
+  const selectedFields: Record<string, string[]> = {};
+  let keywords = '';
+  try {
+    const src = new URL(pageUrl || 'https://example.invalid/');
+    keywords = (
+      src.searchParams.get('search') ||
+      src.searchParams.get('keywords') ||
+      src.searchParams.get('q') ||
+      src.searchParams.get('query') ||
+      ''
+    ).trim();
+    const locations = [
+      ...uniqueQueryValues(src, 'location'),
+      ...uniqueQueryValues(src, 'locations'),
+    ];
+    const categories = [
+      ...uniqueQueryValues(src, 'team'),
+      ...uniqueQueryValues(src, 'department'),
+      ...uniqueQueryValues(src, 'category'),
+    ];
+    const countries = uniqueQueryValues(src, 'country');
+    if (locations.length) selectedFields.location = locations;
+    if (categories.length) selectedFields.category = categories;
+    if (countries.length) selectedFields.country = countries;
+    else if (!startUrlHasExplicitGeoFilter(src)) {
+      selectedFields.country = [ATS_DEFAULT_LOCATION_COUNTRY];
+    }
+  } catch {
+    /* keep empty widgets filters */
+  }
   const body: Record<string, unknown> = {
     ddoKey: config.ddoKey || PHENOM_DEFAULT_DDO_KEY,
     pageName: config.pageName || PHENOM_DEFAULT_PAGE_NAME,
@@ -2217,9 +2845,9 @@ export function buildPhenomWidgetsRequest(
     counts: true,
     size,
     from,
-    keywords: '',
+    keywords,
     global: true,
-    selected_fields: {},
+    selected_fields: selectedFields,
     sort: { order: 'desc', field: 'postedDate' },
   };
   if (config.refNum) body.refNum = config.refNum;
@@ -2258,7 +2886,7 @@ function mapPhenomWidgetsJobs(jobs: any[], companyHint: string, origin: string):
           job?.externalPath,
           job?.url
         )
-      );
+      ).replace(/\/apply\/?$/i, '');
       const loc = firstString(
         job?.location,
         [job?.city, job?.state, job?.country].filter(Boolean).join(', ')
@@ -2376,7 +3004,8 @@ async function fetchPhenomWidgetsBoard(
   referer: string,
   cookie: string | undefined,
   maxPages: number,
-  maxJobs: number
+  maxJobs: number,
+  pageUrl = ''
 ): Promise<AtsBoardFetchResult | null> {
   if (!config.refNum) return null;
   const allRows: AtsBoardJobRow[] = [];
@@ -2386,7 +3015,7 @@ async function fetchPhenomWidgetsBoard(
   const size = PHENOM_WIDGETS_PAGE_SIZE;
 
   while (from < totalHits && pages < maxPages && allRows.length < maxJobs) {
-    const body = buildPhenomWidgetsRequest(config, from, size);
+    const body = buildPhenomWidgetsRequest(config, from, size, pageUrl || referer);
     const res = await httpClient.post(`${origin}/widgets`, body, {
       headers: {
         ...phenomJsonRequestHeaders(origin, referer, cookie),
@@ -2436,16 +3065,6 @@ function applyPhenomPcsxSearchParams(api: URL, pageUrl: string, domain: string, 
     }
   } catch {
     /* keep domain/start defaults */
-  }
-}
-
-function phenomStartUrlHasPcsxFilters(pageUrl: string): boolean {
-  try {
-    const src = new URL(pageUrl);
-    if ((src.searchParams.get('location') || '').trim()) return true;
-    return [...src.searchParams.keys()].some((key) => key.startsWith('filter_'));
-  } catch {
-    return false;
   }
 }
 
@@ -2501,7 +3120,7 @@ async function fetchPhenomPcsxBoard(
   const domain = String(config.domain || '').trim();
   if (!domain) return null;
   const searchUrl = pageUrl || referer;
-  let rows = await collectPhenomPcsxPages(
+  const rows = await collectPhenomPcsxPages(
     origin,
     domain,
     companyHint,
@@ -2511,20 +3130,6 @@ async function fetchPhenomPcsxBoard(
     maxJobs,
     searchUrl
   );
-  if (!rows.length && phenomStartUrlHasPcsxFilters(searchUrl)) {
-    const unfiltered = new URL(searchUrl);
-    unfiltered.search = '';
-    rows = await collectPhenomPcsxPages(
-      origin,
-      domain,
-      companyHint,
-      referer,
-      cookie,
-      maxPages,
-      maxJobs,
-      unfiltered.toString()
-    );
-  }
   if (!rows.length) return null;
   return { provider: 'phenom', companyHint, rows };
 }
@@ -2550,7 +3155,8 @@ async function fetchPhenomBoardJobs(
       referer,
       cookie,
       maxPages,
-      maxJobs
+      maxJobs,
+      pageUrl
     );
     if (widgets?.rows.length) return widgets;
   }
@@ -2561,7 +3167,7 @@ async function fetchPhenomBoardJobs(
   }
 
   if (config.kind === 'pcsx' && config.refNum) {
-    return fetchPhenomWidgetsBoard(origin, config, hint, referer, cookie, maxPages, maxJobs);
+    return fetchPhenomWidgetsBoard(origin, config, hint, referer, cookie, maxPages, maxJobs, pageUrl);
   }
 
   return null;
@@ -2892,6 +3498,9 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
     }
   }
 
+  const ghVanity = greenhouseVanityListDetection(parsed);
+  if (ghVanity) return ghVanity;
+
   // jobs.lever.co/{company}[/{postingId}]
   if (host === 'jobs.lever.co' || (host.endsWith('.lever.co') && host !== 'api.lever.co')) {
     const company = parts[0];
@@ -2926,6 +3535,15 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
         listApiUrl: `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(company)}/postings`,
       };
     }
+  }
+
+  const srVanityCompany = SMARTRECRUITERS_VANITY_HOSTS[host.replace(/^www\./, '')];
+  if (srVanityCompany && /\/careers-home(?:\/|$)/i.test(path)) {
+    return {
+      provider: 'smartrecruiters',
+      companyHint: srVanityCompany,
+      listApiUrl: `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(srVanityCompany)}/postings`,
+    };
   }
 
   // Findly / CWS (m-cloud) — org id resolved from page HTML at fetch time
@@ -3005,6 +3623,25 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
       provider: extra.provider,
       companyHint: extra.companyHint,
       listApiUrl: extra.listApiUrl,
+    };
+  }
+
+  const salesforceBoard = detectSalesforceWorkdayBoard(parsed);
+  if (salesforceBoard) return salesforceBoard;
+
+  if (looksLikeHappyDanceBoard(url)) {
+    return {
+      provider: 'happydance',
+      companyHint: happyDanceCompanyHint(host),
+      listApiUrl: happyDanceRssUrl(url),
+    };
+  }
+
+  if (looksLikeNasActivateBoard(url)) {
+    return {
+      provider: 'nasactivate',
+      companyHint: nasActivateCompanyHint(host),
+      listApiUrl: `${parsed.origin}/Search/SearchResults`,
     };
   }
 
@@ -3133,6 +3770,299 @@ function mapSmartRecruitersBoardJobs(data: any, companyHint: string): AtsBoardJo
       });
     })
     .filter((r: AtsBoardJobRow) => r.jobUrl && r.jobTitle);
+}
+
+/** Common career-site typo: "untied states" → "united states". */
+export function normalizeCareerSearchKeywords(raw: string): string {
+  let s = String(raw || '').replace(/\+/g, ' ').trim();
+  try {
+    s = decodeURIComponent(s);
+  } catch {
+    // already decoded
+  }
+  return s.replace(/\buntied\b/gi, 'united').replace(/\s+/g, ' ').trim();
+}
+
+export interface SmartRecruitersBoardFilters {
+  keywords: string;
+  countryCode?: string;
+  categories: string[];
+  q?: string;
+}
+
+function unitedStatesCountryCode(keywords: string): string | undefined {
+  const k = keywords
+    .toLowerCase()
+    .replace(/[.]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (
+    k === 'united states' ||
+    k === 'united states of america' ||
+    k === 'usa' ||
+    k === 'us' ||
+    k === 'u s' ||
+    k === 'u sa' ||
+    k === 'america'
+  ) {
+    return 'us';
+  }
+  return undefined;
+}
+
+export function parseSmartRecruitersBoardFilters(pageUrl: string): SmartRecruitersBoardFilters {
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return { keywords: '', categories: [] };
+  }
+  const keywords = normalizeCareerSearchKeywords(
+    parsed.searchParams.get('keywords') || parsed.searchParams.get('q') || ''
+  );
+  const countryCode = unitedStatesCountryCode(keywords);
+  const rawCats = parsed.searchParams.get('categories') || parsed.searchParams.get('category') || '';
+  const categories = rawCats
+    .split('|')
+    .map((part) => {
+      try {
+        return decodeURIComponent(part.replace(/\+/g, ' ')).trim();
+      } catch {
+        return part.replace(/\+/g, ' ').trim();
+      }
+    })
+    .filter(Boolean);
+  return {
+    keywords,
+    countryCode,
+    categories,
+    q: keywords && !countryCode ? keywords : undefined,
+  };
+}
+
+function postingLocationBlob(job: any): string {
+  const loc = job?.location || {};
+  return [loc.city, loc.region, loc.country, loc.countryCode, loc.countryName]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function postingMatchesCountry(job: any, countryCode?: string): boolean {
+  if (!countryCode) return true;
+  const code = String(job?.location?.countryCode || '').toLowerCase();
+  if (countryCode === 'us') {
+    if (code === 'us' || code === 'usa') return true;
+    return /\bunited states\b|\busa\b|\bu\.s\.a?\b/.test(postingLocationBlob(job));
+  }
+  return code === countryCode.toLowerCase();
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function categoryTokenMatches(dept: string, cat: string): boolean {
+  const c = cat.trim();
+  if (!c) return false;
+  const d = dept.toLowerCase();
+  const cl = c.toLowerCase();
+  if (cl === 'it') return /\b(it|information technology)\b/i.test(dept);
+  if (d === cl) return true;
+  if (cl.length > 3 && d.includes(cl)) return true;
+  const words = cl.split(/[\s&/,]+/).filter((w) => w.length > 1);
+  if (words.length >= 2) return words.every((w) => d.includes(w));
+  return new RegExp(`\\b${escapeRegExp(cl)}\\b`, 'i').test(dept);
+}
+
+function postingMatchesCategories(job: any, categories: string[]): boolean {
+  if (!categories.length) return true;
+  const dept = String(
+    job?.department?.label || job?.department || job?.function?.label || ''
+  ).trim();
+  if (!dept) return false;
+  return categories.some((cat) => categoryTokenMatches(dept, cat));
+}
+
+export function filterSmartRecruitersPostings(postings: any[], pageUrl: string): any[] {
+  const filters = parseSmartRecruitersBoardFilters(pageUrl);
+  return (Array.isArray(postings) ? postings : []).filter(
+    (job) =>
+      postingMatchesCountry(job, filters.countryCode) &&
+      postingMatchesCategories(job, filters.categories)
+  );
+}
+
+/** Search box on the career URL (query/q/keywords/search). Country-like keywords are not title filters. */
+export function parseAtsBoardSearchQuery(pageUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return '';
+  }
+  const rawCandidates = [
+    parsed.searchParams.get('query'),
+    parsed.searchParams.get('q'),
+    parsed.searchParams.get('search'),
+    parsed.searchParams.get('keywords'),
+    parsed.searchParams.get('keyword'),
+  ];
+  for (const raw of rawCandidates) {
+    const normalized = normalizeCareerSearchKeywords(raw || '');
+    if (!normalized) continue;
+    if (/^jobsbylocation$/i.test(normalized)) continue;
+    return normalized;
+  }
+  return '';
+}
+
+/**
+ * Keep jobs matching the start-URL search, then cap to ~UI pages
+ * (maxPages × pagesize, default 20 per page).
+ */
+export function applyAtsBoardSearchAndPageLimits(
+  rows: AtsBoardJobRow[],
+  pageUrl: string,
+  options?: AtsBoardFetchOptions
+): AtsBoardJobRow[] {
+  const list = Array.isArray(rows) ? rows : [];
+  const q = parseAtsBoardSearchQuery(pageUrl);
+  const countryLike = q ? unitedStatesCountryCode(q) : undefined;
+  let out = list;
+  let applyKeywordToTitles = false;
+  try {
+    const parsed = new URL(pageUrl);
+    const teams = [
+      ...uniqueQueryValues(parsed, 'team'),
+      ...uniqueQueryValues(parsed, 'department'),
+      ...uniqueQueryValues(parsed, 'category'),
+      ...uniqueQueryValues(parsed, 'category[]'),
+    ];
+    const locations = [
+      ...uniqueQueryValues(parsed, 'location'),
+      ...uniqueQueryValues(parsed, 'locations'),
+    ];
+    const countries = uniqueQueryValues(parsed, 'country');
+    const defaultUnitedStates = !startUrlHasExplicitGeoFilter(parsed);
+    if (teams.length) {
+      out = out.filter((row) => atsRowMatchesTeams(row, teams));
+    }
+    const cityLocations = parsed.searchParams.get('locationId')
+      ? []
+      : locations.filter((value) => {
+          const n = happyDanceNorm(value);
+          return n !== 'usa' && n !== 'us' && n !== 'united states' && n !== 'united states of america';
+        });
+    if (cityLocations.length) {
+      out = out.filter((row) => atsRowMatchesLocations(row, cityLocations));
+    }
+    if (countries.length) {
+      out = out.filter(
+        (row) =>
+          happyDanceCountryMatches(row.location || '', countries) ||
+          countries.some((c) => (row.location || '').toLowerCase().includes(c.toLowerCase()))
+      );
+    } else if (defaultUnitedStates) {
+      out = out.filter((row) => atsRowMatchesUnitedStates(row));
+    }
+    const queryOrQ = (parsed.searchParams.get('query') || parsed.searchParams.get('q') || '').trim();
+    const searchRaw = (parsed.searchParams.get('search') || '').trim();
+    const searchIsBoardMode = /^(jobsbylocation|getalljobs|jobs|search)$/i.test(
+      searchRaw.replace(/\s+/g, '')
+    );
+    const titleQuery = queryOrQ || (searchIsBoardMode ? '' : searchRaw);
+    applyKeywordToTitles = !!(
+      normalizeCareerSearchKeywords(titleQuery) &&
+      !cityLocations.length &&
+      !countries.length
+    );
+  } catch {
+    /* keep adapter rows */
+  }
+  if (q && !countryLike && applyKeywordToTitles) {
+    const words = q
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 1 && !/^(the|and|for|jobs?|at)$/i.test(w));
+    if (words.length) {
+      out = out.filter((row) => {
+        const hay = `${row.jobTitle || ''} ${row.department || ''} ${row.jobDescription || ''}`.toLowerCase();
+        return words.every((w) => hay.includes(w));
+      });
+    }
+  }
+  const maxPages = options?.maxPages;
+  if (typeof maxPages === 'number' && maxPages > 0) {
+    let pageSize: number | undefined;
+    try {
+      const parsed = new URL(pageUrl);
+      const raw = Number(parsed.searchParams.get('pagesize') || parsed.searchParams.get('pageSize') || '');
+      if (Number.isFinite(raw) && raw > 0 && raw <= 100) pageSize = Math.floor(raw);
+    } catch {
+      /* keep adapter paging */
+    }
+    if (pageSize) out = out.slice(0, maxPages * pageSize);
+  }
+  const maxItems =
+    typeof options?.maxItems === 'number' && options.maxItems > 0
+      ? Math.floor(options.maxItems)
+      : boardMaxJobs();
+  return out.slice(0, maxItems);
+}
+
+function atsRowMatchesTeams(row: AtsBoardJobRow, teams: string[]): boolean {
+  if (happyDanceTeamMatches(row.department || '', teams)) return true;
+  if (happyDanceTeamMatches(row.jobTitle || '', teams)) return true;
+  const hay = happyDanceNorm(`${row.department || ''} ${row.jobTitle || ''} ${row.jobDescription || ''}`);
+  return teams.some((team) => {
+    const want = happyDanceNorm(team);
+    if (!want) return false;
+    if (hay.includes(want)) return true;
+    const words = want
+      .split(' ')
+      .filter((w) => w.length > 2)
+      .map((w) => w.replace(/ing$/, '').replace(/ers$/, 'er'));
+    if (!words.length) return false;
+    return words.every((w) => hay.includes(w) || hay.includes(`${w}ing`) || hay.includes(`${w}er`));
+  });
+}
+
+function atsRowMatchesLocations(row: AtsBoardJobRow, locations: string[]): boolean {
+  const loc = row.location || '';
+  const parts = loc.split(',').map((s) => s.trim()).filter(Boolean);
+  const cityStateCountry =
+    parts.length >= 3
+      ? { city: parts[0], state: parts[1], country: parts.slice(2).join(', ') }
+      : parts.length === 2
+        ? { city: parts[0], state: '', country: parts[1] }
+        : { city: '', state: '', country: parts[0] || '' };
+  if (happyDanceLocationMatches(cityStateCountry, locations)) {
+    return true;
+  }
+  const hay = `${loc} ${row.jobTitle || ''} ${row.jobDescription || ''}`.toLowerCase();
+  return locations.some((raw) => {
+    const want = raw.toLowerCase().trim();
+    if (!want) return false;
+    const city = want.split(',')[0].trim();
+    if (!city) return false;
+    if (city.length <= 2) {
+      const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`, 'i').test(loc);
+    }
+    return hay.includes(city);
+  });
+}
+
+function finalizeAtsBoardRows(
+  result: AtsBoardFetchResult | null,
+  pageUrl: string,
+  options?: AtsBoardFetchOptions
+): AtsBoardFetchResult | null {
+  if (!result?.rows?.length) return null;
+  const rows = applyAtsBoardSearchAndPageLimits(result.rows, pageUrl, options);
+  if (!rows.length) return null;
+  return { ...result, rows };
 }
 
 function buildOracleBoardJobUrl(
@@ -3505,15 +4435,21 @@ async function fetchBankOfAmericaBoardJobs(
   return rows.length ? { provider: 'bankofamerica', companyHint, rows } : null;
 }
 
-async function fetchSmartRecruitersAllPages(listApiUrl: string): Promise<any> {
+async function fetchSmartRecruitersAllPages(
+  listApiUrl: string,
+  extra?: { country?: string; q?: string }
+): Promise<any> {
   const limit = 100;
   let offset = 0;
   const all: any[] = [];
   let totalFound = Infinity;
   while (offset < totalFound && offset < 5000) {
-    const sep = listApiUrl.includes('?') ? '&' : '?';
-    const url = `${listApiUrl}${sep}limit=${limit}&offset=${offset}`;
-    const res = await httpClient.get(url, { headers: { Accept: 'application/json' } });
+    const u = new URL(listApiUrl);
+    if (extra?.country) u.searchParams.set('country', extra.country);
+    if (extra?.q) u.searchParams.set('q', extra.q);
+    u.searchParams.set('limit', String(limit));
+    u.searchParams.set('offset', String(offset));
+    const res = await httpClient.get(u.toString(), { headers: { Accept: 'application/json' } });
     if (res.status >= 400 || !res.data) break;
     const batch = Array.isArray(res.data?.content) ? res.data.content : [];
     totalFound = typeof res.data?.totalFound === 'number' ? res.data.totalFound : batch.length;
@@ -3558,17 +4494,29 @@ export async function fetchAtsBoardJobs(
         options
       );
       if (!extra?.rows?.length) return null;
-      return {
-        provider: extra.provider,
-        companyHint: extra.companyHint,
-        rows: extra.rows as AtsBoardJobRow[],
-      };
+      return finalizeAtsBoardRows(
+        {
+          provider: extra.provider,
+          companyHint: extra.companyHint,
+          rows: extra.rows as AtsBoardJobRow[],
+        },
+        pageUrl,
+        options
+      );
     }
     if (detected.provider === 'findly') {
-      return await fetchFindlyBoardJobs(pageUrl, detected.companyHint, options);
+      return finalizeAtsBoardRows(
+        await fetchFindlyBoardJobs(pageUrl, detected.companyHint, options),
+        pageUrl,
+        options
+      );
     }
     if (detected.provider === 'successfactors') {
-      return await fetchSuccessFactorsBoardJobs(pageUrl, detected.companyHint, options);
+      return finalizeAtsBoardRows(
+        await fetchSuccessFactorsBoardJobs(pageUrl, detected.companyHint, options),
+        pageUrl,
+        options
+      );
     }
     if (detected.provider === 'oraclecloud') {
       let page = pageUrl;
@@ -3581,23 +4529,65 @@ export async function fetchAtsBoardJobs(
         listApiUrl = resolved.listApiUrl;
         companyHint = resolved.companyHint;
       }
-      return await fetchOracleCloudBoardJobs(page, companyHint, listApiUrl, options);
+      return finalizeAtsBoardRows(
+        await fetchOracleCloudBoardJobs(page, companyHint, listApiUrl, options),
+        pageUrl,
+        options
+      );
     }
     if (detected.provider === 'bankofamerica') {
-      return await fetchBankOfAmericaBoardJobs(
+      return finalizeAtsBoardRows(
+        await fetchBankOfAmericaBoardJobs(
+          pageUrl,
+          detected.companyHint,
+          detected.listApiUrl,
+          options
+        ),
         pageUrl,
-        detected.companyHint,
-        detected.listApiUrl,
+        options
+      );
+    }
+    if (detected.provider === 'happydance') {
+      return finalizeAtsBoardRows(
+        await fetchHappyDanceBoardJobs(
+          pageUrl,
+          detected.companyHint,
+          detected.listApiUrl,
+          options
+        ),
+        pageUrl,
+        options
+      );
+    }
+    if (detected.provider === 'nasactivate') {
+      return finalizeAtsBoardRows(
+        await fetchNasActivateBoardJobs(pageUrl, detected.companyHint, options),
+        pageUrl,
         options
       );
     }
     if (detected.provider === 'phenom') {
-      return await fetchPhenomBoardJobs(pageUrl, detected.companyHint, options);
+      return finalizeAtsBoardRows(
+        await fetchPhenomBoardJobs(pageUrl, detected.companyHint, options),
+        pageUrl,
+        options
+      );
     }
 
     let data: any;
     if (detected.provider === 'smartrecruiters') {
-      data = await fetchSmartRecruitersAllPages(detected.listApiUrl);
+      const filters = parseSmartRecruitersBoardFilters(pageUrl);
+      data = await fetchSmartRecruitersAllPages(detected.listApiUrl, {
+        country: filters.countryCode,
+        q: filters.q,
+      });
+      data = {
+        ...data,
+        content: filterSmartRecruitersPostings(
+          Array.isArray(data?.content) ? data.content : [],
+          pageUrl
+        ),
+      };
     } else {
       const res = await httpClient.get(detected.listApiUrl, {
         headers: { Accept: 'application/json' },
@@ -3625,11 +4615,15 @@ export async function fetchAtsBoardJobs(
     }
 
     if (!rows.length) return null;
-    return {
-      provider: detected.provider,
-      companyHint: detected.companyHint,
-      rows,
-    };
+    return finalizeAtsBoardRows(
+      {
+        provider: detected.provider,
+        companyHint: detected.companyHint,
+        rows,
+      },
+      pageUrl,
+      options
+    );
   } catch (err) {
     // Oracle vanity resolve used to return null on any failure, which made
     // production look like "0 rows" with no usable diagnostic. Re-throw so the

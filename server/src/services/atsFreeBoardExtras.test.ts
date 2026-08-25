@@ -9,6 +9,7 @@ import {
   detectGoogleCareersBoard,
   detectIbmCareersBoard,
   detectExtraAtsBoard,
+  workdayAppliedFacetsFromUrl,
 } from './atsFreeBoardExtras';
 
 describe('atsFreeBoardExtras detection', () => {
@@ -22,6 +23,15 @@ describe('atsFreeBoardExtras detection', () => {
       listApiUrl:
         'https://nationwide.wd5.myworkdayjobs.com/wday/cxs/nationwide/Nationwide/jobs',
     });
+  });
+
+  it('detects hostname-only Workday boards so CXS can resolve the site slug', () => {
+    const d = detectWorkdayBoard('https://broadcom.wd1.myworkdayjobs.com');
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Broadcom');
+    expect(d?.listApiUrl).toBe(
+      'https://broadcom.wd1.myworkdayjobs.com/wday/cxs/broadcom/__resolve__/jobs'
+    );
   });
 
   it('detects mid-market ATS widgets', () => {
@@ -76,5 +86,14 @@ describe('atsFreeBoardExtras detection', () => {
     expect(
       detectExtraAtsBoard('https://intel.wd1.myworkdayjobs.com/External')?.provider
     ).toBe('workday');
+  });
+
+  it('workdayAppliedFacetsFromUrl copies hashed locationCountry and ignores pagination', () => {
+    const facets = workdayAppliedFacetsFromUrl(
+      'https://intel.wd1.myworkdayjobs.com/External?q=engineer&locationCountry=bc33aa3152ec42d4995f4791a106ed09&page=2'
+    );
+    expect(facets).toEqual({
+      locationCountry: ['bc33aa3152ec42d4995f4791a106ed09'],
+    });
   });
 });
