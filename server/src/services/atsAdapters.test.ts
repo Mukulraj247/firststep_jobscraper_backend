@@ -61,6 +61,16 @@ describe('detectAts', () => {
     expect(d?.apiUrl).toContain('/boards/stripe/jobs/6042172');
   });
 
+  it('detects Microsoft Careers job detail URLs', () => {
+    expect(
+      detectAts('https://jobs.careers.microsoft.com/global/en/job/1810126/software-engineer')
+        ?.provider
+    ).toBe('microsoftcareers');
+    expect(
+      detectAts('https://careers.microsoft.com/us/en/job/1810126/software-engineer')?.provider
+    ).toBe('microsoftcareers');
+  });
+
   it('detects Salesforce legacy URLs as Workday postings', () => {
     const d = detectAts(
       'https://salesforce.com/company/careers/jobs/JR334544/lead-software-engineer-cloud-erp-finance'
@@ -222,7 +232,7 @@ describe('detectAts', () => {
 
   it('detects Apple job detail URLs', () => {
     const d = detectAts('https://jobs.apple.com/en-us/details/200612345/software-engineer');
-    expect(d?.provider).toBe('careerhtml');
+    expect(d?.provider).toBe('applejobs');
     expect(d?.companyHint).toBe('Apple');
   });
 

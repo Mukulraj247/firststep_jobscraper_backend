@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { parseAppleJobsHydration, parsePhenomJobDdo } from './spaEmbeddedJobJson';
 
 export const MAX_PARSE_BYTES = parseInt(process.env.MAX_PARSE_BYTES || String(1.5 * 1024 * 1024), 10);
 export const DESCRIPTION_SNIPPET_LEN = 280;
@@ -1045,6 +1046,16 @@ export function parseJobPageHtml(html: string, pageUrl?: string): ParsedJobField
   const truncated = truncateForParse(html);
   if (!truncated) return emptyFields();
 
+  const embedded =
+    parseAppleJobsHydration(truncated, pageUrl) || parsePhenomJobDdo(truncated, pageUrl);
+  if (
+    embedded?.jobTitle &&
+    embedded.jobDescription &&
+    descriptionQualityScore(embedded.jobDescription) > 0
+  ) {
+    return embedded;
+  }
+
   const jsonld = parseJsonLdJobPosting(truncated, pageUrl);
   if (
     jsonld?.jobTitle &&
@@ -1067,6 +1078,7 @@ export function parseJobPageHtml(html: string, pageUrl?: string): ParsedJobField
 
   const htmlFields = parseHtmlHeuristics(truncated, pageUrl);
   merged = mergeParsedFields(merged, htmlFields);
+  if (embedded) merged = mergeParsedFields(embedded, merged);
   return merged;
 }
 
