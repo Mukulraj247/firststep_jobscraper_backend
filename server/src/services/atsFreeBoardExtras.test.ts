@@ -48,6 +48,11 @@ describe('atsFreeBoardExtras detection', () => {
       )
     ).toBeNull();
     expect(
+      detectGoogleCareersBoard(
+        'https://careers.google.com/jobs/results/?q=Software&sort_by=relevance'
+      )?.provider
+    ).toBe('googlecareers');
+    expect(
       detectIbmCareersBoard('https://careers.ibm.com/SearchJobs?location=US')?.provider
     ).toBe('ibmcareers');
     expect(detectIbmCareersBoard('https://careers.ibm.com/')).toBeNull();

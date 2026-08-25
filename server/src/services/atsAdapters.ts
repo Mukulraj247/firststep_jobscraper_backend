@@ -1754,6 +1754,10 @@ export function looksLikePhenomBoard(url: string): boolean {
   }
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  // Google Careers uses sort_by=relevance and careers.google.com — not Phenom PCS.
+  if (host === 'google.com' || host.endsWith('.google.com') || host === 'goo.gle') {
+    return false;
+  }
   if (host.includes('phenompeople.com')) return true;
   if (host === 'eightfold.ai' || host.endsWith('.eightfold.ai')) return true;
   if (host.startsWith('hiring.')) return true;

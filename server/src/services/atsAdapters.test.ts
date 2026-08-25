@@ -1070,6 +1070,16 @@ describe('Phenom board adapter', () => {
     expect(board?.provider).toBe('phenom');
     expect(board?.listApiUrl).toBe('phenom-widgets://resolve');
     expect(detectAtsBoard('https://boards.greenhouse.io/stripe')?.provider).toBe('greenhouse');
+    expect(
+      detectAtsBoard(
+        'https://careers.google.com/jobs/results/?q=Software&sort_by=relevance'
+      )?.provider
+    ).toBe('googlecareers');
+    expect(
+      looksLikePhenomBoard(
+        'https://careers.google.com/jobs/results/?q=Software&sort_by=relevance'
+      )
+    ).toBe(false);
   });
 
   it('looksLikePhenomBoard matches hiring hosts and pid query without treating pid as refNum', () => {

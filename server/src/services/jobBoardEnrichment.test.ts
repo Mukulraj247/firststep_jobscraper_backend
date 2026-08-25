@@ -4,6 +4,7 @@ import {
   contentHashFromFields,
   isListRowComplete,
   pickCanonicalJobUrl,
+  resolveBoardEnqueueIdentity,
 } from './jobBoardEnrichment';
 import { jobUrlKey } from './jobUrlNormalize';
 
@@ -115,5 +116,52 @@ describe('jobBoardEnrichment helpers', () => {
         location: '',
       })
     ).toBe(false);
+  });
+
+  it('resolveBoardEnqueueIdentity accepts complete hiring_cafe rows without employer apply URL', () => {
+    const posting = 'https://hiringcafe.com/job/software-engineer-acme-abc123';
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: posting,
+        jobTitle: 'Software Engineer',
+        companyName: 'Acme',
+        jobDescription: 'x'.repeat(450),
+      },
+      'hiring_cafe'
+    );
+    expect(identity).not.toBeNull();
+    expect(identity!.jobUrl).toBe(posting);
+    expect(identity!.applyUrl).toBe('');
+    expect(jobUrlKey(identity!.jobUrl)).toBeTruthy();
+  });
+
+  it('resolveBoardEnqueueIdentity still prefers employer apply URL for hiring_cafe', () => {
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: 'https://hiringcafe.com/job/software-engineer-acme-abc123',
+        applyUrl: 'https://boards.greenhouse.io/acme/jobs/999',
+        jobTitle: 'Software Engineer',
+        companyName: 'Acme',
+        jobDescription: 'x'.repeat(450),
+      },
+      'hiring_cafe'
+    );
+    expect(identity).not.toBeNull();
+    expect(identity!.jobUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
+    expect(identity!.applyUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
+  });
+
+  it('resolveBoardEnqueueIdentity skips thin hiring_cafe rows without employer apply URL', () => {
+    expect(
+      resolveBoardEnqueueIdentity(
+        {
+          jobUrl: 'https://hiringcafe.com/job/thin-posting-abc123',
+          jobTitle: 'Engineer',
+          companyName: 'Acme',
+          jobDescription: 'short',
+        },
+        'hiring_cafe'
+      )
+    ).toBeNull();
   });
 });

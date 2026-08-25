@@ -7,6 +7,7 @@ import { makeDescriptionSnippet, sanitizeCompanyName, decodeHtmlEntities, normal
 import { jobUrlKey, normalizeJobUrl } from './jobUrlNormalize';
 import { detectAts } from './atsAdapters';
 import { isHiringCafeUrl } from './aggregatorIdentity';
+import { pickHiringCafeJobUrl } from './hiringCafeDetail';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import logger from '../logger';
 
@@ -157,6 +158,36 @@ export function pickCanonicalJobUrl(data: Record<string, any>): {
   return { jobUrl, applyUrl };
 }
 
+/**
+ * Resolve board identity for enqueue.
+ * Prefer employer/ATS URL. For complete Hiring Cafe list rows with no employer apply URL yet,
+ * fall back to the HC posting URL so the listing can still appear as method=list (Apply stays empty).
+ */
+export function resolveBoardEnqueueIdentity(
+  data: Record<string, any>,
+  listingSource?: string | null
+): { jobUrl: string; applyUrl: string; snapshot: IJobBoardListSnapshot } | null {
+  const snapshot = buildListSnapshot(data);
+  const picked = pickCanonicalJobUrl(data);
+  const source = String(listingSource || '').trim().toLowerCase();
+
+  if (picked.jobUrl && !isHiringCafeUrl(picked.jobUrl)) {
+    const employerApply =
+      (picked.applyUrl && !isHiringCafeUrl(picked.applyUrl) ? picked.applyUrl : '') || picked.jobUrl;
+    return { jobUrl: picked.jobUrl, applyUrl: employerApply, snapshot };
+  }
+
+  // Soft gate: complete HC list rows still reach the board without an employer apply URL.
+  if (source === 'hiring_cafe' && isListRowComplete(snapshot, { source: 'hiring_cafe' })) {
+    const hcPosting = normalizeJobUrl(pickHiringCafeJobUrl(data) || '');
+    if (hcPosting && isHiringCafeUrl(hcPosting)) {
+      return { jobUrl: hcPosting, applyUrl: '', snapshot };
+    }
+  }
+
+  return null;
+}
+
 export function contentHashFromFields(fields: {
   jobTitle?: string;
   companyName?: string;
@@ -286,23 +317,20 @@ export async function enqueueJobBoardEnrichments(opts: {
   for (const row of opts.rows || []) {
     stats.considered += 1;
     const data = row?.data || {};
-    const picked = pickCanonicalJobUrl(data);
-    // Aggregator rows must dedupe on the employer apply URL — never store Hiring Cafe as identity.
-    if (!picked.jobUrl || isHiringCafeUrl(picked.jobUrl)) {
+    const identity = resolveBoardEnqueueIdentity(data, listingSource);
+    if (!identity) {
       stats.skippedNoUrl += 1;
       continue;
     }
-    const key = jobUrlKey(picked.jobUrl);
+    const key = jobUrlKey(identity.jobUrl);
     if (!key) {
       stats.skippedNoUrl += 1;
       continue;
     }
-    const employerApply =
-      (picked.applyUrl && !isHiringCafeUrl(picked.applyUrl) ? picked.applyUrl : '') || picked.jobUrl;
     byKey.set(key, {
-      jobUrl: picked.jobUrl,
-      applyUrl: employerApply,
-      snapshot: buildListSnapshot(data),
+      jobUrl: identity.jobUrl,
+      applyUrl: identity.applyUrl,
+      snapshot: identity.snapshot,
       jobId: asText(data.jobId),
     });
   }

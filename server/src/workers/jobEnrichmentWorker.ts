@@ -513,15 +513,18 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   }
 
   if (!process.env.SCRAPE_DO_TOKEN) {
+    // ATS already missed. Without scrape.do, still publish list fields that pass the board gate.
+    const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
-      status: 'failed',
-      method: 'none',
+      status: status === 'ready' ? 'ready' : 'failed',
+      method: status === 'ready' ? 'list' : 'none',
       tier: 0,
       creditsSpent: 0,
       error: 'SCRAPE_DO_TOKEN_missing',
       incrementAttempts: true,
     });
-    metrics.failed += 1;
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
     return;
   }
 
@@ -554,7 +557,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   if (shouldSkipScrapeDoUrl(scrapeTargetUrl)) {
     const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
-      status: status === 'ready' ? 'ready' : 'partial',
+      status: status === 'ready' ? 'ready' : 'failed',
       method: status === 'ready' ? 'list' : 'none',
       tier: 0,
       creditsSpent: 0,

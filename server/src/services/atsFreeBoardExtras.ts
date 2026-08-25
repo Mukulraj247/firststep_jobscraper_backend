@@ -216,12 +216,15 @@ export function detectGoogleCareersBoard(url: string): ExtraBoardDetection | nul
   } catch {
     return null;
   }
-  const host = parsed.hostname.toLowerCase();
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   if (host !== 'google.com' && !host.endsWith('.google.com')) return null;
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
-  // Detail pages: /jobs/results/<numericId>-slug
-  if (/\/about\/careers\/applications\/jobs\/results\/\d+/i.test(path)) return null;
-  if (!/\/about\/careers\/applications\/jobs\/results$/i.test(path)) return null;
+  // Detail pages: /jobs/results/<numericId>-slug (applications or careers.google.com)
+  if (/\/jobs\/results\/\d+/i.test(path)) return null;
+  const isApplicationsList = /\/about\/careers\/applications\/jobs\/results$/i.test(path);
+  const isCareersGoogleList =
+    host === 'careers.google.com' && /\/jobs\/results$/i.test(path);
+  if (!isApplicationsList && !isCareersGoogleList) return null;
   const clean = new URL(parsed.href);
   clean.hash = '';
   if (clean.hostname === 'google.com') clean.hostname = 'www.google.com';
