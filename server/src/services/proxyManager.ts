@@ -145,3 +145,41 @@ export const probeProxyTcp = async (server: string, timeoutMs = 2500): Promise<b
     });
   });
 };
+
+/**
+ * TCP-open is not enough: last-resort HTTP proxies often accept a socket then
+ * fail CONNECT (net::ERR_TUNNEL_CONNECTION_FAILED). Probe the tunnel verb.
+ */
+export const probeProxyHttpConnect = async (server: string, timeoutMs = 2500): Promise<boolean> => {
+  const endpoint = parseProxyEndpoint(server);
+  if (!endpoint) return false;
+  const normalized = normalizeProxyServer(server) || '';
+  if (/^socks/i.test(normalized)) {
+    return probeProxyTcp(server, timeoutMs);
+  }
+
+  const budget = Math.max(400, timeoutMs);
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: endpoint.host, port: endpoint.port });
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), budget);
+    socket.once('error', () => finish(false));
+    socket.once('connect', () => {
+      socket.write(
+        'CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Connection: close\r\n\r\n'
+      );
+    });
+    socket.once('data', (buf: Buffer) => {
+      const firstLine = buf.toString('utf8').split(/\r?\n/, 1)[0] || '';
+      // 200 = tunnel ok; 407/401 = proxy is real (creds may still fail later).
+      finish(/HTTP\/\d(?:\.\d)?\s+(200|401|407)\b/i.test(firstLine));
+    });
+  });
+};

@@ -59,6 +59,29 @@ function isGoogleCareersJobPath(pathname: string): boolean {
 const FORCE_WWW_JOB_HOSTS = new Set(['careers.ford.com']);
 
 /**
+ * Phenom / Eightfold PCSX shells identify a job by `pid=` or `/careers/job/{id}`.
+ * List filters (`filter_*`, `sort_by`, `location`) must not be part of board identity
+ * or enrichment will treat the search page as the posting.
+ */
+function canonicalizePhenomPcsxJobUrl(parsed: URL): void {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (host === 'google.com' || host.endsWith('.google.com')) return;
+  if (host === 'microsoft.com' || host.endsWith('.microsoft.com')) return;
+  if (!/^(careers|jobs|hiring)\./i.test(host)) return;
+
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  const pid = (parsed.searchParams.get('pid') || parsed.searchParams.get('position_id') || '').trim();
+  const pathId =
+    path.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?careers\/job\/(\d+)(?:\/[^/]+)?$/i)?.[1] || '';
+  const jobId = /^\d+$/.test(pid) ? pid : pathId;
+  if (!jobId) return;
+  if (!/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?careers(?:\/job\/\d+(?:\/[^/]+)?)?$/i.test(path)) return;
+
+  parsed.pathname = `/careers/job/${jobId}`;
+  parsed.search = '';
+}
+
+/**
  * Normalize a job listing URL for deduplication.
  * Returns null when the input is not a usable http(s) URL.
  */
@@ -96,6 +119,9 @@ export function normalizeJobUrl(raw: unknown): string | null {
     pathname = pathname.slice(0, -1);
   }
   parsed.pathname = pathname;
+
+  canonicalizePhenomPcsxJobUrl(parsed);
+  pathname = parsed.pathname;
 
   // Google Careers: the numeric id in the path uniquely identifies the job.
   // Drop all query noise from list pagination / locale / search filters.

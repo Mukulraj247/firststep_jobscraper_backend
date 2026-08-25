@@ -4,7 +4,9 @@ import {
   detectAtsBoard,
   shouldSkipScrapeDoUrl,
   shouldNeverScrapeDoUrl,
+  fetchAtsJob,
   fetchAtsBoardJobs,
+  shouldSkipAtsBoardForUiPagination,
   atsHttpClient,
   parseFindlyConfigFromHtml,
   findlyFacetsFromUrl,
@@ -192,6 +194,38 @@ describe('detectAts', () => {
     expect(d?.apiUrl).toContain('paypal.eightfold.ai/api/apply/v2/jobs/18812');
   });
 
+  it('detects NVIDIA PCSX job detail URLs as Phenom apply API posts', () => {
+    const d = detectAts('https://jobs.nvidia.com/careers/job/893395760139');
+    expect(d?.provider).toBe('phenom');
+    expect(d?.companyHint).toBe('Nvidia');
+    expect(d?.apiUrl).toBe('https://jobs.nvidia.com/api/apply/v2/jobs/893395760139');
+  });
+
+  it('detects NVIDIA PCSX list URLs with pid as Phenom apply API posts', () => {
+    const d = detectAts(
+      'https://jobs.nvidia.com/careers?start=0&location=united+states&pid=893394926415&sort_by=timestamp'
+    );
+    expect(d?.provider).toBe('phenom');
+    expect(d?.apiUrl).toBe('https://jobs.nvidia.com/api/apply/v2/jobs/893394926415');
+  });
+
+  it('does not treat NVIDIA list shells without a job id as detail ATS', () => {
+    expect(detectAts('https://jobs.nvidia.com/careers?location=united+states')).toBeNull();
+  });
+
+  it('detects Qualcomm PCSX job detail and list pid URLs as Phenom apply API posts', () => {
+    const detail = detectAts('https://careers.qualcomm.com/careers/job/446717433364');
+    expect(detail?.provider).toBe('phenom');
+    expect(detail?.companyHint).toBe('Qualcomm');
+    expect(detail?.apiUrl).toBe('https://careers.qualcomm.com/api/apply/v2/jobs/446717433364');
+
+    const list = detectAts(
+      'https://careers.qualcomm.com/careers?start=0&location=united+states&pid=446717433364&sort_by=timestamp&filter_job_family=software+engineering'
+    );
+    expect(list?.provider).toBe('phenom');
+    expect(list?.apiUrl).toBe('https://careers.qualcomm.com/api/apply/v2/jobs/446717433364');
+  });
+
   it('detects iCIMS job URLs', () => {
     const d = detectAts('https://staff-emory.icims.com/jobs/12345/registered-nurse/job');
     expect(d?.provider).toBe('icims');
@@ -257,7 +291,7 @@ describe('detectAts', () => {
       'careerhtml'
     );
     expect(detectAts('https://careers.truist.com/us/en/job/R01234/teller')?.companyHint).toBe(
-      'Truist'
+      'Truist Financial Corporation'
     );
     expect(detectAts('https://jobs-us.pwc.com/us/en/job/12345/consultant')?.companyHint).toBe('PwC');
   });
@@ -266,6 +300,70 @@ describe('detectAts', () => {
     expect(detectAts('https://hiringcafe.com/job/abc')).toBeNull();
     expect(detectAts('https://hiring.cafe/job/abc')).toBeNull();
     expect(shouldSkipScrapeDoUrl('https://hiringcafe.com/job/abc')).toBe(false);
+  });
+});
+
+describe('fetchAtsJob Phenom PCSX', () => {
+  let getSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    getSpy = vi.spyOn(atsHttpClient, 'get');
+  });
+
+  afterEach(() => {
+    getSpy.mockRestore();
+  });
+
+  it('loads NVIDIA job details from the public apply API', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        id: 893395760139,
+        name: 'ASIC Verification Engineer - GPU',
+        location: 'US, CA, Santa Clara',
+        locations: ['US, CA, Santa Clara', 'US, NC, Durham'],
+        type: 'FULL_TIME',
+        job_description:
+          '<p>NVIDIA is seeking elite ASIC Verification Engineers to verify the design and implementation of the world leading SoCs.</p><p>You will write test plans, build verification environments, and partner with architecture and design.</p>',
+      },
+    } as any);
+
+    const result = await fetchAtsJob('https://jobs.nvidia.com/careers/job/893395760139');
+    expect(result?.provider).toBe('phenom');
+    expect(result?.externalJobId).toBe('893395760139');
+    expect(result?.fields.jobTitle).toBe('ASIC Verification Engineer - GPU');
+    expect(result?.fields.companyName).toMatch(/nvidia/i);
+    expect(result?.fields.jobDescription).toMatch(/ASIC Verification Engineers/i);
+    expect(result?.fields.location).toContain('Santa Clara');
+    expect(String(getSpy.mock.calls[0]?.[0])).toContain(
+      'jobs.nvidia.com/api/apply/v2/jobs/893395760139'
+    );
+  });
+
+  it('loads Qualcomm job details from the public apply API', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        id: 446717433364,
+        name: 'IT Engineer, Staff',
+        location: 'San Diego, California, United States of America',
+        type: 'ATS',
+        job_description:
+          '<p>Qualcomm is seeking an IT Engineer.</p><p>Responsibilities include building verification environments and partnering with architecture.</p><p>Minimum qualifications: Bachelor degree and 5 years of experience.</p>',
+      },
+    } as any);
+
+    const result = await fetchAtsJob(
+      'https://careers.qualcomm.com/careers?pid=446717433364&filter_job_family=software+engineering'
+    );
+    expect(result?.provider).toBe('phenom');
+    expect(result?.externalJobId).toBe('446717433364');
+    expect(result?.fields.jobTitle).toBe('IT Engineer, Staff');
+    expect(result?.fields.employmentType).toBe('');
+    expect(result?.fields.jobDescription).toMatch(/Minimum qualifications/i);
+    expect(String(getSpy.mock.calls[0]?.[0])).toContain(
+      'careers.qualcomm.com/api/apply/v2/jobs/446717433364'
+    );
   });
 });
 
@@ -412,6 +510,26 @@ describe('detectAtsBoard', () => {
     expect(d?.companyHint).toBe('Oracle');
     expect(d?.listApiUrl).toContain('eeho.fa.us2.oraclecloud.com/hcmRestApi/');
     expect(d?.listApiUrl).toContain('recruitingCEJobRequisitions');
+  });
+
+  it('skips ATS JSON dump when Load More / next-button is configured', () => {
+    expect(
+      shouldSkipAtsBoardForUiPagination({
+        listExtraction: {
+          pagination: {
+            mode: 'next-button',
+            nextButtonSelector: 'button:has-text("Show More Results")',
+            maxPages: 3,
+          },
+        },
+      })
+    ).toBe(true);
+    expect(
+      shouldSkipAtsBoardForUiPagination({
+        listExtraction: { pagination: { mode: 'next-button', maxPages: 3 } },
+      })
+    ).toBe(false);
+    expect(shouldSkipAtsBoardForUiPagination({ listExtraction: {} })).toBe(false);
   });
 
   it('detects Bank of America career job search', () => {
@@ -1109,6 +1227,14 @@ describe('Phenom board adapter', () => {
     );
     expect(cfg?.refNum).toBe('REF-ACME-99');
     expect(cfg?.refNum).not.toBe('1133910207165');
+  });
+
+  it('detects Pinterest Phenom vanity hosts so filtered /jobs URLs skip Cloudflare browser scrape', () => {
+    const url =
+      'https://www.pinterestcareers.com/jobs/?search=&location=Chicago&location=Los+Angeles&team=Engineering&pagesize=20#results';
+    expect(looksLikePhenomBoard(url)).toBe(true);
+    expect(detectAtsBoard(url)?.provider).toBe('phenom');
+    expect(detectAtsBoard('https://careers.pinterest.com/careers')?.provider).toBe('phenom');
   });
 
   it('detects Qualcomm / NVIDIA-style careers.brand.com/careers PCS URLs', () => {

@@ -26,6 +26,7 @@ import { closeAgenda, drainAndCloseAgenda, getScrapeDrainMs } from './queue/scra
 import { startScraperWorker, stopScraperWorker, setScraperShuttingDown } from './workers/scraperWorker';
 import { rehydrateAutomationSchedules, startAutomationScheduleWorker, stopAutomationScheduleWorker, startMissedScheduleCatchupLoop } from './services/automationScheduler';
 import { registerOpsDigestJob } from './services/opsDigest';
+import { registerDataRetentionJob } from './services/dataRetention';
 import { closeBrowserReusePool } from './services/browserReusePool';
 import {
   startOrphanChromiumReaper,
@@ -282,8 +283,9 @@ if (require.main === module) {
         startOrphanChromiumReaper();
         try {
           await registerOpsDigestJob();
+          await registerDataRetentionJob();
         } catch (digestError: any) {
-          logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+          logger.log('error', `Failed to register ops digest/retention jobs: ${digestError?.message || digestError}`);
         }
       } else {
         logger.log('info', 'Embedded workers disabled for this API process');

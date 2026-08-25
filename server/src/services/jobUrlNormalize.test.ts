@@ -56,6 +56,22 @@ describe('normalizeJobUrl', () => {
     expect(jobUrlKey(apex)).toBe(jobUrlKey(www));
     expect(jobUrlHost(apex)).toBe('careers.ford.com');
   });
+
+  it('canonicalizes Qualcomm and NVIDIA Phenom list URLs onto /careers/job/{id}', () => {
+    const qcomList =
+      'https://careers.qualcomm.com/careers?start=0&location=united+states&pid=446717433364&sort_by=timestamp&filter_include_remote=0&filter_job_family=software+engineering';
+    expect(normalizeJobUrl(qcomList)).toBe(
+      'https://careers.qualcomm.com/careers/job/446717433364'
+    );
+    expect(normalizeJobUrl('https://careers.qualcomm.com/careers/job/446717433364')).toBe(
+      'https://careers.qualcomm.com/careers/job/446717433364'
+    );
+    expect(
+      normalizeJobUrl(
+        'https://jobs.nvidia.com/careers?start=0&location=united+states&pid=893394926415&sort_by=timestamp'
+      )
+    ).toBe('https://jobs.nvidia.com/careers/job/893394926415');
+  });
 });
 
 describe('jobUrlKey', () => {

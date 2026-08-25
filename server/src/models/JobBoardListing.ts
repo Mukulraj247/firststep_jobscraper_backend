@@ -223,6 +223,7 @@ JobBoardListingSchema.index(
   { name: 'job_board_claim_scan_idx' }
 );
 JobBoardListingSchema.index({ status: 1, leaseUntil: 1 }, { name: 'job_board_lease_idx' });
+JobBoardListingSchema.index({ lastSeenAt: 1 }, { name: 'job_board_last_seen_at_idx' });
 JobBoardListingSchema.index(
   { jobTitle: 'text', companyName: 'text', location: 'text' },
   { name: 'job_board_text_idx', weights: { jobTitle: 10, companyName: 5, location: 2 } }

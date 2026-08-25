@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import JobBoardListing, { IJobBoardListing } from '../models/JobBoardListing';
 import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import { getLlmUsageToday, addLlmUsage } from '../models/LlmUsageBudget';
-import { fetchAtsJob, shouldNeverScrapeDoUrl, shouldSkipScrapeDoUrl } from '../services/atsAdapters';
+import { fetchAtsJob, detectAts, shouldNeverScrapeDoUrl, shouldSkipScrapeDoUrl } from '../services/atsAdapters';
 import { isHiringCafeUrl } from '../services/aggregatorIdentity';
 import {
   fetchBrowserJobFallback,
@@ -192,6 +192,46 @@ export async function recoverExpiredLeases(): Promise<number> {
         status: 'queued',
         leaseUntil: null,
         claimedBy: null,
+      },
+    }
+  );
+  return res.modifiedCount || 0;
+}
+
+/**
+ * Rows that failed when Phenom detail fetch did not exist. Re-queue a small
+ * batch each pass so NVIDIA / Qualcomm listings can hit the free apply API.
+ */
+export async function recoverPhenomAtsSkipFailures(limit = 40): Promise<number> {
+  const docs = await JobBoardListing.find({
+    status: 'failed',
+    'enrichment.lastError': 'career_host_skip_scrape_do',
+    $or: [
+      { jobUrl: /\/careers\/job\/\d+|[?&]pid=\d+/i },
+      { applyUrl: /\/careers\/job\/\d+|[?&]pid=\d+/i },
+    ],
+  })
+    .select('_id jobUrl applyUrl')
+    .limit(limit)
+    .lean();
+
+  const ids = docs
+    .filter((row) => {
+      const urls = [row.jobUrl, row.applyUrl].filter(Boolean) as string[];
+      return urls.some((url) => detectAts(url)?.provider === 'phenom');
+    })
+    .map((row) => row._id);
+  if (!ids.length) return 0;
+
+  const res = await JobBoardListing.updateMany(
+    { _id: { $in: ids } },
+    {
+      $set: {
+        status: 'queued',
+        leaseUntil: null,
+        claimedBy: null,
+        'enrichment.nextAttemptAt': null,
+        'enrichment.lastError': '',
       },
     }
   );
@@ -782,6 +822,14 @@ export async function runEnrichmentPass(): Promise<EnrichmentPassMetrics> {
   const recovered = await recoverExpiredLeases();
   if (recovered > 0) {
     logger.log('info', `job-enrichment recovered ${recovered} expired leases`);
+  }
+
+  const phenomRecovered = await recoverPhenomAtsSkipFailures();
+  if (phenomRecovered > 0) {
+    logger.log(
+      'info',
+      `job-enrichment requeued ${phenomRecovered} Phenom listings previously skipped for scrape.do`
+    );
   }
 
   const batch = await claimBatch(JOB_ENRICHMENT_BATCH);

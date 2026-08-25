@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import net from 'net';
 import {
   isScraperProxyEnabled,
   parseProxyEndpoint,
+  probeProxyHttpConnect,
   probeProxyTcp,
   resolveProxyPool,
   selectRotatedProxy,
@@ -91,5 +93,43 @@ describe('parseProxyEndpoint', () => {
 describe('probeProxyTcp', () => {
   it('returns false when nothing accepts CONNECT on that host:port', async () => {
     await expect(probeProxyTcp('http://127.0.0.1:1', 400)).resolves.toBe(false);
+  });
+});
+
+describe('probeProxyHttpConnect', () => {
+  const listen = (handler: (socket: net.Socket) => void): Promise<{ port: number; close: () => void }> =>
+    new Promise((resolve, reject) => {
+      const server = net.createServer(handler);
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (!addr || typeof addr === 'string') {
+          reject(new Error('no port'));
+          return;
+        }
+        resolve({ port: addr.port, close: () => server.close() });
+      });
+    });
+
+  it('returns false when the proxy answers CONNECT with 502 (tunnel dead)', async () => {
+    const { port, close } = await listen((socket) => {
+      socket.write('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n');
+    });
+    try {
+      await expect(probeProxyHttpConnect(`http://127.0.0.1:${port}`, 800)).resolves.toBe(false);
+    } finally {
+      close();
+    }
+  });
+
+  it('returns true when CONNECT is established', async () => {
+    const { port, close } = await listen((socket) => {
+      socket.write('HTTP/1.1 200 Connection established\r\n\r\n');
+    });
+    try {
+      await expect(probeProxyHttpConnect(`http://127.0.0.1:${port}`, 800)).resolves.toBe(true);
+    } finally {
+      close();
+    }
   });
 });

@@ -4,6 +4,7 @@ import {
   CaptchaEncounteredError,
   describe as describeCaptcha,
   detect,
+  isRecaptchaV3BadgeContext,
 } from './captchaGate';
 
 function mockPage(opts: {
@@ -17,6 +18,26 @@ function mockPage(opts: {
     url: () => opts.url ?? 'https://example.test/',
   };
 }
+
+vdescribe('isRecaptchaV3BadgeContext', () => {
+  it('ignores Yahoo-style recaptcha/api2/anchor inside .grecaptcha-badge', () => {
+    expect(
+      isRecaptchaV3BadgeContext(
+        'https://www.google.com/recaptcha/api2/anchor?ar=1&k=6LeWOiIfAAAAAEbO7wAwK5PGq2Zj4Idvyphjo4qK',
+        'grecaptcha-badge'
+      )
+    ).toBe(true);
+  });
+
+  it('does not ignore a standalone checkbox recaptcha iframe', () => {
+    expect(
+      isRecaptchaV3BadgeContext(
+        'https://www.google.com/recaptcha/api2/anchor?k=checkbox',
+        'g-recaptcha'
+      )
+    ).toBe(false);
+  });
+});
 
 vdescribe('captchaGate.detect', () => {
   it('returns present=true when the DOM evaluator finds a widget', async () => {

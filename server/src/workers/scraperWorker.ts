@@ -28,7 +28,7 @@ import { detectCaptcha, detectCloudflareChallenge, waitForCloudflareToClear, app
 import { CaptchaEncounteredError, describe as describeCaptcha } from '../services/scraping/captchaGate';
 import {
   isScraperProxyEnabled,
-  probeProxyTcp,
+  probeProxyHttpConnect,
   resolveProxyPool,
   selectRotatedProxy,
   type ProxyProfile,
@@ -83,7 +83,11 @@ import {
   ScraperJobCancelledError,
   killAllActiveScrapeChildren,
 } from './scrapeJobSupervisor';
-import { detectAtsBoard, fetchAtsBoardJobs } from '../services/atsAdapters';
+import {
+  detectAtsBoard,
+  fetchAtsBoardJobs,
+  shouldSkipAtsBoardForUiPagination,
+} from '../services/atsAdapters';
 import { getScrapeHeartbeatMs } from '../utils/scrapeHeartbeat';
 import { isTerminalRunStatus } from '../services/runLifecycle';
 import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
@@ -405,6 +409,23 @@ async function tryAtsBoardCollection(
     await appendRunLog(
       run,
       'ATS board collection skipped (preferAtsCollection=false); using browser extraction',
+      { flush: true }
+    );
+    return false;
+  }
+
+  if (
+    shouldSkipAtsBoardForUiPagination(config) ||
+    shouldSkipAtsBoardForUiPagination(saasConfig)
+  ) {
+    const mode = String(
+      config?.listExtraction?.pagination?.mode ||
+        saasConfig?.listExtraction?.pagination?.mode ||
+        'next-button'
+    );
+    await appendRunLog(
+      run,
+      `ATS board collection skipped (${mode} pagination is configured; using browser Load More / Show More clicks)`,
       { flush: true }
     );
     return false;
@@ -748,18 +769,21 @@ async function buildIdentityProfile(
   const sidecarProxyServer = normalizeProxyServer(process.env.CAMOUFOX_PROXY_SERVER);
   let sidecarProxyReachable: boolean | undefined;
 
-  // Probe before Camoufox escalate. A dead CAMOUFOX_PROXY_SERVER used to burn
-  // every remaining attempt with ERR_TUNNEL_CONNECTION_FAILED.
-  const mayUseCamoufox =
-    (retryReason === 'block' || retryReason === 'proxy-tunnel' || opts?.lastFailureWasProxyTunnel) &&
-    attemptsMade >= 1;
-  if (
-    mayUseCamoufox &&
+  // Probe before attaching last-resort/env proxy (captcha Playwright retry or
+  // Camoufox escalate). TCP-open then CONNECT-fail used to burn a whole attempt.
+  const mayAttachLastResortProxy =
     attachProxy &&
+    attemptsMade >= 1 &&
+    (retryReason === 'captcha' ||
+      retryReason === 'block' ||
+      retryReason === 'proxy-tunnel' ||
+      opts?.lastFailureWasProxyTunnel);
+  if (
+    mayAttachLastResortProxy &&
     sidecarProxyServer &&
     !failedProxyServers.includes(sidecarProxyServer)
   ) {
-    sidecarProxyReachable = await probeProxyTcp(sidecarProxyServer);
+    sidecarProxyReachable = await probeProxyHttpConnect(sidecarProxyServer);
     if (!sidecarProxyReachable) {
       failedProxyServers = rememberFailedProxy(failedProxyServers, sidecarProxyServer);
       logger.log(

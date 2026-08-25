@@ -213,6 +213,7 @@ RunSchema.index(
   { ownerId: 1, robotMetaId: 1, sortAt: -1 },
   { name: 'run_owner_robot_meta_sort_at_idx' }
 );
+RunSchema.index({ sortAt: 1, status: 1 }, { name: 'run_sort_at_status_idx' });
 
 const Run = mongoose.models.Run || mongoose.model<IRun>('Run', RunSchema);
 

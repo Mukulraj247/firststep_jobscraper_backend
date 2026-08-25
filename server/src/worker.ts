@@ -12,6 +12,7 @@ import {
   startMissedScheduleCatchupLoop,
 } from './services/automationScheduler';
 import { registerOpsDigestJob } from './services/opsDigest';
+import { registerDataRetentionJob } from './services/dataRetention';
 import { drainAndCloseAgenda, getScrapeDrainMs } from './queue/scraperQueue';
 import { closeBrowserReusePool } from './services/browserReusePool';
 import { setChromiumSlotProcessKind } from './services/chromiumSlotLease';
@@ -46,8 +47,9 @@ async function startWorkerRuntime() {
     startMissedScheduleCatchupLoop();
     try {
       await registerOpsDigestJob();
+      await registerDataRetentionJob();
     } catch (digestError: any) {
-      logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+      logger.log('error', `Failed to register ops digest/retention jobs: ${digestError?.message || digestError}`);
     }
   } else {
     logger.log('info', 'SCHEDULER_ENABLED=false — scraper-only (skip schedule rehydrate / catch-up / ops digest)');

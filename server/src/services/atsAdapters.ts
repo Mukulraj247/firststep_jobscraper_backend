@@ -43,6 +43,7 @@ export type AtsProvider =
   | 'microsoftcareers'
   | 'workday'
   | 'eightfold'
+  | 'phenom'
   | 'icims'
   | 'taleo'
   | 'njoyn'
@@ -323,6 +324,15 @@ function oracleJobIdFromParts(parts: string[]): string {
   return '';
 }
 
+function phenomPcsxJobIdFromUrl(parsed: URL): string {
+  const pid = (parsed.searchParams.get('pid') || parsed.searchParams.get('position_id') || '').trim();
+  if (/^\d+$/.test(pid)) return pid;
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  // PCSX detail pages are `/careers/job/{id}` (optional locale). Do not match Oracle
+  // `/hcmUI/.../sites/careers/job/{id}` or other nested career paths.
+  return path.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?careers\/job\/(\d+)(?:\/[^/]+)?$/i)?.[1] || '';
+}
+
 function detectEightfold(
   parsed: URL
 ): { provider: 'eightfold'; apiUrl: string; companyHint: string } | null {
@@ -339,6 +349,23 @@ function detectEightfold(
     provider: 'eightfold',
     apiUrl: `https://${host}/api/apply/v2/jobs/${encodeURIComponent(pid)}`,
     companyHint: titleCaseToken(company),
+  };
+}
+
+/** Phenom PCSX vanity hosts (NVIDIA, Qualcomm, …) expose the same apply JSON as Eightfold. */
+function detectPhenomPcsxJob(
+  parsed: URL
+): { provider: 'phenom'; apiUrl: string; companyHint: string } | null {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (isIP(host) || isMicrosoftCareersHost(host)) return null;
+  if (host === 'eightfold.ai' || host.endsWith('.eightfold.ai')) return null;
+  if (!looksLikePhenomBoard(parsed.href)) return null;
+  const jobId = phenomPcsxJobIdFromUrl(parsed);
+  if (!jobId) return null;
+  return {
+    provider: 'phenom',
+    apiUrl: `https://${parsed.hostname}/api/apply/v2/jobs/${encodeURIComponent(jobId)}`,
+    companyHint: phenomCompanyHintFromHost(host),
   };
 }
 
@@ -821,6 +848,9 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
 
   const eightfold = detectEightfold(parsed);
   if (eightfold) return eightfold;
+
+  const phenomPcsx = detectPhenomPcsxJob(parsed);
+  if (phenomPcsx) return phenomPcsx;
 
   const appleJobs = detectAppleJobs(parsed);
   if (appleJobs) return appleJobs;
@@ -1446,6 +1476,38 @@ async function fetchMicrosoftCareersPosting(pageUrl: string): Promise<AtsFetchRe
   }
 }
 
+async function fetchPhenomPcsxPosting(
+  pageUrl: string,
+  apiUrl: string,
+  companyHint: string
+): Promise<AtsFetchResult | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  const origin = parsed.origin;
+  const jobId = phenomPcsxJobIdFromUrl(parsed);
+  try {
+    const res = await httpClient.get(apiUrl, {
+      headers: phenomJsonRequestHeaders(origin, pageUrl),
+    });
+    if (res.status >= 400 || !res.data || typeof res.data === 'string') return null;
+    const fields = mapEightfold(res.data, companyHint, pageUrl);
+    fields.companyName = fields.companyName || companyHint;
+    fields.applyUrl = pageUrl;
+    if (/^ats$/i.test(fields.employmentType)) fields.employmentType = '';
+    if (!fields.jobTitle || !fields.jobDescription || isJunkDescription(fields.jobDescription)) {
+      return null;
+    }
+    return { provider: 'phenom', fields, externalJobId: jobId || undefined };
+  } catch (error) {
+    if (error instanceof UnsafeOutboundUrlError) throw error;
+    return null;
+  }
+}
+
 async function fetchIbmCareersHtml(pageUrl: string): Promise<string> {
   return withIbmCareersFetchLock(async () => {
     const { acquirePooledPage, releasePooledPage } = await import('./browserReusePool');
@@ -1558,6 +1620,10 @@ export async function fetchAtsJob(pageUrl: string): Promise<AtsFetchResult | nul
 
     if (detected.provider === 'microsoftcareers') {
       return await fetchMicrosoftCareersPosting(pageUrl);
+    }
+
+    if (detected.provider === 'phenom') {
+      return await fetchPhenomPcsxPosting(pageUrl, detected.apiUrl, detected.companyHint);
     }
 
     if (detected.provider === 'workday') {
@@ -1826,6 +1892,21 @@ function mapFindlyBoardJobs(
 export interface AtsBoardFetchOptions {
   /** When > 0, stop after this many list pages (matches extension Max Pages). */
   maxPages?: number;
+}
+
+/**
+ * Load More / Show More / infinite-scroll limits from the extension are click
+ * (or scroll) counts on the live page. ATS JSON adapters paginate with large
+ * API page sizes (Oracle CE uses 100), so `maxPages=3` would dump the whole
+ * board instead of ~3 extra result chunks. Skip ATS so the browser extractor
+ * can honor the recorded control.
+ */
+export function shouldSkipAtsBoardForUiPagination(config?: Record<string, any> | null): boolean {
+  const pagination = config?.listExtraction?.pagination;
+  const mode = String(pagination?.mode || '').toLowerCase();
+  if (mode === 'infinite-scroll') return true;
+  if (mode !== 'next-button') return false;
+  return Boolean(String(pagination?.nextButtonSelector || '').trim());
 }
 
 async function fetchFindlyBoardJobs(

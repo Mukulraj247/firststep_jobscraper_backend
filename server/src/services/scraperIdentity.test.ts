@@ -118,6 +118,18 @@ describe('captchaRetryIdentity', () => {
     expect(plan?.poolIsolationKey).toBe('captcha-retry-2');
   });
 
+  it('does not attach env proxy after CONNECT probe marked it failed (Yahoo captcha retry)', () => {
+    const plan = captchaRetryIdentity({
+      attemptsMade: 1,
+      selectedProxy: null,
+      envFallbackProxy: deadSidecar,
+      configBrowserType: 'playwright',
+      failedProxyServers: ['http://31.59.20.176:6754'],
+    });
+    expect(plan?.identityStrategy).toBe('retry-playwright-residential');
+    expect(plan?.proxy).toBeNull();
+  });
+
   it('does not reuse an env proxy that already failed CONNECT', () => {
     const plan = captchaRetryIdentity({
       attemptsMade: 2,

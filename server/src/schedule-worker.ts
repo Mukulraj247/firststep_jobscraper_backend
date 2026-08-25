@@ -20,6 +20,7 @@ import {
   stopMissedScheduleCatchupLoop,
 } from './services/automationScheduler';
 import { registerOpsDigestJob } from './services/opsDigest';
+import { registerDataRetentionJob } from './services/dataRetention';
 import { drainAndCloseAgenda, getScrapeDrainMs } from './queue/scraperQueue';
 
 let shuttingDown = false;
@@ -33,8 +34,9 @@ async function startSchedulerRuntime() {
   startMissedScheduleCatchupLoop();
   try {
     await registerOpsDigestJob();
+    await registerDataRetentionJob();
   } catch (digestError: any) {
-    logger.log('error', `Failed to register ops digest job: ${digestError?.message || digestError}`);
+    logger.log('error', `Failed to register ops digest/retention jobs: ${digestError?.message || digestError}`);
   }
 
   logger.log('info', 'Scheduler runtime started (no scraper / Chromium)');

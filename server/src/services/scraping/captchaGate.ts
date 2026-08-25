@@ -59,6 +59,11 @@ export class CaptchaEncounteredError extends Error {
 const IFRAME_RX =
   /\b(recaptcha|hcaptcha|turnstile|geetest|arkoselabs|funcaptcha|cloudflare-challenge)\b/i;
 
+/** Invisible reCAPTCHA v3 badge (Yahoo careers, etc.) is not a blocking challenge. */
+export function isRecaptchaV3BadgeContext(src: string, classChain: string): boolean {
+  return /recaptcha/i.test(src || '') && /\bgrecaptcha-badge\b/i.test(classChain || '');
+}
+
 const WIDGET_SELECTORS: Array<{ sel: string; kind: CaptchaKind }> = [
   { sel: '.g-recaptcha', kind: 'recaptcha' },
   { sel: 'iframe[src*="recaptcha/api2"]', kind: 'recaptcha' },
@@ -107,6 +112,11 @@ export async function detect(page: Page): Promise<CaptchaDetection> {
             nodes = [];
           }
           for (const node of nodes) {
+            // reCAPTCHA v3 always injects a bottom-right badge iframe (api2/anchor).
+            // That is not a blocking challenge (Yahoo, etc.).
+            if (typeof (node as Element).closest === 'function' && (node as Element).closest('.grecaptcha-badge')) {
+              continue;
+            }
             if (isVisible(node)) {
               return {
                 present: true,
@@ -124,6 +134,7 @@ export async function detect(page: Page): Promise<CaptchaDetection> {
           iframes = [];
         }
         for (const frame of iframes) {
+          if (frame.closest('.grecaptcha-badge')) continue;
           const src = frame.getAttribute('src') || '';
           const m = iframeRx.exec(src);
           if (m) {
