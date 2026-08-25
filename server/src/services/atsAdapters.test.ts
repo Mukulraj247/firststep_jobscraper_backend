@@ -557,13 +557,16 @@ describe('detectAtsBoard', () => {
     expect(fromJob?.companyHint).toBe('stripe');
   });
 
-  it('detects DocuSign Greenhouse vanity career boards', () => {
+  it('detects DocuSign SmartRecruiters connected career site (not Greenhouse)', () => {
     const d = detectAtsBoard('https://careers.docusign.com');
-    expect(d?.provider).toBe('greenhouse');
-    expect(d?.companyHint).toBe('docusign');
-    expect(d?.listApiUrl).toContain('/boards/docusign/jobs');
+    expect(d?.provider).toBe('smartrecruiters');
+    expect(d?.companyHint).toBe('DocuSign');
+    expect(d?.listApiUrl).toBe('https://api.smartrecruiters.com/v1/companies/DocuSign/postings');
     expect(looksLikeGreenhouseBoard('https://careers.docusign.com/jobs?query=software+developer')).toBe(
-      true
+      false
+    );
+    expect(detectAtsBoard('https://careers.docusign.com/careers-home/jobs')?.provider).toBe(
+      'smartrecruiters'
     );
     expect(detectAtsBoard('https://stripe.com')?.provider).not.toBe('greenhouse');
   });
@@ -596,6 +599,8 @@ describe('detectAtsBoard', () => {
     expect(detectAtsBoard('https://www.github.careers/careers-home')?.provider).toBe(
       'smartrecruiters'
     );
+    expect(detectAtsBoard('https://www.github.careers')?.provider).toBe('smartrecruiters');
+    expect(detectAtsBoard('https://www.github.careers/')?.companyHint).toBe('GitHub');
   });
 
   it('autofixes untied→united and parses SR location + category filters', () => {
@@ -739,7 +744,7 @@ describe('detectAtsBoard', () => {
   });
 
   it('treats Greenhouse vanity hosts as ATS-capable even when next-button skip would apply', () => {
-    expect(looksLikeGreenhouseBoard('https://careers.docusign.com')).toBe(true);
+    expect(looksLikeGreenhouseBoard('https://careers.docusign.com')).toBe(false);
     expect(looksLikeGreenhouseBoard('https://boards.greenhouse.io/stripe')).toBe(true);
     expect(
       shouldSkipAtsBoardForUiPagination({
@@ -786,10 +791,11 @@ describe('detectAtsBoard', () => {
     expect(shouldPreferAtsBoardOverUiPagination('https://careers.example.com/jobs')).toBe(false);
   });
 
-  it('still matches Pinterest Phenom while next-button skip would apply in the worker', () => {
+  it('still matches Pinterest HappyDance while next-button skip would apply in the worker', () => {
     const url =
       'https://www.pinterestcareers.com/jobs/?search=&location=Chicago&team=Engineering&pagesize=20#results';
-    expect(looksLikePhenomBoard(url)).toBe(true);
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
     expect(
       shouldSkipAtsBoardForUiPagination({
         listExtraction: {
@@ -1109,6 +1115,20 @@ describe('fetchAtsBoardJobs', () => {
     expect(unfiltered?.rows.some((r) => r.jobTitle === 'Account Executive')).toBe(false);
   });
 
+  it('fetches Pinterest localless HappyDance RSS instead of Phenom widgets', async () => {
+    const rss = fs.readFileSync(path.join(__dirname, 'fixtures/happydance-rss.xml'), 'utf8');
+    getSpy.mockResolvedValue({ status: 200, data: rss } as any);
+    const result = await fetchAtsBoardJobs(
+      'https://www.pinterestcareers.com/jobs/?search=&team=Engineering&pagesize=20#results'
+    );
+    expect(String(getSpy.mock.calls[0][0])).toBe(
+      'https://www.pinterestcareers.com/jobs/xml/?rss=true'
+    );
+    expect(result?.provider).toBe('happydance');
+    expect(result?.companyHint).toBe('Pinterest');
+    expect(result?.rows.some((r) => r.jobTitle === 'Senior Software Engineer, ISF')).toBe(true);
+  });
+
   it('maps Salesforce Workday country and team query params onto CXS appliedFacets', async () => {
     const postSpy = vi.spyOn(atsHttpClient, 'post');
     try {
@@ -1171,6 +1191,53 @@ describe('fetchAtsBoardJobs', () => {
   }
   });
 
+  it('does not send United States as Workday searchText and keeps USA- / multi-location Broadcom jobs', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          total: 2,
+          jobPostings: [
+            {
+              title: 'PCIe QA Engineer',
+              externalPath: '/job/USA-California-San-Jose-1320-Ridder-Park-Drive/PCIe-QA-Engineer_R026923',
+              locationsText: 'USA-California-San Jose-1320 Ridder Park Drive',
+            },
+            {
+              title: 'Firmware Engineer',
+              externalPath: '/job/USA-Colorado-Fort-Collins-4380-Ziegler-Road/Firmware-Engineer_R026738',
+              locationsText: '2 Locations',
+            },
+          ],
+          facets: [
+            {
+              facetParameter: 'jobFamilyGroup',
+              descriptor: 'Job Category',
+              values: [{ descriptor: 'R&D', id: 'rd-id', count: 2 }],
+            },
+          ],
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs(
+        'https://broadcom.wd1.myworkdayjobs.com?q=United+States&country=United+States'
+      );
+      expect(postSpy.mock.calls.length).toBeGreaterThan(0);
+      for (const call of postSpy.mock.calls) {
+        expect(String(call[0])).toContain('/wday/cxs/broadcom/External_Career/jobs');
+        expect(call[1]).toMatchObject({ searchText: '' });
+      }
+      expect(result?.provider).toBe('workday');
+      expect(result?.rows.map((r) => r.jobTitle)).toEqual([
+        'PCIe QA Engineer',
+        'Firmware Engineer',
+      ]);
+      expect(result?.rows[1].location).toMatch(/USA|United States|Colorado/i);
+    } finally {
+      postSpy.mockRestore();
+    }
+  });
+
   it('maps ServiceNow locale-less HappyDance RSS and honors country plus team filters', async () => {
     const rss = fs.readFileSync(path.join(__dirname, 'fixtures/happydance-rss.xml'), 'utf8');
     getSpy.mockResolvedValue({ status: 200, data: rss } as any);
@@ -1187,6 +1254,42 @@ describe('fetchAtsBoardJobs', () => {
       'IT Security Analyst',
     ]);
     expect(filtered?.rows.some((r) => r.jobTitle === 'Account Executive')).toBe(false);
+  });
+
+  it('fetches Uber HappyDance RSS with countries= and team=Engineer, allowing large feeds', async () => {
+    const rss = `<?xml version="1.0"?><source>
+      <job>
+        <title><![CDATA[Software Engineer II]]></title>
+        <url><![CDATA[https://jobs.uber.com/en/job/1]]></url>
+        <country><![CDATA[United States]]></country>
+        <category><![CDATA[Engineer]]></category>
+      </job>
+      <job>
+        <title><![CDATA[Account Exec]]></title>
+        <url><![CDATA[https://jobs.uber.com/en/job/2]]></url>
+        <country><![CDATA[United States]]></country>
+        <category><![CDATA[Sales]]></category>
+      </job>
+      <job>
+        <title><![CDATA[Engineer UK]]></title>
+        <url><![CDATA[https://jobs.uber.com/en/job/3]]></url>
+        <country><![CDATA[United Kingdom]]></country>
+        <category><![CDATA[Engineer]]></category>
+      </job>
+    </source>`;
+    getSpy.mockResolvedValue({ status: 200, data: rss } as any);
+    const result = await fetchAtsBoardJobs(
+      'https://jobs.uber.com/en/jobs/?team=Engineer&countries=United+States'
+    );
+    expect(String(getSpy.mock.calls[0][0])).toBe(
+      'https://jobs.uber.com/en/jobs/xml/?rss=true'
+    );
+    expect(Number(getSpy.mock.calls[0][1]?.maxContentLength || 0)).toBeGreaterThanOrEqual(
+      16 * 1024 * 1024
+    );
+    expect(result?.provider).toBe('happydance');
+    expect(result?.companyHint).toBe('Uber');
+    expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Software Engineer II']);
   });
 
   it('maps Greenhouse board jobs', async () => {
@@ -1247,7 +1350,7 @@ describe('fetchAtsBoardJobs', () => {
     expect(byLocation?.rows.map((r) => r.jobTitle)).toEqual(['Senior Software Developer']);
 
     const result = await fetchAtsBoardJobs(
-      'https://careers.docusign.com/jobs?query=software+developer',
+      'https://boards.greenhouse.io/stripe/jobs?query=software+developer',
       { maxPages: 1 }
     );
     expect(result?.provider).toBe('greenhouse');
@@ -1256,7 +1359,7 @@ describe('fetchAtsBoardJobs', () => {
       'Senior Software Developer',
       'Software Developer II',
     ]);
-    const limited = applyAtsBoardSearchAndPageLimits(result!.rows, 'https://careers.docusign.com/jobs?query=software+developer&pagesize=2', {
+    const limited = applyAtsBoardSearchAndPageLimits(result!.rows, 'https://boards.greenhouse.io/stripe/jobs?query=software+developer&pagesize=2', {
       maxPages: 1,
     });
     expect(limited.map((r) => r.jobTitle)).toEqual(['Software Developer', 'Senior Software Developer']);
@@ -1312,6 +1415,50 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.provider).toBe('smartrecruiters');
     expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Backend Engineer']);
     expect(result?.rows[0].department).toBe('Engineering');
+  });
+
+  it('returns a confirmed-empty SmartRecruiters board instead of null when the API has 0 postings', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: { totalFound: 0, content: [] },
+    } as any);
+    const result = await fetchAtsBoardJobs(
+      'https://www.github.careers/careers-home/jobs?keywords=united%20states&categories=Engineering'
+    );
+    expect(result?.provider).toBe('smartrecruiters');
+    expect(result?.rows).toEqual([]);
+    expect(result?.confirmedEmpty).toBe(true);
+  });
+
+  it('retries GitHub SmartRecruiters company id as Github when GitHub postings are empty', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('/companies/GitHub/')) {
+        return { status: 200, data: { totalFound: 0, content: [] } };
+      }
+      if (u.includes('/companies/Github/')) {
+        return {
+          status: 200,
+          data: {
+            totalFound: 1,
+            content: [
+              {
+                id: 'sr-1',
+                name: 'Staff Engineer',
+                department: { label: 'Engineering' },
+                location: { city: 'Remote', country: 'United States', countryCode: 'us' },
+              },
+            ],
+          },
+        };
+      }
+      return { status: 404, data: null };
+    });
+    const result = await fetchAtsBoardJobs(
+      'https://www.github.careers/careers-home/jobs?categories=Engineering'
+    );
+    expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Staff Engineer']);
+    expect(getSpy.mock.calls.some((c) => String(c[0]).includes('/companies/Github/'))).toBe(true);
   });
 
   it('maps Lever postings array', async () => {
@@ -1779,11 +1926,27 @@ describe('Phenom board adapter', () => {
     expect(looksLikePhenomBoard('https://jobs.intuit.com/search-jobs')).toBe(true);
   });
 
-  it('detects Pinterest Phenom vanity hosts so filtered /jobs URLs skip Cloudflare browser scrape', () => {
+  it('detects Uber HappyDance /en/jobs lists (countries query, not Phenom)', () => {
+    const url = 'https://jobs.uber.com/en/jobs/?team=Engineer&countries=United+States';
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(detectAtsBoard(url)?.provider).toBe('happydance');
+    expect(detectAtsBoard(url)?.companyHint).toBe('Uber');
+    expect(detectAtsBoard(url)?.listApiUrl).toBe(
+      'https://jobs.uber.com/en/jobs/xml/?rss=true'
+    );
+    expect(startUrlHasCollectionFilters(url)).toBe(true);
+  });
+
+  it('detects Pinterest HappyDance vanity host so filtered /jobs RSS skips Cloudflare browser scrape', () => {
     const url =
       'https://www.pinterestcareers.com/jobs/?search=&location=Chicago&location=Los+Angeles&team=Engineering&pagesize=20#results';
-    expect(looksLikePhenomBoard(url)).toBe(true);
-    expect(detectAtsBoard(url)?.provider).toBe('phenom');
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(detectAtsBoard(url)?.provider).toBe('happydance');
+    expect(detectAtsBoard(url)?.companyHint).toBe('Pinterest');
+    expect(detectAtsBoard(url)?.listApiUrl).toBe(
+      'https://www.pinterestcareers.com/jobs/xml/?rss=true'
+    );
     expect(detectAtsBoard('https://careers.pinterest.com/careers')?.provider).toBe('phenom');
   });
 

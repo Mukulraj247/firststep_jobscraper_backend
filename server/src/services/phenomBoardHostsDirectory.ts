@@ -108,7 +108,6 @@ export const DIRECTORY_PHENOM_BOARD_HOSTS = new Set<string>([
   'jobs.walgreens.com',
   'jobs.wowway.com',
   'nationwide.wd1.myworkdayjobs.com',
-  'pinterestcareers.com',
   'schwabjobs.com',
   'sneakerjobs.com',
   'td.wd3.myworkdayjobs.com',

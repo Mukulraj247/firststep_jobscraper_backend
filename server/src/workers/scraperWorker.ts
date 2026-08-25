@@ -93,6 +93,7 @@ import {
   startUrlHasCollectionFilters,
   shouldSkipAtsBoardForUiPagination,
   shouldPreferAtsBoardOverUiPagination,
+  isSmartRecruitersVanityHost,
 } from '../services/atsAdapters';
 import { getScrapeHeartbeatMs } from '../utils/scrapeHeartbeat';
 import { isTerminalRunStatus } from '../services/runLifecycle';
@@ -278,6 +279,7 @@ async function finalizeExtractedListRows(opts: {
   extractionMethod: 'ats_board' | 'browser';
   atsProvider?: string;
   zeroRowsHint?: string;
+  skipLayoutChangeSuggestion?: boolean;
 }): Promise<void> {
   const { run, automation, userId, rows, extractionMethod, atsProvider, zeroRowsHint } = opts;
 
@@ -322,8 +324,13 @@ async function finalizeExtractedListRows(opts: {
   run.finishedAt = new Date().toISOString();
   run.duration = computeDuration(run.startedAt);
   run.errorMessage = drift.errorMessage;
-  // Suggest layout_change when selectors likely no longer match (zero rows / escalated miss).
-  {
+  if (opts.skipLayoutChangeSuggestion) {
+    run.normalizedFailureReason = normalizeFailureReason({
+      failureReason: run.failureReason,
+      failureReasonSource: run.failureReasonSource,
+      errorMessage: run.errorMessage,
+    });
+  } else {
     const suggested = applyLayoutChangeSuggestion({
       anomaly: drift.anomaly,
       runStatus: drift.runStatus,
@@ -512,6 +519,26 @@ async function tryAtsBoardCollection(
   }
 
   if (!board || !board.rows.length) {
+    const skipBrowserForEmptySrVanity =
+      detected.provider === 'smartrecruiters' && isSmartRecruitersVanityHost(startUrl);
+    if (board?.confirmedEmpty || skipBrowserForEmptySrVanity) {
+      await appendRunLog(
+        run,
+        `ATS board fetch confirmed 0 jobs for ${detected.provider}/${detected.companyHint}; skipping browser fallback`,
+        { flush: true }
+      );
+      await finalizeExtractedListRows({
+        run,
+        automation,
+        userId,
+        rows: [],
+        extractionMethod: 'ats_board',
+        atsProvider: board?.provider || detected.provider,
+        skipLayoutChangeSuggestion: true,
+        zeroRowsHint: `ATS board API for ${detected.provider} returned zero jobs (empty board or site maintenance). Browser extraction would not recover rows.`,
+      });
+      return true;
+    }
     await appendRunLog(
       run,
       detected.provider === 'phenom'

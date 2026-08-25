@@ -441,6 +441,50 @@ function parseWorkdayCxsJobsUrl(
   }
 }
 
+function isCountryOnlyWorkdaySearchText(value: string): boolean {
+  const k = String(value || '')
+    .toLowerCase()
+    .replace(/\buntied\b/g, 'united')
+    .replace(/[.]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (
+    k === 'united states' ||
+    k === 'united states of america' ||
+    k === 'usa' ||
+    k === 'us' ||
+    k === 'u s' ||
+    k === 'america'
+  );
+}
+
+function workdaySearchTextFromPageUrl(pageUrl: string): string {
+  try {
+    const source = new URL(pageUrl);
+    const raw =
+      source.searchParams.get('searchText') ||
+      source.searchParams.get('q') ||
+      source.searchParams.get('query') ||
+      '';
+    const text = String(raw || '').replace(/\buntied\b/gi, 'united').trim();
+    if (!text || isCountryOnlyWorkdaySearchText(text)) return '';
+    return text;
+  } catch {
+    return '';
+  }
+}
+
+function workdayLocationFromPosting(job: any): string {
+  const listed = String(job?.locationsText || job?.location || '').trim();
+  const path = String(job?.externalPath || job?.externalUrl || '');
+  const slug = (path.match(/\/job\/([^/]+)/i)?.[1] || '').replace(/-/g, ' ').trim();
+  if (!listed || /^\d+\s+locations?$/i.test(listed)) return slug || listed;
+  if (slug && /^usa\b/i.test(slug) && !/\b(usa|united states)\b/i.test(listed)) {
+    return `${listed} ${slug}`;
+  }
+  return listed;
+}
+
 async function fetchWorkdayBoard(
   pageUrl: string,
   detected: ExtraBoardDetection,
@@ -448,11 +492,7 @@ async function fetchWorkdayBoard(
   options?: FetchOpts
 ) {
   const source = new URL(pageUrl);
-  const searchText =
-    source.searchParams.get('searchText') ||
-    source.searchParams.get('q') ||
-    source.searchParams.get('query') ||
-    '';
+  const searchText = workdaySearchTextFromPageUrl(pageUrl);
   const cxs = parseWorkdayCxsJobsUrl(detected.listApiUrl);
   const host = cxs?.host || source.hostname;
   const tenant = cxs?.tenant || host.match(/^([a-z0-9-]+)\.wd\d+\./i)?.[1] || '';
@@ -518,7 +558,7 @@ async function fetchWorkdayBoard(
             jobUrl,
             job.title || job.jobTitle || '',
             detected.companyHint,
-            job.locationsText || job.location || '',
+            workdayLocationFromPosting(job),
             { date: job.postedOn || job.startDate || '' }
           )
         );

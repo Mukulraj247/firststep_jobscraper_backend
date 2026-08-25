@@ -69,8 +69,6 @@ const GREENHOUSE_VANITY_BOARDS: Record<string, string> = {
   'asana.com': 'asana',
   'okta.com': 'okta',
   'github.com': 'github',
-  'docusign.com': 'docusign',
-  'careers.docusign.com': 'docusign',
   'jobs.twilio.com': 'twilio',
   'twilio.com': 'twilio',
 };
@@ -81,7 +79,17 @@ const GREENHOUSE_VANITY_BOARDS: Record<string, string> = {
  */
 const SMARTRECRUITERS_VANITY_HOSTS: Record<string, string> = {
   'github.careers': 'GitHub',
+  'careers.docusign.com': 'DocuSign',
 };
+
+export function isSmartRecruitersVanityHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return Boolean(SMARTRECRUITERS_VANITY_HOSTS[host]);
+  } catch {
+    return false;
+  }
+}
 
 const SALESFORCE_WORKDAY_BASE =
   'https://salesforce.wd12.myworkdayjobs.com/wday/cxs/salesforce/External_Career_Site';
@@ -1983,6 +1991,7 @@ const ATS_COLLECTION_FILTER_KEYS = new Set([
   'timetype',
   'regionalcountry',
   'geolocationstring',
+  'countries',
   'categoryid',
   'industryid',
   'familyid',
@@ -2193,8 +2202,8 @@ function phenomQueryLooksLikePcsx(parsed: URL): boolean {
 }
 
 /**
- * Phenom widgets lists: `/jobs` with pagesize / #results (Pinterest).
- * Locale-prefixed `/en/jobs` is HappyDance PHB (Box, Nutanix), not Phenom.
+ * Phenom widgets lists: `/jobs` with pagesize / #results.
+ * Locale-prefixed `/en/jobs` and localless PHB hosts (Pinterest, ServiceNow) are HappyDance.
  */
 function phenomQueryLooksLikeWidgets(parsed: URL): boolean {
   if (!parsed.searchParams.has('pagesize')) return false;
@@ -2220,10 +2229,14 @@ const HAPPYDANCE_BOARD_HOSTS = new Set([
   'careers.box.com',
   'careers.nutanix.com',
   'careers.servicenow.com',
+  'pinterestcareers.com',
 ]);
 
 /** Hosts whose PHB RSS lives at /jobs/xml (not /en/jobs/xml). Axios does not follow ATS redirects. */
-const HAPPYDANCE_LOCALELESS_RSS_HOSTS = new Set(['careers.servicenow.com']);
+const HAPPYDANCE_LOCALELESS_RSS_HOSTS = new Set([
+  'careers.servicenow.com',
+  'pinterestcareers.com',
+]);
 
 function happyDanceJobsPath(path: string): boolean {
   return /^\/[a-z]{2}(?:-[a-z]{2})?\/jobs(?:\/xml)?$/i.test(path);
@@ -2234,6 +2247,7 @@ function happyDanceCompanyHint(host: string): string {
   const token = stripped.split('.')[0] || host;
   if (token === 'box') return 'Box';
   if (token === 'servicenow') return 'ServiceNow';
+  if (token === 'pinterest' || token === 'pinterestcareers') return 'Pinterest';
   return titleCaseToken(token);
 }
 
@@ -2310,7 +2324,7 @@ function startUrlHasExplicitGeoFilter(parsed: URL): boolean {
   for (const [rawKey, rawValue] of parsed.searchParams.entries()) {
     if (!String(rawValue || '').trim()) continue;
     const kl = rawKey.replace(/\[\]$/, '').toLowerCase();
-    if (kl === 'location' || kl === 'locations' || kl === 'country' || kl === 'regionalcountry' || kl === 'geolocationstring') return true;
+    if (kl === 'location' || kl === 'locations' || kl === 'country' || kl === 'countries' || kl === 'regionalcountry' || kl === 'geolocationstring') return true;
   }
   return false;
 }
@@ -2421,6 +2435,8 @@ function parseHappyDanceRssJobs(xml: string, companyHint: string): Array<{
   return parsed;
 }
 
+const HAPPYDANCE_RSS_MAX_BYTES = 16 * 1024 * 1024;
+
 async function fetchHappyDanceBoardJobs(
   pageUrl: string,
   companyHint: string,
@@ -2434,8 +2450,8 @@ async function fetchHappyDanceBoardJobs(
       Accept: 'application/xml, text/xml, */*',
       'User-Agent': PHENOM_BROWSER_UA,
     },
-    maxContentLength: 4 * 1024 * 1024,
-    maxBodyLength: 4 * 1024 * 1024,
+    maxContentLength: HAPPYDANCE_RSS_MAX_BYTES,
+    maxBodyLength: HAPPYDANCE_RSS_MAX_BYTES,
     responseType: 'text',
     transformResponse: [(data) => data],
   });
@@ -2444,7 +2460,10 @@ async function fetchHappyDanceBoardJobs(
   const teams = uniqueQueryValues(parsed, 'team');
   const locations = uniqueQueryValues(parsed, 'location');
   const countries = startUrlHasExplicitGeoFilter(parsed)
-    ? uniqueQueryValues(parsed, 'country')
+    ? [
+        ...uniqueQueryValues(parsed, 'country'),
+        ...uniqueQueryValues(parsed, 'countries'),
+      ]
     : [ATS_DEFAULT_LOCATION_COUNTRY];
   const hint = companyHint || happyDanceCompanyHint(parsed.hostname);
   const allRows = parseHappyDanceRssJobs(res.data, hint);
@@ -2607,7 +2626,7 @@ export function looksLikePhenomBoard(url: string): boolean {
   }
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
-  if (HAPPYDANCE_BOARD_HOSTS.has(host)) return false;
+  if (HAPPYDANCE_BOARD_HOSTS.has(host) || HAPPYDANCE_LOCALELESS_RSS_HOSTS.has(host)) return false;
   if (looksLikeNasActivateBoard(url)) return false;
   // Google Careers uses sort_by=relevance and careers.google.com — not Phenom PCS.
   if (host === 'google.com' || host.endsWith('.google.com') || host === 'goo.gle') {
@@ -3467,6 +3486,8 @@ export interface AtsBoardFetchResult {
   provider: AtsBoardProvider;
   companyHint: string;
   rows: AtsBoardJobRow[];
+  /** Public ATS JSON responded OK but listed no jobs (empty board / maintenance). */
+  confirmedEmpty?: boolean;
 }
 
 /**
@@ -3538,7 +3559,7 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
   }
 
   const srVanityCompany = SMARTRECRUITERS_VANITY_HOSTS[host.replace(/^www\./, '')];
-  if (srVanityCompany && /\/careers-home(?:\/|$)/i.test(path)) {
+  if (srVanityCompany) {
     return {
       provider: 'smartrecruiters',
       companyHint: srVanityCompany,
@@ -4059,9 +4080,14 @@ function finalizeAtsBoardRows(
   pageUrl: string,
   options?: AtsBoardFetchOptions
 ): AtsBoardFetchResult | null {
-  if (!result?.rows?.length) return null;
+  if (!result) return null;
+  if (!result.rows?.length) {
+    return result.confirmedEmpty ? { ...result, rows: [] } : null;
+  }
   const rows = applyAtsBoardSearchAndPageLimits(result.rows, pageUrl, options);
-  if (!rows.length) return null;
+  if (!rows.length) {
+    return result.confirmedEmpty ? { ...result, rows: [] } : null;
+  }
   return { ...result, rows };
 }
 
@@ -4435,14 +4461,30 @@ async function fetchBankOfAmericaBoardJobs(
   return rows.length ? { provider: 'bankofamerica', companyHint, rows } : null;
 }
 
+function smartRecruitersCompanyIds(companyHint: string): string[] {
+  const hint = String(companyHint || '').trim();
+  const ids: string[] = [];
+  const push = (id: string) => {
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  push(hint);
+  if (/^github$/i.test(hint)) {
+    push('GitHub');
+    push('Github');
+    push('github');
+  }
+  return ids;
+}
+
 async function fetchSmartRecruitersAllPages(
   listApiUrl: string,
   extra?: { country?: string; q?: string }
-): Promise<any> {
+): Promise<{ content: any[]; totalFound: number; httpOk: boolean }> {
   const limit = 100;
   let offset = 0;
   const all: any[] = [];
   let totalFound = Infinity;
+  let httpOk = false;
   while (offset < totalFound && offset < 5000) {
     const u = new URL(listApiUrl);
     if (extra?.country) u.searchParams.set('country', extra.country);
@@ -4450,14 +4492,18 @@ async function fetchSmartRecruitersAllPages(
     u.searchParams.set('limit', String(limit));
     u.searchParams.set('offset', String(offset));
     const res = await httpClient.get(u.toString(), { headers: { Accept: 'application/json' } });
-    if (res.status >= 400 || !res.data) break;
+    if (res.status >= 400 || !res.data) {
+      if (offset === 0) return { content: [], totalFound: 0, httpOk: false };
+      break;
+    }
+    httpOk = true;
     const batch = Array.isArray(res.data?.content) ? res.data.content : [];
     totalFound = typeof res.data?.totalFound === 'number' ? res.data.totalFound : batch.length;
     all.push(...batch);
     if (batch.length < limit) break;
     offset += limit;
   }
-  return { content: all, totalFound: all.length };
+  return { content: all, totalFound: all.length, httpOk };
 }
 
 /**
@@ -4575,16 +4621,29 @@ export async function fetchAtsBoardJobs(
     }
 
     let data: any;
+    let smartRecruitersHttpOk = false;
     if (detected.provider === 'smartrecruiters') {
       const filters = parseSmartRecruitersBoardFilters(pageUrl);
-      data = await fetchSmartRecruitersAllPages(detected.listApiUrl, {
-        country: filters.countryCode,
-        q: filters.q,
-      });
+      let fetched: { content: any[]; totalFound: number; httpOk: boolean } = {
+        content: [],
+        totalFound: 0,
+        httpOk: false,
+      };
+      for (const companyId of smartRecruitersCompanyIds(detected.companyHint)) {
+        const listApiUrl = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
+          companyId
+        )}/postings`;
+        fetched = await fetchSmartRecruitersAllPages(listApiUrl, {
+          country: filters.countryCode,
+          q: filters.q,
+        });
+        if (fetched.httpOk) smartRecruitersHttpOk = true;
+        if (fetched.content.length) break;
+      }
       data = {
-        ...data,
+        ...fetched,
         content: filterSmartRecruitersPostings(
-          Array.isArray(data?.content) ? data.content : [],
+          Array.isArray(fetched.content) ? fetched.content : [],
           pageUrl
         ),
       };
@@ -4614,7 +4673,21 @@ export async function fetchAtsBoardJobs(
         return null;
     }
 
-    if (!rows.length) return null;
+    if (!rows.length) {
+      if (detected.provider === 'smartrecruiters' && smartRecruitersHttpOk) {
+        return finalizeAtsBoardRows(
+          {
+            provider: detected.provider,
+            companyHint: detected.companyHint,
+            rows: [],
+            confirmedEmpty: true,
+          },
+          pageUrl,
+          options
+        );
+      }
+      return null;
+    }
     return finalizeAtsBoardRows(
       {
         provider: detected.provider,
