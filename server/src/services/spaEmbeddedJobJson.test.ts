@@ -31,6 +31,20 @@ describe('spaEmbeddedJobJson', () => {
     expect(parsed?.location).toContain('Cupertino');
   });
 
+  it('parses live Apple JSON.parse hydration wrappers', () => {
+    const job = {
+      postingTitle: 'Hardware Engineer',
+      jobSummary:
+        'Responsibilities include schematic review and bringing up boards. Minimum qualifications include a BS in EE.',
+      locations: [{ name: 'Austin, Texas' }],
+    };
+    const inner = JSON.stringify({ loaderData: { jobDetails: { jobsData: job } } });
+    const html = `<script>window.__staticRouterHydrationData = JSON.parse(${JSON.stringify(inner)});</script>`;
+    const parsed = parseAppleJobsHydration(html, 'https://jobs.apple.com/en-us/details/9/hardware-engineer');
+    expect(parsed?.jobTitle).toBe('Hardware Engineer');
+    expect(parsed?.jobDescription).toMatch(/schematic/i);
+  });
+
   it('parses a double-encoded Apple hydration string', () => {
     const inner = JSON.stringify({
       loaderData: {

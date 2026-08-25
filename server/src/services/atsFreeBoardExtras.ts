@@ -235,6 +235,39 @@ export function detectGoogleCareersBoard(url: string): ExtraBoardDetection | nul
   };
 }
 
+/** Drupal facet keys like field_keyword_05[0]=United States. */
+function ibmDrupalFacetValues(searchParams: URLSearchParams, field: string): string[] {
+  const values: string[] = [];
+  const prefix = `${field}[`;
+  for (const [key, raw] of searchParams.entries()) {
+    if (key !== field && key !== `${field}[]` && !key.startsWith(prefix)) continue;
+    const value = String(raw || '').trim();
+    if (value) values.push(value);
+  }
+  return values;
+}
+
+/**
+ * ibm.com/careers/search is a heavy Drupal/Akamai SPA. Chromium times out or
+ * crashes there. Avature SearchJobs HTML is the same postings, over HTTP.
+ */
+function rewriteIbmMarketingSearchToAvature(parsed: URL): string {
+  const out = new URL('https://careers.ibm.com/SearchJobs');
+  const locations = ibmDrupalFacetValues(parsed.searchParams, 'field_keyword_05');
+  if (locations[0]) out.searchParams.set('location', locations[0]);
+  const q = String(parsed.searchParams.get('q') || '').trim();
+  if (q) out.searchParams.set('q', q);
+  return out.toString();
+}
+
+function isIbmMarketingCareersSearch(parsed: URL): boolean {
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  if (host !== 'ibm.com') return false;
+  return /(?:^|\/)[a-z]{2}-[a-z]{2}\/careers\/search\/?$|^\/careers\/search\/?$/i.test(
+    parsed.pathname
+  );
+}
+
 /** IBM Careers SearchJobs — free HTML list (exact URL + filters). */
 export function detectIbmCareersBoard(url: string): ExtraBoardDetection | null {
   let parsed: URL;
@@ -244,6 +277,13 @@ export function detectIbmCareersBoard(url: string): ExtraBoardDetection | null {
     return null;
   }
   const host = parsed.hostname.toLowerCase();
+  if (isIbmMarketingCareersSearch(parsed)) {
+    return {
+      provider: 'ibmcareers',
+      companyHint: 'IBM',
+      listApiUrl: rewriteIbmMarketingSearchToAvature(parsed),
+    };
+  }
   if (host !== 'careers.ibm.com' && host !== 'ibmglobal.avature.net') return null;
   if (/JobDetail/i.test(parsed.pathname)) return null;
   if (!/SearchJobs/i.test(parsed.pathname)) return null;

@@ -1321,7 +1321,7 @@ function htmlFieldsUsable(fields: ParsedJobFields, html: string): boolean {
   return !isThinParse(fields, Buffer.byteLength(html || '', 'utf8'));
 }
 
-async function fetchHtmlDocument(url: string): Promise<string | null> {
+async function fetchHtmlDocument(url: string): Promise<{ html: string; cookie?: string } | null> {
   const res = await httpClient.get(url, {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
@@ -1335,16 +1335,16 @@ async function fetchHtmlDocument(url: string): Promise<string | null> {
     maxBodyLength: 4 * 1024 * 1024,
   });
   if (res.status >= 400 || !res.data) return null;
-  return String(res.data);
+  return { html: String(res.data), cookie: cookieHeaderFromSetCookie(res.headers) };
 }
 
 async function fetchAppleJobsPosting(pageUrl: string): Promise<AtsFetchResult | null> {
-  const html = await fetchHtmlDocument(pageUrl);
-  if (html) {
-    const hydrated = parseAppleJobsHydration(html, pageUrl);
-    const parsed = hydrated || parseJobPageHtml(html, pageUrl);
+  const page = await fetchHtmlDocument(pageUrl);
+  if (page?.html) {
+    const hydrated = parseAppleJobsHydration(page.html, pageUrl);
+    const parsed = hydrated || parseJobPageHtml(page.html, pageUrl);
     parsed.companyName = 'Apple';
-    if (htmlFieldsUsable(parsed, html)) {
+    if (htmlFieldsUsable(parsed, page.html)) {
       return {
         provider: 'applejobs',
         fields: parsed,
@@ -1356,110 +1356,94 @@ async function fetchAppleJobsPosting(pageUrl: string): Promise<AtsFetchResult | 
   const positionId = applePositionIdFromUrl(pageUrl);
   const locale = pageUrl.match(/jobs\.apple\.com\/([a-z]{2}-[a-z]{2})\//i)?.[1] || 'en-us';
   const slug = decodeURIComponent(pageUrl.split('/').filter(Boolean).pop() || '').replace(/-/g, ' ');
-  const res = await httpClient.post(
-    'https://jobs.apple.com/api/role/search',
-    {
-      query: slug && !/^\d/.test(slug) ? slug : '',
-      locale,
-      filters: {},
-      page: 1,
-    },
-    {
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Origin: 'https://jobs.apple.com',
-        Referer: pageUrl,
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  try {
+    const res = await httpClient.post(
+      'https://jobs.apple.com/api/role/search',
+      {
+        query: positionId.replace(/-\d+$/, '') || slug,
+        locale,
+        filters: { postingpostLocation: ['postLocation-USA'] },
+        page: 1,
       },
-    }
-  );
-  const rows = Array.isArray(res.data?.searchResults) ? res.data.searchResults : [];
-  const match = rows.find((row: any) => {
-    const id = String(row?.positionId || row?.id || '');
-    return id && (id === positionId || positionId.startsWith(`${id}-`) || positionId.startsWith(id));
-  });
-  if (!match) return null;
-  const fields = mapAppleSearchResult(match, pageUrl);
-  fields.companyName = 'Apple';
-  if (!fields.jobTitle && !fields.jobDescription) return null;
-  return { provider: 'applejobs', fields, externalJobId: positionId || undefined };
+      {
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Origin: 'https://jobs.apple.com',
+          Referer: pageUrl,
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        },
+      }
+    );
+    if (res.status >= 400 || typeof res.data === 'string') return null;
+    const rows = Array.isArray(res.data?.searchResults) ? res.data.searchResults : [];
+    const match = rows.find((row: any) => {
+      const id = String(row?.positionId || row?.id || '');
+      return id && (id === positionId || positionId.startsWith(`${id}-`) || positionId.startsWith(id));
+    });
+    if (!match) return null;
+    const fields = mapAppleSearchResult(match, pageUrl);
+    fields.companyName = 'Apple';
+    if (!fields.jobTitle && !fields.jobDescription) return null;
+    return { provider: 'applejobs', fields, externalJobId: positionId || undefined };
+  } catch (error) {
+    if (error instanceof UnsafeOutboundUrlError) throw error;
+    return null;
+  }
 }
 
 async function fetchMicrosoftCareersPosting(pageUrl: string): Promise<AtsFetchResult | null> {
-  const html = await fetchHtmlDocument(pageUrl);
   const jobId = microsoftJobIdFromUrl(pageUrl);
-  if (html) {
-    const fromDdo = parsePhenomJobDdo(html, pageUrl);
-    const parsed = fromDdo || parseJobPageHtml(html, pageUrl);
-    parsed.companyName = parsed.companyName || 'Microsoft';
-    if (htmlFieldsUsable(parsed, html)) {
-      return { provider: 'microsoftcareers', fields: parsed, externalJobId: jobId || undefined };
+  const page = await fetchHtmlDocument(pageUrl);
+  if (page?.html) {
+    const fromDdo = parsePhenomJobDdo(page.html, pageUrl);
+    if (fromDdo) {
+      fromDdo.companyName = fromDdo.companyName || 'Microsoft';
+      if (htmlFieldsUsable(fromDdo, page.html)) {
+        return { provider: 'microsoftcareers', fields: fromDdo, externalJobId: jobId || undefined };
+      }
     }
   }
-  if (!html || !jobId) return null;
+  if (!jobId) return null;
 
-  let origin = '';
+  const applyOrigin = 'https://apply.careers.microsoft.com';
+  const home = await fetchHtmlDocument(`${applyOrigin}/?domain=microsoft.com`);
+  const jsonHeaders = phenomJsonRequestHeaders(
+    applyOrigin,
+    `${applyOrigin}/?domain=microsoft.com`,
+    home?.cookie
+  );
   try {
-    origin = new URL(pageUrl).origin;
-  } catch {
+    const search = await httpClient.get(`${applyOrigin}/api/pcsx/search`, {
+      params: { domain: 'microsoft.com', query: jobId, start: 0 },
+      headers: jsonHeaders,
+    });
+    const positions = Array.isArray(search.data?.data?.positions) ? search.data.data.positions : [];
+    const match = positions.find((row: any) => {
+      const ids = [row?.id, row?.atsJobId, row?.displayJobId, row?.ats_job_id, row?.display_job_id].map((value) =>
+        String(value || '')
+      );
+      return ids.includes(jobId);
+    });
+    if (!match?.id) return null;
+    const detail = await httpClient.get(
+      `${applyOrigin}/api/apply/v2/jobs/${encodeURIComponent(String(match.id))}`,
+      { headers: jsonHeaders }
+    );
+    if (detail.status >= 400 || !detail.data || typeof detail.data === 'string') return null;
+    const fields = mapEightfold(detail.data, 'Microsoft', pageUrl);
+    fields.companyName = 'Microsoft';
+    fields.applyUrl = pageUrl;
+    if (/^ats$/i.test(fields.employmentType)) fields.employmentType = '';
+    if (!fields.jobTitle || !fields.jobDescription || isJunkDescription(fields.jobDescription)) {
+      return null;
+    }
+    return { provider: 'microsoftcareers', fields, externalJobId: jobId };
+  } catch (error) {
+    if (error instanceof UnsafeOutboundUrlError) throw error;
     return null;
   }
-  const config = parsePhenomConfigFromHtml(html, pageUrl);
-  const payloads: Record<string, unknown>[] = [
-    {
-      lang: 'en_us',
-      deviceType: 'desktop',
-      country: 'us',
-      ddoKey: 'jobDetail',
-      jobId,
-      fromSource: 'JPM',
-      pageName: 'job-description',
-      siteType: 'external',
-      ...(config?.refNum ? { refNum: config.refNum } : {}),
-    },
-    {
-      lang: 'en_us',
-      deviceType: 'desktop',
-      country: 'us',
-      ddoKey: 'refineSearch',
-      keywords: jobId,
-      jobs: true,
-      counts: false,
-      from: 0,
-      size: 10,
-      pageName: 'search-results',
-      global: true,
-      selected_fields: {},
-      ...(config?.refNum ? { refNum: config.refNum } : {}),
-    },
-  ];
-  for (const body of payloads) {
-    try {
-      const res = await httpClient.post(`${origin}/widgets`, body, {
-        headers: {
-          ...phenomJsonRequestHeaders(origin, pageUrl),
-          'Content-Type': 'application/json',
-        },
-      });
-      if (res.status >= 400 || !res.data) continue;
-      const job =
-        res.data?.jobDetail?.data?.job ||
-        res.data?.jobDetail?.job ||
-        res.data?.refineSearch?.data?.jobs?.[0] ||
-        res.data?.data?.job ||
-        res.data?.data?.jobs?.[0];
-      if (!job || typeof job !== 'object') continue;
-      const fields = mapPhenomJobRecord(job as Record<string, unknown>, pageUrl);
-      fields.companyName = fields.companyName || 'Microsoft';
-      if (!fields.jobTitle && !fields.jobDescription) continue;
-      return { provider: 'microsoftcareers', fields, externalJobId: jobId };
-    } catch (error) {
-      if (error instanceof UnsafeOutboundUrlError) throw error;
-    }
-  }
-  return null;
 }
 
 async function fetchIbmCareersHtml(pageUrl: string): Promise<string> {
@@ -2278,7 +2262,10 @@ export async function discoverPhenomSiteConfig(
   } catch {
     return null;
   }
-  const candidates = [`${origin}/careers`, `${origin}/`, pageUrl];
+  const host = new URL(pageUrl).hostname.toLowerCase().replace(/^www\./, '');
+  const candidates = isMicrosoftCareersHost(host)
+    ? [`${origin}/global/en/search-results`, `${origin}/us/en/search-results`, pageUrl, `${origin}/`]
+    : [`${origin}/careers`, `${origin}/`, pageUrl];
   let cookie: string | undefined;
   for (const url of candidates) {
     try {

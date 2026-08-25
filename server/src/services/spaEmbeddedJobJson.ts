@@ -119,8 +119,14 @@ function parseJsonStringLiteral(source: string, start: number): unknown | null {
 function parseValueAfterMarker(html: string, marker: RegExp): unknown | null {
   const i = indexOfJsonValue(html, marker);
   if (i < 0 || i >= html.length) return null;
-  if (html[i] === '"') {
-    const inner = parseJsonStringLiteral(html, i);
+  let pos = i;
+  // Live Apple pages assign: staticRouterHydrationData = JSON.parse("...")
+  if (html.slice(pos, pos + 11).toLowerCase() === 'json.parse(') {
+    pos += 11;
+    while (pos < html.length && /\s/.test(html[pos]!)) pos += 1;
+  }
+  if (html[pos] === '"') {
+    const inner = parseJsonStringLiteral(html, pos);
     if (typeof inner === 'string') {
       try {
         return JSON.parse(inner);
@@ -130,7 +136,7 @@ function parseValueAfterMarker(html: string, marker: RegExp): unknown | null {
     }
     return inner;
   }
-  if (html[i] === '{') return parseBalancedJsonObject(html, i);
+  if (html[pos] === '{') return parseBalancedJsonObject(html, pos);
   return null;
 }
 
@@ -145,6 +151,14 @@ function walkFindAppleJob(node: unknown, depth = 0): Record<string, unknown> | n
   }
   if (typeof node !== 'object') return null;
   const obj = node as Record<string, unknown>;
+  const details = (obj.loaderData as Record<string, unknown> | undefined)?.jobDetails as
+    | Record<string, unknown>
+    | undefined;
+  const detailsJob = details?.jobsData;
+  if (detailsJob && typeof detailsJob === 'object' && !Array.isArray(detailsJob)) {
+    const job = detailsJob as Record<string, unknown>;
+    if (job.postingTitle || job.jobSummary || job.minimumQualifications) return job;
+  }
   const nested = obj.jobsData;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const job = nested as Record<string, unknown>;
@@ -171,7 +185,7 @@ export function parseAppleJobsHydration(html: string, pageUrl = ''): EmbeddedJob
   if (!html || !/staticRouterHydrationData/i.test(html)) return null;
   const payload = parseValueAfterMarker(
     html,
-    /(?:window\.)?__staticRouterHydrationData\s*=/i
+    /(?:window\.)?_{0,2}staticRouterHydrationData\s*=/i
   );
   const job = walkFindAppleJob(payload);
   if (!job) return null;

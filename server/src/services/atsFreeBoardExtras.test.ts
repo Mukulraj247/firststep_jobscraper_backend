@@ -58,6 +58,20 @@ describe('atsFreeBoardExtras detection', () => {
     expect(detectIbmCareersBoard('https://careers.ibm.com/')).toBeNull();
   });
 
+  it('rewrites ibm.com marketing careers search onto Avature SearchJobs', () => {
+    const start =
+      'https://www.ibm.com/in-en/careers/search?field_keyword_08[0]=Software%20Engineering&field_keyword_08[1]=Infrastructure%20%26%20Technology&field_keyword_08[2]=Data%20%26%20Analytics&field_keyword_08[3]=Security&field_keyword_05[0]=United%20States&sort=dcdate_desc';
+    const d = detectIbmCareersBoard(start);
+    expect(d?.provider).toBe('ibmcareers');
+    expect(d?.listApiUrl).toMatch(/^https:\/\/careers\.ibm\.com\/SearchJobs/i);
+    expect(d?.listApiUrl).toContain('location=United');
+    expect(detectIbmCareersBoard('https://www.ibm.com/employment/')).toBeNull();
+    expect(detectIbmCareersBoard('https://www.ibm.com/cloud/jobs')).toBeNull();
+    expect(detectIbmCareersBoard('https://ibm.com/careers/search')?.listApiUrl).toBe(
+      'https://careers.ibm.com/SearchJobs'
+    );
+  });
+
   it('detectExtraAtsBoard prefers Workday when host matches', () => {
     expect(
       detectExtraAtsBoard('https://intel.wd1.myworkdayjobs.com/External')?.provider

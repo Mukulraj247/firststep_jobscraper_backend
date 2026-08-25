@@ -467,6 +467,11 @@ describe('detectAtsBoard', () => {
     expect(
       detectAtsBoard('https://careers.ibm.com/job/123/JobDetail?jobId=456')
     ).toBeNull();
+    const ibmMarketing = detectAtsBoard(
+      'https://www.ibm.com/in-en/careers/search?field_keyword_05[0]=United%20States'
+    );
+    expect(ibmMarketing?.provider).toBe('ibmcareers');
+    expect(ibmMarketing?.listApiUrl).toMatch(/careers\.ibm\.com\/SearchJobs/i);
   });
 });
 
