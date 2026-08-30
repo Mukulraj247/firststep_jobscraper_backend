@@ -13,8 +13,14 @@ type PinnedLookupCallback = (error: NodeJS.ErrnoException | null, address: strin
 type LookupAddress = { address: string; family: number };
 
 export function createPinnedLookup(address: string, family: number) {
+  return createAllowlistLookup([{ address, family }]);
+}
+
+/** DNS lookup that may use any SSRF-validated address for a CDN host. */
+export function createAllowlistLookup(addresses: LookupAddress[]) {
+  const list = addresses.filter((item) => item?.address);
+  const fallback = list[0] || { address: '127.0.0.1', family: 4 };
   return (_hostname: string, options: unknown, callback?: PinnedLookupCallback): void => {
-    // Node http.Agent may call lookup(hostname, cb) or lookup(hostname, options, cb).
     const cb = (typeof options === 'function' ? options : callback) as
       | PinnedLookupCallback
       | ((error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void)
@@ -24,12 +30,10 @@ export function createPinnedLookup(address: string, family: number) {
     }
     const opts = typeof options === 'object' && options ? (options as { all?: boolean }) : null;
     if (opts?.all) {
-      (cb as (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void)(null, [
-        { address, family },
-      ]);
+      (cb as (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void)(null, list);
       return;
     }
-    (cb as PinnedLookupCallback)(null, address, family);
+    (cb as PinnedLookupCallback)(null, fallback.address, fallback.family);
   };
 }
 

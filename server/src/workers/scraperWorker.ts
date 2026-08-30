@@ -13,6 +13,10 @@ import {
   persistExtractedDataForRun,
 } from '../services/automation';
 import { runListExtraction, applySelectorPromotions, primaryItemSelector } from '../services/listExtractor';
+import {
+  LINKEDIN_NO_SESSION_HINT,
+  shouldFailFastLinkedInWithoutSession,
+} from '../services/linkedinSessionGate';
 import { isAggregatorRobot, shouldEnrichHiringCafeDetails } from '../services/aggregatorIdentity';
 import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
 import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
@@ -86,15 +90,18 @@ import {
 import {
   detectAtsBoard,
   fetchAtsBoardJobs,
+  looksLikeFindlyBoard,
   looksLikePhenomBoard,
   looksLikeHappyDanceBoard,
   looksLikeWorkdayBoard,
   looksLikeGreenhouseBoard,
+  looksLikeWayfairCareersBoard,
   startUrlHasCollectionFilters,
   shouldSkipAtsBoardForUiPagination,
   shouldPreferAtsBoardOverUiPagination,
-  isSmartRecruitersVanityHost,
 } from '../services/atsAdapters';
+import { isJibeCareerHost } from '../services/jibeBoardHostsDirectory';
+import { resolveAtsBoardStartUrl } from '../services/careerSiteAtsConfig';
 import { getScrapeHeartbeatMs } from '../utils/scrapeHeartbeat';
 import { isTerminalRunStatus } from '../services/runLifecycle';
 import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
@@ -323,12 +330,20 @@ async function finalizeExtractedListRows(opts: {
   run.status = drift.runStatus;
   run.finishedAt = new Date().toISOString();
   run.duration = computeDuration(run.startedAt);
-  run.errorMessage = drift.errorMessage;
+  run.errorMessage = opts.skipLayoutChangeSuggestion && zeroRowsHint
+    ? zeroRowsHint
+    : drift.errorMessage;
   if (opts.skipLayoutChangeSuggestion) {
+    // Confirmed-empty ATS boards are not selector drift. Do not persist
+    // layout_change from the generic "Zero rows extracted…" drift text.
+    if (!run.failureReason || run.failureReasonSource === 'suggested') {
+      run.failureReason = null;
+      run.failureReasonSource = null;
+    }
     run.normalizedFailureReason = normalizeFailureReason({
       failureReason: run.failureReason,
       failureReasonSource: run.failureReasonSource,
-      errorMessage: run.errorMessage,
+      errorMessage: null,
     });
   } else {
     const suggested = applyLayoutChangeSuggestion({
@@ -412,7 +427,8 @@ async function tryAtsBoardCollection(
   run: any,
   automation: any,
   userId: string,
-  config: Record<string, any>
+  config: Record<string, any>,
+  listStartUrl?: string
 ): Promise<boolean> {
   const saasConfig = getAutomationConfig(automation) as Record<string, any>;
   // Only an explicit `false` disables ATS. Treat missing/undefined as enabled.
@@ -427,13 +443,20 @@ async function tryAtsBoardCollection(
     return false;
   }
 
-  const startUrl = String(automation?.recording_meta?.url || '').trim();
+  const startUrl = String(listStartUrl || automation?.recording_meta?.url || '').trim();
   if (!startUrl) {
     await appendRunLog(run, 'ATS board collection skipped (automation has no URL)', { flush: true });
     return false;
   }
 
-  if (!startUrlHasCollectionFilters(startUrl)) {
+  if (
+    !startUrlHasCollectionFilters(startUrl) &&
+    !looksLikeWorkdayBoard(startUrl) &&
+    !looksLikePhenomBoard(startUrl) &&
+    !looksLikeFindlyBoard(startUrl) &&
+    !isJibeCareerHost(startUrl) &&
+    !looksLikeWayfairCareersBoard(startUrl)
+  ) {
     await appendRunLog(
       run,
       'ATS board skipped (start URL has no collection filters); using browser extraction',
@@ -508,20 +531,37 @@ async function tryAtsBoardCollection(
       Object.keys(fetchOpts).length ? fetchOpts : undefined
     );
   } catch (fetchErr: any) {
+    const skipBrowserForWorkday =
+      detected.provider === 'workday' && looksLikeWorkdayBoard(startUrl);
     await appendRunLog(
       run,
-      detected.provider === 'phenom'
-        ? `ATS board fetch threw for phenom: ${fetchErr?.message || fetchErr}; falling back to browser (keeping filtered start URL)`
-        : `ATS board fetch threw for ${detected.provider}: ${fetchErr?.message || fetchErr}; falling back to browser`,
+      skipBrowserForWorkday
+        ? `ATS board fetch threw for workday: ${fetchErr?.message || fetchErr}; skipping browser fallback (Workday SPA closes Chromium)`
+        : detected.provider === 'phenom'
+          ? `ATS board fetch threw for phenom: ${fetchErr?.message || fetchErr}; falling back to browser (keeping filtered start URL)`
+          : `ATS board fetch threw for ${detected.provider}: ${fetchErr?.message || fetchErr}; falling back to browser`,
       { flush: true }
     );
+    if (skipBrowserForWorkday) {
+      await finalizeExtractedListRows({
+        run,
+        automation,
+        userId,
+        rows: [],
+        extractionMethod: 'ats_board',
+        atsProvider: detected.provider,
+        skipLayoutChangeSuggestion: true,
+        zeroRowsHint: `ATS board API for workday failed: ${fetchErr?.message || fetchErr}`,
+      });
+      return true;
+    }
     return false;
   }
 
   if (!board || !board.rows.length) {
-    const skipBrowserForEmptySrVanity =
-      detected.provider === 'smartrecruiters' && isSmartRecruitersVanityHost(startUrl);
-    if (board?.confirmedEmpty || skipBrowserForEmptySrVanity) {
+    const skipBrowserForWorkday =
+      detected.provider === 'workday' && looksLikeWorkdayBoard(startUrl);
+    if (board?.confirmedEmpty || skipBrowserForWorkday) {
       await appendRunLog(
         run,
         `ATS board fetch confirmed 0 jobs for ${detected.provider}/${detected.companyHint}; skipping browser fallback`,
@@ -583,6 +623,7 @@ async function processConfiguredListExtraction(
     isolatedBrowserKey?: string;
     blockResources?: boolean;
     onPoolKey?: (poolKey: string) => void;
+    listStartUrl?: string;
   }
 ): Promise<{ poolKey: string }> {
   const lease = await acquirePooledPage({
@@ -597,10 +638,14 @@ async function processConfiguredListExtraction(
   options?.onPoolKey?.(poolKey);
   const page = lease.page;
 
+  const listStartUrl = String(
+    options?.listStartUrl || automation?.recording_meta?.url || ''
+  ).trim();
+
   try {
     await appendRunLog(
       run,
-      `Starting configured list extraction on ${safeOutboundUrlLogLabel(automation.recording_meta.url)}`,
+      `Starting configured list extraction on ${safeOutboundUrlLogLabel(listStartUrl)}`,
       { flush: true }
     );
     await applyAutomationRuntimeConfig(page, automation);
@@ -670,7 +715,7 @@ async function processConfiguredListExtraction(
       extractionConfig.pagination.loadMoreWaitMs = config.pagination.loadMoreWaitMs;
     }
 
-    const extractionResult = await runListExtraction(page, automation.recording_meta.url, extractionConfig);
+    const extractionResult = await runListExtraction(page, listStartUrl, extractionConfig);
     let rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
     const promotions = Array.isArray(extractionResult?.selectorPromotions)
       ? extractionResult.selectorPromotions
@@ -1174,10 +1219,28 @@ export async function runScraperJobPayload(
 
     const useListExtraction = hasConfiguredListExtraction || isUrlOnlyAutomation;
 
+    const listStartResolved = resolveAtsBoardStartUrl(
+      String(automation?.recording_meta?.url || '').trim()
+    );
+    const listStartUrl = listStartResolved.url;
+    if (listStartResolved.adjusted) {
+      await appendRunLog(
+        run,
+        `${listStartResolved.reason} → ${safeOutboundUrlLogLabel(listStartUrl)} (recorded URL unchanged in robot)`,
+        { flush: true }
+      );
+    }
+
     // Phase 2: ATS board JSON before identity/proxy/Chromium.
     if (useListExtraction) {
       try {
-        const atsDone = await tryAtsBoardCollection(run, automation, String(userId), config || {});
+        const atsDone = await tryAtsBoardCollection(
+          run,
+          automation,
+          String(userId),
+          config || {},
+          listStartUrl
+        );
         if (atsDone) {
           if (targetHost) recordHostSuccess(targetHost);
           return;
@@ -1191,6 +1254,32 @@ export async function runScraperJobPayload(
           `ATS board collection failed (${atsError?.message || atsError}); falling back to browser`,
           { flush: true }
         );
+      }
+    }
+
+    // LinkedIn without cookies/session → login wall + long ZeroRows. Fail fast.
+    if (useListExtraction) {
+      const reuseSession = config?.reuseSession !== false;
+      const hasReusableStorageState =
+        reuseSession && (await sessionStateExists(String(userId), automationId));
+      if (
+        shouldFailFastLinkedInWithoutSession({
+          url: listStartUrl || automation?.recording_meta?.url,
+          cookies: config?.cookies,
+          hasReusableStorageState,
+        })
+      ) {
+        await appendRunLog(run, LINKEDIN_NO_SESSION_HINT, { flush: true });
+        await finalizeExtractedListRows({
+          run,
+          automation,
+          userId: String(userId),
+          rows: [],
+          extractionMethod: 'browser',
+          skipLayoutChangeSuggestion: true,
+          zeroRowsHint: LINKEDIN_NO_SESSION_HINT,
+        });
+        return;
       }
     }
 
@@ -1251,7 +1340,7 @@ export async function runScraperJobPayload(
               String(userId),
               config,
               selectedIdentity,
-              { onPoolKey: rememberPoolKey }
+              { onPoolKey: rememberPoolKey, listStartUrl }
             );
             executionResult = result;
             extractionPoolKey = result.poolKey;
@@ -1305,6 +1394,7 @@ export async function runScraperJobPayload(
                 isolatedBrowserKey: isolatedKey,
                 blockResources: false,
                 onPoolKey: rememberPoolKey,
+                listStartUrl,
               }
             );
             executionResult = fallbackResult;

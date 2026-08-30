@@ -847,6 +847,32 @@ export function extractJsonLdBlocks(html: string): string[] {
 }
 
 export function parseJsonLdJobPosting(html: string, pageUrl?: string): ParsedJobFields | null {
+  const rows = parseJsonLdJobPostingList(html, pageUrl);
+  if (!rows.length) return null;
+  const first = rows[0];
+  const fields = emptyFields();
+  fields.source = 'jsonld';
+  fields.jobTitle = String(first.title || '');
+  fields.companyName = String(first.company || '');
+  fields.jobDescription = String(first.description || '');
+  fields.location = String(first.location || '');
+  fields.salaryRange = String(first.salary || first.salaryRange || '');
+  fields.employmentType = String(first.employmentType || '');
+  fields.date = String(first.date || '');
+  fields.applyUrl = String(first.url || '');
+  fields.companyLogoUrl = String(first.image || first.companyLogoUrl || '');
+  if (/remote/i.test(String(first.remoteType || ''))) fields.remoteType = 'Remote';
+  return fields;
+}
+
+/**
+ * Parse all Schema.org JobPosting entries from page HTML into list rows.
+ * Used by cloud list extraction when DOM item selectors match nothing.
+ */
+export function parseJsonLdJobPostingList(
+  html: string,
+  pageUrl?: string
+): Record<string, string>[] {
   const blocks = extractJsonLdBlocks(html);
   const postings: any[] = [];
   for (const block of blocks) {
@@ -856,25 +882,39 @@ export function parseJsonLdJobPosting(html: string, pageUrl?: string): ParsedJob
       // malformed JSON-LD — skip
     }
   }
-  if (postings.length === 0) return null;
-  const job = postings[0];
-  const companyRaw = String(job.hiringOrganization?.name || '').trim();
-  const fields = emptyFields();
-  fields.source = 'jsonld';
-  fields.jobTitle = decodeHtmlEntities(String(job.title || ''));
-  fields.companyName = sanitizeCompanyName(companyRaw);
-  fields.jobDescription = stripHtmlTags(job.description || '');
-  if (isJunkDescription(fields.jobDescription)) fields.jobDescription = '';
-  fields.location = formatLocation(job.jobLocation);
-  fields.salaryRange = formatSalary(job.baseSalary);
-  fields.employmentType = normalizeEmploymentType(job.employmentType);
-  if (job.jobLocationType === 'TELECOMMUTE' || job.jobLocationType === 'REMOTE') {
-    fields.remoteType = 'Remote';
+  const rows: Record<string, string>[] = [];
+  for (const job of postings) {
+    const title = decodeHtmlEntities(String(job.title || '')).trim();
+    const companyRaw = String(job.hiringOrganization?.name || '').trim();
+    const company = sanitizeCompanyName(companyRaw);
+    let description = stripHtmlTags(job.description || '');
+    if (isJunkDescription(description)) description = '';
+    const location = formatLocation(job.jobLocation);
+    const salary = formatSalary(job.baseSalary);
+    const employmentType = normalizeEmploymentType(job.employmentType);
+    const date = String(job.datePosted || '').trim();
+    const url = String(job.url || job.applyUrl || job.applicationUrl || '').trim();
+    const image = logoFromOrg(job.hiringOrganization, pageUrl);
+    const remoteType =
+      job.jobLocationType === 'TELECOMMUTE' || job.jobLocationType === 'REMOTE' ? 'Remote' : '';
+    if (!title && !url && !company) continue;
+    rows.push({
+      title,
+      company,
+      description,
+      location,
+      salary,
+      salaryRange: salary,
+      employmentType,
+      date,
+      url,
+      image,
+      companyLogoUrl: image,
+      companyUrl: String(job.hiringOrganization?.sameAs || '').trim(),
+      ...(remoteType ? { remoteType } : {}),
+    });
   }
-  fields.date = String(job.datePosted || '').trim();
-  fields.applyUrl = String(job.url || job.applyUrl || job.applicationUrl || '').trim();
-  fields.companyLogoUrl = logoFromOrg(job.hiringOrganization, pageUrl);
-  return fields;
+  return rows;
 }
 
 function metaContent(html: string, propertyOrName: string): string {

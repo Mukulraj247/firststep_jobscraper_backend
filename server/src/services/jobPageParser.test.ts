@@ -13,6 +13,7 @@ import {
   normalizeJobDescription,
   parseJobPageHtml,
   parseJsonLdJobPosting,
+  parseJsonLdJobPostingList,
   parseMetaTags,
   pickBestDescription,
   preferJobUrlTitle,
@@ -72,6 +73,26 @@ describe('jobPageParser', () => {
     expect(parsed?.applyUrl).toContain('jobs.acme.com');
     expect(parsed?.companyLogoUrl).toContain('logo.png');
     expect(parsed?.source).toBe('jsonld');
+  });
+
+  it('parses multiple JobPosting JSON-LD blocks into list rows', () => {
+    const html = `<!DOCTYPE html><html><head>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"JobPosting","title":"Role A","hiringOrganization":{"name":"Acme"},"url":"https://jobs.acme.com/a"}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+  {"@type":"JobPosting","title":"Role B","hiringOrganization":{"name":"Beta Inc"},"url":"https://jobs.beta.com/b"}
+]}
+</script>
+</head><body></body></html>`;
+    const rows = parseJsonLdJobPostingList(html);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].title).toBe('Role A');
+    expect(rows[0].company).toBe('Acme');
+    expect(rows[0].url).toContain('/a');
+    expect(rows[1].title).toBe('Role B');
+    expect(rows[1].company).toBe('Beta Inc');
   });
 
   it('rejects portal company names', () => {

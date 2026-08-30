@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   assertPinnedPeerAddress,
   assertPinnedPeerInAllowlist,
+  createAllowlistLookup,
   createPinnedLookup,
   requestSafeOutboundUrl,
 } from './safeOutboundHttp';
@@ -18,6 +19,19 @@ describe('pinned outbound HTTP transport', () => {
     const twoArg = vi.fn();
     lookup('hooks.example', twoArg as any);
     expect(twoArg).toHaveBeenCalledWith(null, '203.0.113.10', 4);
+  });
+
+  it('returns every validated CDN address when lookup asks for all', () => {
+    const lookup = createAllowlistLookup([
+      { address: '203.0.113.10', family: 4 },
+      { address: '203.0.113.11', family: 4 },
+    ]);
+    const callback = vi.fn();
+    lookup('cdn.example', { all: true }, callback);
+    expect(callback).toHaveBeenCalledWith(null, [
+      { address: '203.0.113.10', family: 4 },
+      { address: '203.0.113.11', family: 4 },
+    ]);
   });
 
   it('refuses a changed peer address', () => {

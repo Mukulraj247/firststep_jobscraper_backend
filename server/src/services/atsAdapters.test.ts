@@ -4,6 +4,8 @@ import {
   detectAtsBoard,
   normalizeCareerSearchKeywords,
   parseSmartRecruitersBoardFilters,
+  parseJibeBoardFilters,
+  parseWayfairBoardFilters,
   filterSmartRecruitersPostings,
   shouldSkipScrapeDoUrl,
   shouldNeverScrapeDoUrl,
@@ -31,6 +33,7 @@ import {
   looksLikeHappyDanceBoard,
   looksLikeWorkdayBoard,
   looksLikeGreenhouseBoard,
+  isSalesforceMarketingJobsUrl,
   applyAtsBoardSearchAndPageLimits,
   startUrlHasCollectionFilters,
   parsePhenomConfigFromHtml,
@@ -129,6 +132,16 @@ describe('startUrlHasCollectionFilters', () => {
     {
       name: 'Cardinal Health NAS Activate category + country',
       url: 'https://jobs.cardinalhealth.com/search/searchjobs?regionalcountry=United+States&categoryid=a266442d-10a4-4adf-9806-354dc8644a33',
+      expect: true,
+    },
+    {
+      name: 'Intuit Phenom /search-jobs with tracking query only',
+      url: 'https://jobs.intuit.com/search-jobs?cid=directBookmarked_directBookmarked&_gl=1*9qw10m*_gcl_au*NDIxNDI2NjkyLjE3ODc2NDUyMzg.*_ga*OTQ3MDE5NTg5LjE3ODc2NDUyNDI.*_ga_B0XHEYG9RN*czE3ODc2NDUyNDIkbzEkZzAkdDE3ODc2NDUyNDIkajYwJGwwJGgw',
+      expect: true,
+    },
+    {
+      name: 'Intuit Phenom /search-jobs with no query',
+      url: 'https://jobs.intuit.com/search-jobs',
       expect: true,
     },
   ];
@@ -589,34 +602,51 @@ describe('detectAtsBoard', () => {
     expect(d?.listApiUrl).toContain('companies/AcmeCorp/postings');
   });
 
-  it('detects GitHub SmartRecruiters connected career site (careers-home)', () => {
+  it('detects GitHub Jibe career site (careers-home)', () => {
     const url =
       'https://www.github.careers/careers-home/jobs?keywords=untied%20states&categories=Engineering%7CIT%7CMachine%20learning%20%26%20AI%7CSecurity&page=1&sortBy=posted_date&descending=true';
     const d = detectAtsBoard(url);
-    expect(d?.provider).toBe('smartrecruiters');
+    expect(d?.provider).toBe('jibe');
     expect(d?.companyHint).toBe('GitHub');
-    expect(d?.listApiUrl).toBe('https://api.smartrecruiters.com/v1/companies/GitHub/postings');
-    expect(detectAtsBoard('https://www.github.careers/careers-home')?.provider).toBe(
-      'smartrecruiters'
-    );
-    expect(detectAtsBoard('https://www.github.careers')?.provider).toBe('smartrecruiters');
+    expect(d?.listApiUrl).toBe('https://githubinc.jibeapply.com/api/jobs');
+    expect(detectAtsBoard('https://www.github.careers/careers-home')?.provider).toBe('jibe');
+    expect(detectAtsBoard('https://www.github.careers')?.provider).toBe('jibe');
     expect(detectAtsBoard('https://www.github.careers/')?.companyHint).toBe('GitHub');
   });
 
-  it('autofixes untied→united and parses SR location + category filters', () => {
+  it('detects UHS Jibe career site (not Phenom)', () => {
+    const d = detectAtsBoard('https://jobs.uhsinc.com');
+    expect(d?.provider).toBe('jibe');
+    expect(d?.companyHint).toBe('UHS');
+    expect(d?.listApiUrl).toBe('https://uhs.jibeapply.com/api/jobs');
+    expect(looksLikePhenomBoard('https://jobs.uhsinc.com')).toBe(false);
+    expect(looksLikePhenomBoard('https://jobs.uhsinc.com/careers/jobs')).toBe(false);
+  });
+
+  it('detects Wayfair careers jobs board', () => {
+    const url =
+      'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology&locationIds=&stateIds=';
+    const d = detectAtsBoard(url);
+    expect(d?.provider).toBe('wayfair');
+    expect(d?.companyHint).toBe('Wayfair');
+    expect(d?.listApiUrl).toBe('https://www.wayfair.com/a/careers/careers/job_search_data');
+    expect(startUrlHasCollectionFilters(url)).toBe(true);
+  });
+
+  it('autofixes untied→united and parses Jibe location + category filters', () => {
     const url =
       'https://www.github.careers/careers-home/jobs?keywords=untied%20states&categories=Engineering%7CIT%7CMachine%20learning%20%26%20AI%7CSecurity';
     expect(normalizeCareerSearchKeywords('untied states')).toBe('united states');
-    const filters = parseSmartRecruitersBoardFilters(url);
+    const filters = parseJibeBoardFilters(url);
     expect(filters.keywords).toBe('united states');
-    expect(filters.countryCode).toBe('us');
     expect(filters.categories).toEqual([
       'Engineering',
       'IT',
       'Machine learning & AI',
       'Security',
     ]);
-    expect(filters.q).toBeUndefined();
+    const srFilters = parseSmartRecruitersBoardFilters(url);
+    expect(srFilters.countryCode).toBe('us');
   });
 
   it('keeps SmartRecruiters jobs that match US and selected categories', () => {
@@ -671,10 +701,22 @@ describe('detectAtsBoard', () => {
       'https://careers.dxc.com/job-search-results/?compliment[]=United%20States&category[]=Software%20Engineering&pg=1'
     );
     expect(dxc?.provider).toBe('findly');
+    expect(dxc?.companyHint).toBe('DXC');
     expect(dxc?.listApiUrl).toContain('m-cloud.io');
 
     const findlyHost = detectAtsBoard('https://acme.site.findly.com/job-search-results/');
     expect(findlyHost?.provider).toBe('findly');
+  });
+
+  it('detects Phenom directory hosts before Findly /job-search-results heuristic', () => {
+    const travelers = 'https://careers.travelers.com/job-search-results';
+    expect(looksLikeFindlyBoard(travelers)).toBe(false);
+    expect(looksLikePhenomBoard(travelers)).toBe(true);
+    expect(detectAtsBoard(travelers)?.provider).toBe('phenom');
+    expect(detectAtsBoard(travelers)?.companyHint).toBe('Travelers');
+    expect(detectAtsBoard('https://careers.travelers.com/us/en/search-results')?.provider).toBe(
+      'phenom'
+    );
   });
 
   it('detects SuccessFactors search URLs', () => {
@@ -787,6 +829,7 @@ describe('detectAtsBoard', () => {
     const url =
       'https://www.salesforce.com/company/careers/jobs/?country=United+States+of+America&team=Data&team=Software+Engineering&team=Development+%26+Strategy&team=Enterprise+Technology+%26+Infrastructure&page=1';
     expect(shouldPreferAtsBoardOverUiPagination(url)).toBe(true);
+    expect(isSalesforceMarketingJobsUrl(url)).toBe(true);
     expect(shouldPreferAtsBoardOverUiPagination('https://www.salesforce.com')).toBe(false);
     expect(shouldPreferAtsBoardOverUiPagination('https://careers.example.com/jobs')).toBe(false);
   });
@@ -852,7 +895,7 @@ describe('detectAtsBoard', () => {
     expect(fromJob?.listApiUrl).toContain('/wday/cxs/td/TD_Bank_Careers/jobs');
     const fromHost = detectAtsBoard('https://broadcom.wd1.myworkdayjobs.com');
     expect(fromHost?.provider).toBe('workday');
-    expect(fromHost?.listApiUrl).toContain('/wday/cxs/broadcom/__resolve__/jobs');
+    expect(fromHost?.listApiUrl).toContain('/wday/cxs/broadcom/External_Career/jobs');
   });
 
   it('detects Workable / Recruitee / BambooHR / Personio / Breezy boards', () => {
@@ -1191,6 +1234,52 @@ describe('fetchAtsBoardJobs', () => {
   }
   });
 
+  it('keeps Salesforce Workday jobs that list a US city instead of United States of America', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          total: 2,
+          jobPostings: [
+            {
+              title: 'Software Engineer, AI Applications',
+              externalPath: '/job/California---San-Francisco/Software-Engineer--AI-Applications_JR357086',
+              locationsText: 'California - San Francisco',
+            },
+            {
+              title: 'Lead Network Engineer',
+              externalPath: '/job/Virginia---Mclean/Lead-Network-Engineer---Backbone-Engineering_JR321396',
+              locationsText: '3 Locations',
+            },
+          ],
+          facets: [
+            {
+              facetParameter:
+                'CF_-_REC_-_LRV_-_Job_Posting_Anchor_-_Country_from_Job_Posting_Location_Extended',
+              descriptor: 'Country',
+              values: [{ descriptor: 'United States of America', id: 'us-id', count: 2 }],
+            },
+            {
+              facetParameter: 'jobFamilyGroup',
+              descriptor: 'Job Category',
+              values: [{ descriptor: 'Software Engineering', id: 'eng-id', count: 2 }],
+            },
+          ],
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs(
+        'https://www.salesforce.com/company/careers/jobs/?country=United+States+of+America&team=Software+Engineering&page=1'
+      );
+      expect(result?.rows.map((r) => r.jobTitle)).toEqual([
+        'Software Engineer, AI Applications',
+        'Lead Network Engineer',
+      ]);
+    } finally {
+      postSpy.mockRestore();
+    }
+  });
+
   it('does not send United States as Workday searchText and keeps USA- / multi-location Broadcom jobs', async () => {
     const postSpy = vi.spyOn(atsHttpClient, 'post');
     try {
@@ -1233,6 +1322,32 @@ describe('fetchAtsBoardJobs', () => {
         'Firmware Engineer',
       ]);
       expect(result?.rows[1].location).toMatch(/USA|United States|Colorado/i);
+    } finally {
+      postSpy.mockRestore();
+    }
+  });
+
+  it('fetches Broadcom host-only Workday CXS without injecting a United States facet', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          total: 1,
+          jobPostings: [
+            {
+              title: 'R&D Engineer Software 3',
+              externalPath: '/job/USA-California-San-Jose/RD-Engineer-Software-3_R026000',
+              locationsText: 'USA-California-San Jose',
+            },
+          ],
+          facets: [{ facetParameter: 'locationMainGroup', descriptor: 'undefined', values: [] }],
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs('https://broadcom.wd1.myworkdayjobs.com');
+      expect(postSpy).toHaveBeenCalledTimes(1);
+      expect(postSpy.mock.calls[0][1]).toMatchObject({ appliedFacets: {}, searchText: '' });
+      expect(result?.rows.map((r) => r.jobTitle)).toEqual(['R&D Engineer Software 3']);
     } finally {
       postSpy.mockRestore();
     }
@@ -1377,29 +1492,30 @@ describe('fetchAtsBoardJobs', () => {
     expect(rows.map((r) => r.jobTitle)).toEqual(['US Eng']);
   });
 
-  it('fetches GitHub SmartRecruiters with US country and category filters; autofixes untied', async () => {
+  it('fetches GitHub Jibe with US keyword and category filters; autofixes untied', async () => {
     getSpy.mockResolvedValue({
       status: 200,
       data: {
-        totalFound: 3,
-        content: [
+        totalCount: 2,
+        count: 2,
+        jobs: [
           {
-            id: 'keep-eng',
-            name: 'Backend Engineer',
-            department: { label: 'Engineering' },
-            location: { city: 'Remote', country: 'United States', countryCode: 'us' },
+            data: {
+              slug: '5734',
+              title: 'Backend Engineer',
+              category: [' Engineering'],
+              country: 'United States',
+              country_code: 'US',
+            },
           },
           {
-            id: 'drop-sales',
-            name: 'Account Exec',
-            department: { label: 'Sales' },
-            location: { country: 'United States', countryCode: 'us' },
-          },
-          {
-            id: 'drop-india',
-            name: 'Backend Engineer',
-            department: { label: 'Engineering' },
-            location: { country: 'India', countryCode: 'in' },
+            data: {
+              slug: '9999',
+              title: 'Account Exec',
+              category: [' Sales'],
+              country: 'United States',
+              country_code: 'US',
+            },
           },
         ],
       },
@@ -1409,12 +1525,12 @@ describe('fetchAtsBoardJobs', () => {
     );
     expect(getSpy).toHaveBeenCalled();
     const requested = String(getSpy.mock.calls[0][0]);
-    expect(requested).toContain('/companies/GitHub/postings');
-    expect(requested).toMatch(/[?&]country=us\b/i);
-    expect(requested).not.toMatch(/untied/i);
-    expect(result?.provider).toBe('smartrecruiters');
+    expect(requested).toContain('githubinc.jibeapply.com/api/jobs');
+    expect(requested).toMatch(/keywords=united(\+|%20)states/i);
+    expect(requested).toMatch(/categories=Engineering/i);
+    expect(result?.provider).toBe('jibe');
     expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Backend Engineer']);
-    expect(result?.rows[0].department).toBe('Engineering');
+    expect(result?.rows[0].jobUrl).toContain('/careers-home/jobs/5734');
   });
 
   it('returns a confirmed-empty SmartRecruiters board instead of null when the API has 0 postings', async () => {
@@ -1423,42 +1539,98 @@ describe('fetchAtsBoardJobs', () => {
       data: { totalFound: 0, content: [] },
     } as any);
     const result = await fetchAtsBoardJobs(
-      'https://www.github.careers/careers-home/jobs?keywords=united%20states&categories=Engineering'
+      'https://jobs.smartrecruiters.com/AcmeCorp?keywords=united%20states&categories=Engineering'
     );
     expect(result?.provider).toBe('smartrecruiters');
     expect(result?.rows).toEqual([]);
     expect(result?.confirmedEmpty).toBe(true);
   });
 
-  it('retries GitHub SmartRecruiters company id as Github when GitHub postings are empty', async () => {
-    getSpy.mockImplementation(async (url: string) => {
-      const u = String(url);
-      if (u.includes('/companies/GitHub/')) {
-        return { status: 200, data: { totalFound: 0, content: [] } };
-      }
-      if (u.includes('/companies/Github/')) {
-        return {
-          status: 200,
-          data: {
-            totalFound: 1,
-            content: [
-              {
-                id: 'sr-1',
-                name: 'Staff Engineer',
-                department: { label: 'Engineering' },
-                location: { city: 'Remote', country: 'United States', countryCode: 'us' },
-              },
-            ],
-          },
-        };
-      }
-      return { status: 404, data: null };
-    });
-    const result = await fetchAtsBoardJobs(
-      'https://www.github.careers/careers-home/jobs?categories=Engineering'
+  it('returns null for empty DocuSign SmartRecruiters API so browser fallback can run', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: { totalFound: 0, content: [] },
+    } as any);
+    const vanity = await fetchAtsBoardJobs(
+      'https://careers.docusign.com/careers-home/jobs?keywords=software'
     );
-    expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Staff Engineer']);
-    expect(getSpy.mock.calls.some((c) => String(c[0]).includes('/companies/Github/'))).toBe(true);
+    expect(vanity).toBeNull();
+
+    const srHost = await fetchAtsBoardJobs(
+      'https://jobs.smartrecruiters.com/DocuSign?keywords=software'
+    );
+    expect(srHost).toBeNull();
+  });
+
+  it('returns null for empty GitHub Jibe fetch so browser fallback can run', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: { totalCount: 0, count: 0, jobs: [] },
+    } as any);
+    const result = await fetchAtsBoardJobs(
+      'https://www.github.careers/careers-home/jobs?keywords=united%20states&categories=Engineering'
+    );
+    expect(result).toBeNull();
+  });
+
+  it('fetches Wayfair job_search_data with team/country/keyword filters', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          jobListData: [
+            {
+              id: 64142,
+              eid: '16917',
+              title: 'Software Engineer III - Visual AI Technology',
+              requisitionId: '16917',
+              jobTypeId: 2,
+              teamId: 1,
+              system: 2,
+              category: { name: 'Full Stack Engineering' },
+              location: {
+                name: 'Boston, MA',
+                city: 'Boston',
+                state: 'Massachusetts',
+                country: 'United States',
+              },
+              jobTypeDisplayName: 'Full-time',
+              createdDate: '2026-01-01',
+              applyLink: 'https://wayfair.avature.net/en_US/careers?folderId=16917',
+            },
+          ],
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs(
+        'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology&locationIds=&stateIds='
+      );
+      expect(postSpy).toHaveBeenCalled();
+      expect(String(postSpy.mock.calls[0][0])).toContain('/a/careers/careers/job_search_data');
+      expect(postSpy.mock.calls[0][1]).toMatchObject({
+        teamIds: [1],
+        countryIds: [1],
+        keywords: 'technology',
+      });
+      expect(parseWayfairBoardFilters(
+        'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology&locationIds=&stateIds='
+      )).toMatchObject({
+        teamIds: [1],
+        countryIds: [1],
+        keywords: 'technology',
+        locationIds: [],
+        stateIds: [],
+      });
+      expect(result?.provider).toBe('wayfair');
+      expect(result?.rows.map((r) => r.jobTitle)).toEqual([
+        'Software Engineer III - Visual AI Technology',
+      ]);
+      expect(result?.rows[0].jobUrl).toBe(
+        'https://www.wayfair.com/careers/job/software-engineer-iii---visual-ai-technology/2-16917'
+      );
+    } finally {
+      postSpy.mockRestore();
+    }
   });
 
   it('maps Lever postings array', async () => {

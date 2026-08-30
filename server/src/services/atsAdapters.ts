@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import http from 'http';
 import https from 'https';
 import { isIP } from 'net';
+import type { Page } from 'playwright-core';
 import * as cheerio from 'cheerio';
 import { ParsedJobFields } from './jobPageParser';
 import {
@@ -14,10 +15,13 @@ import {
   isThinParse,
 } from './jobPageParser';
 import { resolveSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/outboundUrlPolicy';
-import { assertPinnedPeerInAllowlist, createPinnedLookup } from './safeOutboundHttp';
+import { assertPinnedPeerInAllowlist, createAllowlistLookup } from './safeOutboundHttp';
 import { DIRECTORY_CAREER_HTML_HOST_COMPANIES } from './careerHtmlHostsDirectory';
 import { DIRECTORY_PHENOM_BOARD_HOSTS } from './phenomBoardHostsDirectory';
+import { FINDLY_BOARD_HOSTS } from './findlyBoardHostsDirectory';
 import { detectExtraAtsBoard, fetchExtraAtsBoardJobs } from './atsFreeBoardExtras';
+import { isTalentBrewWorkdayHost } from './talentBrewWorkdayHostsDirectory';
+import { isJibeCareerHost, jibeCareerBoardConfig } from './jibeBoardHostsDirectory';
 import {
   applePositionIdFromUrl,
   isAppleJobsHost,
@@ -78,7 +82,6 @@ const GREENHOUSE_VANITY_BOARDS: Record<string, string> = {
  * Path is typically /careers-home/jobs — not jobs.smartrecruiters.com/{company}.
  */
 const SMARTRECRUITERS_VANITY_HOSTS: Record<string, string> = {
-  'github.careers': 'GitHub',
   'careers.docusign.com': 'DocuSign',
 };
 
@@ -89,6 +92,19 @@ export function isSmartRecruitersVanityHost(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Connected career sites whose public SR postings API may be empty while the SPA still lists jobs. */
+export function isSmartRecruitersConnectedCompany(companyHint: string): boolean {
+  const hint = String(companyHint || '').trim();
+  if (!hint) return false;
+  const lower = hint.toLowerCase();
+  return Object.values(SMARTRECRUITERS_VANITY_HOSTS).some((v) => v.toLowerCase() === lower);
+}
+
+export function smartRecruitersVanityJobsPath(url: string): string | null {
+  if (!isSmartRecruitersVanityHost(url)) return null;
+  return '/careers-home/jobs';
 }
 
 const SALESFORCE_WORKDAY_BASE =
@@ -273,7 +289,7 @@ httpClient.interceptors.request.use(async (config) => {
   const pinnedAgentOptions = {
     keepAlive: true,
     maxSockets: 16,
-    lookup: createPinnedLookup(selected.address, selected.family),
+    lookup: createAllowlistLookup(target.addresses),
   };
   // Shared keepAliveAgent ignores config.lookup, so CDNs with many A records fail
   // the peer pin. Attach a per-request agent that actually uses the pinned lookup.
@@ -1773,7 +1789,9 @@ export type AtsBoardProvider =
   | 'breezy'
   | 'googlecareers'
   | 'ibmcareers'
-  | 'nasactivate';
+  | 'nasactivate'
+  | 'jibe'
+  | 'wayfair';
 
 export interface AtsBoardDetection {
   provider: AtsBoardProvider;
@@ -1823,8 +1841,12 @@ export function looksLikeFindlyBoard(url: string): boolean {
   } catch {
     return false;
   }
-  const host = parsed.hostname.toLowerCase();
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.toLowerCase();
+  // Phenom directory hosts sometimes reuse /job-search-results in recorded URLs;
+  // they must not be routed through Findly m-cloud (no cws_opts on page).
+  if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) return false;
+  if (FINDLY_BOARD_HOSTS.has(host)) return true;
   if (host.includes('findly.com') || host.endsWith('.findly.com')) return true;
   if (path.includes('/job-search-results')) return true;
   return false;
@@ -1902,6 +1924,40 @@ export function findlyFacetsFromUrl(pageUrl: string): string[] {
     add(`${facetKey}:${value.trim()}`);
   }
   return facets;
+}
+
+function findlyCompanyHintFromHost(host: string): string {
+  const normalized = String(host || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  if (CAREER_HTML_HOST_COMPANIES[normalized]) return CAREER_HTML_HOST_COMPANIES[normalized];
+  if (DIRECTORY_CAREER_HTML_HOST_COMPANIES[normalized]) {
+    return DIRECTORY_CAREER_HTML_HOST_COMPANIES[normalized];
+  }
+  const parts = normalized.split('.').filter(Boolean);
+  if (parts.length >= 3 && (parts[0] === 'careers' || parts[0] === 'jobs')) {
+    return titleCaseToken(parts[1] || parts[0]);
+  }
+  return titleCaseToken(parts[0] || normalized);
+}
+
+/** Trailing slash avoids empty-body 301 when fetching Findly HTML config. */
+export function normalizeFindlyBoardPageUrl(pageUrl: string): string {
+  try {
+    const parsed = new URL(pageUrl);
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (path === '/' || path === '') {
+      parsed.pathname = '/job-search-results/';
+      return parsed.toString();
+    }
+    if (/\/job-search-results$/i.test(path)) {
+      parsed.pathname = '/job-search-results/';
+      return parsed.toString();
+    }
+    return pageUrl;
+  } catch {
+    return pageUrl;
+  }
 }
 
 function findlyJobLocation(job: any): string {
@@ -1996,7 +2052,17 @@ const ATS_COLLECTION_FILTER_KEYS = new Set([
   'industryid',
   'familyid',
   'remotejobs',
+  'teamids',
+  'countryids',
+  'locationids',
+  'stateids',
+  'teamcategoryids',
+  'selectedjobtypeids',
+  'jobtypeids',
 ]);
+
+/** Phenom hosts that expose job lists at `/search-jobs` (Intuit). Not Talent Brew. */
+const PHENOM_SEARCH_JOBS_HOSTS = new Set<string>(['jobs.intuit.com']);
 
 /**
  * True when the start URL carries list filters the ATS path must honor.
@@ -2011,6 +2077,17 @@ export function startUrlHasCollectionFilters(url: string): boolean {
   }
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
   if (/\/c\/[^/]+/i.test(path)) return true;
+  // Phenom / Intuit list shells are collection pages (Talent Brew /search-jobs is not Phenom).
+  if (/\/search-jobs$/i.test(path)) {
+    try {
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+      if (PHENOM_SEARCH_JOBS_HOSTS.has(host)) return true;
+      if (isTalentBrewWorkdayHost(url)) return false;
+    } catch {
+      return false;
+    }
+  }
+  if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results$/i.test(path)) return true;
   for (const [rawKey, rawValue] of parsed.searchParams.entries()) {
     const key = rawKey.replace(/\[\]$/, '');
     const kl = key.toLowerCase();
@@ -2060,7 +2137,17 @@ export function looksLikeWorkdayBoard(url: string): boolean {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
     if (/^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$/i.test(host)) return true;
+    if (isTalentBrewWorkdayHost(url)) return true;
     return detectSalesforceWorkdayBoard(parsed) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Salesforce.com /careers/jobs list — CXS JSON only; Chromium on the marketing SPA dies. */
+export function isSalesforceMarketingJobsUrl(url: string): boolean {
+  try {
+    return detectSalesforceWorkdayBoard(new URL(url)) !== null;
   } catch {
     return false;
   }
@@ -2094,6 +2181,8 @@ const ATS_PROVIDERS_THAT_HONOR_START_URL_FILTERS = new Set([
   'successfactors',
   'oraclecloud',
   'nasactivate',
+  'jibe',
+  'wayfair',
 ]);
 
 /** True when public ATS JSON can honor this start URL — skip Chromium Load More. */
@@ -2107,7 +2196,8 @@ async function fetchFindlyBoardJobs(
   companyHint: string,
   options?: AtsBoardFetchOptions
 ): Promise<AtsBoardFetchResult | null> {
-  const htmlRes = await httpClient.get(pageUrl, {
+  let fetchUrl = normalizeFindlyBoardPageUrl(pageUrl);
+  let htmlRes = await httpClient.get(fetchUrl, {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
       'User-Agent':
@@ -2119,6 +2209,23 @@ async function fetchFindlyBoardJobs(
     responseType: 'text',
     transformResponse: [(data) => data],
   });
+  if ([301, 302, 307, 308].includes(htmlRes.status)) {
+    const location = String(htmlRes.headers?.location || '').trim();
+    if (location) {
+      fetchUrl = new URL(location, fetchUrl).toString();
+      htmlRes = await httpClient.get(fetchUrl, {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        maxContentLength: 4 * 1024 * 1024,
+        maxBodyLength: 4 * 1024 * 1024,
+        responseType: 'text',
+        transformResponse: [(data) => data],
+      });
+    }
+  }
   if (htmlRes.status >= 400 || typeof htmlRes.data !== 'string') return null;
 
   const cfg = parseFindlyConfigFromHtml(htmlRes.data);
@@ -2127,9 +2234,9 @@ async function fetchFindlyBoardJobs(
 
   let origin: string;
   try {
-    origin = new URL(pageUrl).origin;
+    origin = new URL(fetchUrl).origin;
   } catch {
-    origin = pageUrl;
+    origin = fetchUrl;
   }
 
   const facets = findlyFacetsFromUrl(pageUrl);
@@ -2626,6 +2733,8 @@ export function looksLikePhenomBoard(url: string): boolean {
   }
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  if (isTalentBrewWorkdayHost(url)) return false;
+  if (isJibeCareerHost(url)) return false;
   if (HAPPYDANCE_BOARD_HOSTS.has(host) || HAPPYDANCE_LOCALELESS_RSS_HOSTS.has(host)) return false;
   if (looksLikeNasActivateBoard(url)) return false;
   // Google Careers uses sort_by=relevance and careers.google.com — not Phenom PCS.
@@ -2641,9 +2750,9 @@ export function looksLikePhenomBoard(url: string): boolean {
   if (/\/careers\/job\/\d+/i.test(path)) return true;
   // Qualcomm / NVIDIA-style PCS shells: careers.<brand>.com/careers
   if (host.startsWith('careers.') && /^\/careers$/i.test(path)) return true;
-  // Phenom list shells: …/search-results or …/search-jobs (Intuit)
+  // Phenom list shells: …/search-results or Intuit-style …/search-jobs
   if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results\/?$/i.test(path)) return true;
-  if (/\/search-jobs\/?$/i.test(path)) return true;
+  if (PHENOM_SEARCH_JOBS_HOSTS.has(host) && /\/search-jobs\/?$/i.test(path)) return true;
   // Phenom category landings: /us/en/c/engineering-and-product-jobs (Adobe, etc.)
   if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)+c\/[a-z0-9-]+$/i.test(path)) return true;
   // Directory allowlist — exact robot URL preserved; widgets/PCSX use that URL as referer
@@ -2981,6 +3090,22 @@ function phenomJsonRequestHeaders(origin: string, referer: string, cookie?: stri
   };
 }
 
+function phenomHtmlDiscoveryUrls(origin: string, pageUrl: string, host: string): string[] {
+  if (isMicrosoftCareersHost(host)) {
+    return [`${origin}/global/en/search-results`, `${origin}/us/en/search-results`, pageUrl, `${origin}/`];
+  }
+  if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) {
+    return [
+      pageUrl,
+      `${origin}/us/en/search-results`,
+      `${origin}/search-jobs`,
+      `${origin}/careers`,
+      `${origin}/`,
+    ];
+  }
+  return [pageUrl, `${origin}/search-jobs`, `${origin}/careers`, `${origin}/`];
+}
+
 export async function discoverPhenomSiteConfig(
   pageUrl: string
 ): Promise<{ config: PhenomSiteConfig; origin: string; referer: string; cookie?: string } | null> {
@@ -2991,9 +3116,7 @@ export async function discoverPhenomSiteConfig(
     return null;
   }
   const host = new URL(pageUrl).hostname.toLowerCase().replace(/^www\./, '');
-  const candidates = isMicrosoftCareersHost(host)
-    ? [`${origin}/global/en/search-results`, `${origin}/us/en/search-results`, pageUrl, `${origin}/`]
-    : [`${origin}/careers`, `${origin}/`, pageUrl];
+  const candidates = phenomHtmlDiscoveryUrls(origin, pageUrl, host);
   let cookie: string | undefined;
   for (const url of candidates) {
     try {
@@ -3567,15 +3690,28 @@ export function detectAtsBoard(url: string): AtsBoardDetection | null {
     };
   }
 
+  const jibeBoard = jibeCareerBoardConfig(url);
+  if (jibeBoard) {
+    return {
+      provider: 'jibe',
+      companyHint: jibeBoard.companyHint,
+      listApiUrl: `${jibeBoard.apiOrigin}/api/jobs`,
+    };
+  }
+
+  if (looksLikeWayfairCareersBoard(url)) {
+    return {
+      provider: 'wayfair',
+      companyHint: 'Wayfair',
+      listApiUrl: 'https://www.wayfair.com/a/careers/careers/job_search_data',
+    };
+  }
+
   // Findly / CWS (m-cloud) — org id resolved from page HTML at fetch time
   if (looksLikeFindlyBoard(url)) {
-    const hint =
-      host.replace(/^www\./, '').split('.')[0] ||
-      host.replace(/^www\./, '') ||
-      'findly';
     return {
       provider: 'findly',
-      companyHint: hint,
+      companyHint: findlyCompanyHintFromHost(host),
       listApiUrl: FINDLY_DEFAULT_API_BASE + 'job',
     };
   }
@@ -3966,7 +4102,10 @@ export function applyAtsBoardSearchAndPageLimits(
     ];
     const countries = uniqueQueryValues(parsed, 'country');
     const defaultUnitedStates = !startUrlHasExplicitGeoFilter(parsed);
-    if (teams.length) {
+    // Workday / Wayfair APIs already applied country/team facets from the start URL.
+    const skipClientGeoFacet =
+      looksLikeWorkdayBoard(pageUrl) || looksLikeWayfairCareersBoard(pageUrl);
+    if (!skipClientGeoFacet && teams.length) {
       out = out.filter((row) => atsRowMatchesTeams(row, teams));
     }
     const cityLocations = parsed.searchParams.get('locationId')
@@ -3975,16 +4114,16 @@ export function applyAtsBoardSearchAndPageLimits(
           const n = happyDanceNorm(value);
           return n !== 'usa' && n !== 'us' && n !== 'united states' && n !== 'united states of america';
         });
-    if (cityLocations.length) {
+    if (!skipClientGeoFacet && cityLocations.length) {
       out = out.filter((row) => atsRowMatchesLocations(row, cityLocations));
     }
-    if (countries.length) {
+    if (!skipClientGeoFacet && countries.length) {
       out = out.filter(
         (row) =>
           happyDanceCountryMatches(row.location || '', countries) ||
           countries.some((c) => (row.location || '').toLowerCase().includes(c.toLowerCase()))
       );
-    } else if (defaultUnitedStates) {
+    } else if (!skipClientGeoFacet && defaultUnitedStates) {
       out = out.filter((row) => atsRowMatchesUnitedStates(row));
     }
     const queryOrQ = (parsed.searchParams.get('query') || parsed.searchParams.get('q') || '').trim();
@@ -4476,6 +4615,358 @@ function smartRecruitersCompanyIds(companyHint: string): string[] {
   return ids;
 }
 
+export function looksLikeWayfairCareersBoard(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (host !== 'wayfair.com') return false;
+    return /\/careers(\/|$)/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function wayfairIntIdsFromQuery(parsed: URL, key: string): number[] {
+  const values = parsed.searchParams.getAll(key);
+  const ids: number[] = [];
+  for (const raw of values) {
+    const text = String(raw ?? '').trim();
+    if (!text) continue;
+    for (const part of text.split(',')) {
+      const token = String(part || '').trim();
+      if (!token) continue;
+      const n = Number(token);
+      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) continue;
+      if (!ids.includes(n)) ids.push(n);
+    }
+  }
+  return ids;
+}
+
+export interface WayfairBoardFilters {
+  keywords: string;
+  teamIds: number[];
+  countryIds: number[];
+  locationIds: number[];
+  stateIds: number[];
+  teamCategoryIds: number[];
+  categoryIds: number[];
+  selectedJobTypeIds: number[];
+}
+
+export function parseWayfairBoardFilters(pageUrl: string): WayfairBoardFilters {
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return {
+      keywords: '',
+      teamIds: [],
+      countryIds: [],
+      locationIds: [],
+      stateIds: [],
+      teamCategoryIds: [],
+      categoryIds: [],
+      selectedJobTypeIds: [],
+    };
+  }
+  return {
+    keywords: normalizeCareerSearchKeywords(
+      parsed.searchParams.get('keywords') || parsed.searchParams.get('q') || ''
+    ),
+    teamIds: wayfairIntIdsFromQuery(parsed, 'teamIds'),
+    countryIds: wayfairIntIdsFromQuery(parsed, 'countryIds'),
+    locationIds: wayfairIntIdsFromQuery(parsed, 'locationIds'),
+    stateIds: wayfairIntIdsFromQuery(parsed, 'stateIds'),
+    teamCategoryIds: wayfairIntIdsFromQuery(parsed, 'teamCategoryIds'),
+    categoryIds: wayfairIntIdsFromQuery(parsed, 'categoryIds'),
+    selectedJobTypeIds: [
+      ...wayfairIntIdsFromQuery(parsed, 'selectedJobTypeIds'),
+      ...wayfairIntIdsFromQuery(parsed, 'jobTypeIds'),
+    ],
+  };
+}
+
+function wayfairJobSlug(title: string): string {
+  return String(title || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s*-\s*/g, '---')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{4,}/g, '---')
+    .replace(/^-+|-+$/g, '');
+}
+
+function wayfairJobUrl(job: any): string {
+  const eid = String(job?.eid || job?.requisitionId || '').trim();
+  const slug = wayfairJobSlug(job?.title || '');
+  if (eid && slug) {
+    // Public list cards: /careers/job/{slug}/{system}-{eid} (system=2 on Avature-backed jobs).
+    const prefix = String(job?.system ?? job?.jobTypeId ?? '2').trim() || '2';
+    return `https://www.wayfair.com/careers/job/${slug}/${prefix}-${encodeURIComponent(eid)}`;
+  }
+  const apply = String(job?.applyLink || job?.structuredDataApplyLink || '').trim();
+  if (/^https?:\/\//i.test(apply)) return apply;
+  if (apply.startsWith('/')) return `https://www.wayfair.com${apply}`;
+  return '';
+}
+
+function mapWayfairBoardJobs(jobs: any[], companyHint: string): AtsBoardJobRow[] {
+  return (Array.isArray(jobs) ? jobs : [])
+    .map((job: any) => {
+      const loc = job?.location || {};
+      const location =
+        String(loc?.name || '').trim() ||
+        [loc?.city, loc?.state, loc?.country].filter(Boolean).join(', ');
+      return rowFromParts({
+        jobUrl: wayfairJobUrl(job),
+        title: job?.title || '',
+        company: companyHint,
+        location,
+        employmentType: job?.jobTypeDisplayName || job?.jobType || '',
+        date: job?.createdDate || job?.lastUpdatedDate || '',
+        department: job?.category?.name || job?.teamName || '',
+      });
+    })
+    .filter((row: AtsBoardJobRow) => row.jobUrl && row.jobTitle);
+}
+
+const WAYFAIR_JOB_SEARCH_API = 'https://www.wayfair.com/a/careers/careers/job_search_data';
+
+/** POST body for Wayfair careers `job_search_data` (matches the SPA XHR). */
+export function buildWayfairSearchRequestBody(pageUrl: string): Record<string, unknown> {
+  const filters = parseWayfairBoardFilters(pageUrl);
+  return {
+    categoryIds: filters.categoryIds,
+    teamIds: filters.teamIds,
+    locationIds: filters.locationIds,
+    countryIds: filters.countryIds,
+    teamCategoryIds: filters.teamCategoryIds,
+    stateIds: filters.stateIds,
+    selectedJobTypeIds: filters.selectedJobTypeIds,
+    keywords: filters.keywords,
+  };
+}
+
+export function atsBoardRowsToListExtractionRecords(
+  rows: AtsBoardJobRow[]
+): Record<string, string>[] {
+  return rows.map((row) => {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (value != null && String(value).trim()) out[key] = String(value);
+    }
+    return out;
+  });
+}
+
+/**
+ * Fetch Wayfair jobs via the SPA's own XHR from inside Chromium (cookies + origin).
+ * Server-side POST often gets an HTML bot wall instead of JSON.
+ */
+export async function fetchWayfairBoardJobsInBrowser(
+  page: Page,
+  pageUrl: string,
+  options?: { maxItems?: number }
+): Promise<AtsBoardJobRow[]> {
+  const body = buildWayfairSearchRequestBody(pageUrl);
+  const maxJobs =
+    typeof options?.maxItems === 'number' && options.maxItems > 0
+      ? Math.floor(options.maxItems)
+      : boardMaxJobs();
+  let payload: unknown = null;
+  try {
+    payload = await page.evaluate(
+      async ({ apiUrl, reqBody }) => {
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          credentials: 'include',
+          body: JSON.stringify(reqBody),
+        });
+        if (!res.ok) return null;
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('json')) return null;
+        return res.json();
+      },
+      { apiUrl: WAYFAIR_JOB_SEARCH_API, reqBody: body }
+    );
+  } catch {
+    return [];
+  }
+  if (!payload || typeof payload !== 'object') return [];
+  const jobs = Array.isArray((payload as { jobListData?: unknown[] }).jobListData)
+    ? (payload as { jobListData: unknown[] }).jobListData
+    : [];
+  return mapWayfairBoardJobs(jobs, 'Wayfair').slice(0, maxJobs);
+}
+
+async function fetchWayfairBoardJobs(
+  pageUrl: string,
+  detected: AtsBoardDetection,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  const maxJobs =
+    typeof options?.maxItems === 'number' && options.maxItems > 0
+      ? Math.floor(options.maxItems)
+      : boardMaxJobs();
+  const body = buildWayfairSearchRequestBody(pageUrl);
+  const res = await httpClient.post(detected.listApiUrl, body, {
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Origin: 'https://www.wayfair.com',
+      Referer: pageUrl,
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  });
+  if (res.status >= 400 || !res.data) return null;
+  if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) return null;
+  const jobs = Array.isArray(res.data?.jobListData) ? res.data.jobListData : [];
+  const rows = mapWayfairBoardJobs(jobs, detected.companyHint).slice(0, maxJobs);
+  if (!rows.length) return null;
+  return { provider: 'wayfair', companyHint: detected.companyHint, rows };
+}
+
+export interface JibeBoardFilters {
+  keywords: string;
+  categories: string[];
+}
+
+export function parseJibeBoardFilters(pageUrl: string): JibeBoardFilters {
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return { keywords: '', categories: [] };
+  }
+  const keywords = normalizeCareerSearchKeywords(
+    parsed.searchParams.get('keywords') || parsed.searchParams.get('q') || ''
+  );
+  const rawCats = parsed.searchParams.get('categories') || parsed.searchParams.get('category') || '';
+  const categories = rawCats
+    .split('|')
+    .map((part) => {
+      try {
+        return decodeURIComponent(part.replace(/\+/g, ' ')).trim();
+      } catch {
+        return part.replace(/\+/g, ' ').trim();
+      }
+    })
+    .filter(Boolean);
+  return { keywords, categories };
+}
+
+function jibeCategoryLabels(job: any): string[] {
+  const raw = job?.category ?? job?.categories ?? [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.map((entry) => String(entry || '').trim()).filter(Boolean);
+}
+
+function jibeJobMatchesCategories(job: any, categories: string[]): boolean {
+  if (!categories.length) return true;
+  const labels = jibeCategoryLabels(job);
+  if (!labels.length) return false;
+  return categories.some((cat) =>
+    labels.some((label) => categoryTokenMatches(label, cat))
+  );
+}
+
+function mapJibeBoardJobs(
+  jobs: any[],
+  companyHint: string,
+  careerOrigin: string,
+  jobsPath: string
+): AtsBoardJobRow[] {
+  const prefix = `${careerOrigin.replace(/\/+$/, '')}${jobsPath.startsWith('/') ? jobsPath : `/${jobsPath}`}`;
+  return (Array.isArray(jobs) ? jobs : [])
+    .map((entry: any) => {
+      const job = entry?.data && typeof entry.data === 'object' ? entry.data : entry;
+      const slug = String(job?.slug || job?.req_id || '').trim();
+      const jobUrl = slug ? `${prefix}/${encodeURIComponent(slug)}` : String(job?.apply_url || '').trim();
+      const location =
+        String(job?.full_location || job?.short_location || job?.location_name || '').trim() ||
+        [job?.city, job?.country].filter(Boolean).join(', ');
+      const department = jibeCategoryLabels(job).join(', ');
+      return rowFromParts({
+        jobUrl,
+        title: job?.title || '',
+        company: job?.hiring_organization || companyHint,
+        location,
+        employmentType: job?.employment_type || '',
+        date: job?.posted_date || job?.create_date || '',
+        department,
+      });
+    })
+    .filter((row: AtsBoardJobRow) => row.jobUrl && row.jobTitle);
+}
+
+async function fetchJibeBoardJobs(
+  pageUrl: string,
+  detected: AtsBoardDetection,
+  options?: AtsBoardFetchOptions
+): Promise<AtsBoardFetchResult | null> {
+  const board = jibeCareerBoardConfig(pageUrl);
+  if (!board) return null;
+  const filters = parseJibeBoardFilters(pageUrl);
+  const maxPages =
+    typeof options?.maxPages === 'number' && options.maxPages > 0
+      ? Math.min(Math.floor(options.maxPages), 200)
+      : Math.max(1, parseInt(process.env.ATS_BOARD_MAX_PAGES || '50', 10) || 50);
+  const maxJobs =
+    typeof options?.maxItems === 'number' && options.maxItems > 0
+      ? Math.floor(options.maxItems)
+      : boardMaxJobs();
+  const limit = 20;
+  let page = 1;
+  const all: any[] = [];
+  let httpOk = false;
+
+  while (page <= maxPages && all.length < maxJobs) {
+    const u = new URL(detected.listApiUrl);
+    u.searchParams.set('limit', String(limit));
+    u.searchParams.set('page', String(page));
+    if (filters.keywords) u.searchParams.set('keywords', filters.keywords);
+    if (filters.categories.length) u.searchParams.set('categories', filters.categories.join('|'));
+    const res = await httpClient.get(u.toString(), { headers: { Accept: 'application/json' } });
+    if (res.status >= 400 || !res.data) {
+      if (page === 1) return null;
+      break;
+    }
+    httpOk = true;
+    const batch = Array.isArray(res.data?.jobs) ? res.data.jobs : [];
+    if (!batch.length) break;
+    all.push(...batch);
+    const total = typeof res.data?.totalCount === 'number' ? res.data.totalCount : all.length;
+    if (all.length >= total || batch.length < limit) break;
+    page += 1;
+  }
+
+  if (!httpOk) return null;
+  let careerOrigin: string;
+  try {
+    careerOrigin = new URL(pageUrl).origin;
+  } catch {
+    careerOrigin = 'https://www.github.careers';
+  }
+  const filtered = all.filter((entry) => {
+    const job = entry?.data && typeof entry.data === 'object' ? entry.data : entry;
+    return jibeJobMatchesCategories(job, filters.categories);
+  });
+  const rows = mapJibeBoardJobs(filtered, detected.companyHint, careerOrigin, board.jobsPath).slice(
+    0,
+    maxJobs
+  );
+  if (!rows.length) return null;
+  return { provider: 'jibe', companyHint: detected.companyHint, rows };
+}
+
 async function fetchSmartRecruitersAllPages(
   listApiUrl: string,
   extra?: { country?: string; q?: string }
@@ -4619,6 +5110,20 @@ export async function fetchAtsBoardJobs(
         options
       );
     }
+    if (detected.provider === 'jibe') {
+      return finalizeAtsBoardRows(
+        await fetchJibeBoardJobs(pageUrl, detected, options),
+        pageUrl,
+        options
+      );
+    }
+    if (detected.provider === 'wayfair') {
+      return finalizeAtsBoardRows(
+        await fetchWayfairBoardJobs(pageUrl, detected, options),
+        pageUrl,
+        options
+      );
+    }
 
     let data: any;
     let smartRecruitersHttpOk = false;
@@ -4675,16 +5180,21 @@ export async function fetchAtsBoardJobs(
 
     if (!rows.length) {
       if (detected.provider === 'smartrecruiters' && smartRecruitersHttpOk) {
-        return finalizeAtsBoardRows(
-          {
-            provider: detected.provider,
-            companyHint: detected.companyHint,
-            rows: [],
-            confirmedEmpty: true,
-          },
-          pageUrl,
-          options
-        );
+        const connectedSite =
+          isSmartRecruitersVanityHost(pageUrl) ||
+          isSmartRecruitersConnectedCompany(detected.companyHint);
+        if (!connectedSite) {
+          return finalizeAtsBoardRows(
+            {
+              provider: detected.provider,
+              companyHint: detected.companyHint,
+              rows: [],
+              confirmedEmpty: true,
+            },
+            pageUrl,
+            options
+          );
+        }
       }
       return null;
     }
@@ -4701,7 +5211,7 @@ export async function fetchAtsBoardJobs(
     // Oracle vanity resolve used to return null on any failure, which made
     // production look like "0 rows" with no usable diagnostic. Re-throw so the
     // scraper worker logs the real cause before browser fallback.
-    if (detected.provider === 'oraclecloud') throw err;
+    if (detected.provider === 'oraclecloud' || detected.provider === 'workday') throw err;
     return null;
   }
 }

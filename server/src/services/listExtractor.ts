@@ -25,6 +25,12 @@ import {
 } from './scraping/captchaGate';
 import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
 import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
+import { parseJsonLdJobPostingList } from './jobPageParser';
+import {
+  atsBoardRowsToListExtractionRecords,
+  fetchWayfairBoardJobsInBrowser,
+  looksLikeWayfairCareersBoard,
+} from './atsAdapters';
 
 const SMART_EXTRACTOR_SCRIPT_PATH = path.join(__dirname, '../workflow-management/scripts/smartJobExtractor.js');
 
@@ -239,6 +245,108 @@ const sanitizeItemSelectors = (itemSelector: string | string[] | null | undefine
 export const primaryItemSelector = (itemSelector: string | string[] | null | undefined): string => {
   return sanitizeItemSelectors(itemSelector)[0] || '';
 };
+
+/**
+ * Map Schema.org JobPosting list rows onto robot field names.
+ * Prefers keys present in `fieldNames`; falls back to semantic defaults.
+ */
+export function mapJsonLdRowsToConfiguredFields(
+  schemaRows: Record<string, string>[],
+  fieldNames: string[]
+): Record<string, string>[] {
+  const names = fieldNames.map((n) => String(n || '').trim()).filter(Boolean);
+
+  const semanticBucket = (posting: Record<string, string>): Record<string, string> => ({
+    title: posting.title || '',
+    company: posting.company || '',
+    location: posting.location || '',
+    url: posting.url || '',
+    description: posting.description || '',
+    date: posting.date || '',
+    employmentType: posting.employmentType || '',
+    salary: posting.salary || posting.salaryRange || '',
+    salaryRange: posting.salaryRange || posting.salary || '',
+    image: posting.image || posting.companyLogoUrl || '',
+    companyUrl: posting.companyUrl || '',
+    remoteType: posting.remoteType || '',
+  });
+
+  const valueForField = (bucket: Record<string, string>, fieldName: string): string => {
+    if (bucket[fieldName]) return bucket[fieldName];
+    const lower = fieldName.toLowerCase().replace(/[\s_-]+/g, '');
+    const lookup: Array<[string, string]> = [
+      ['title', 'title'],
+      ['jobtitle', 'title'],
+      ['company', 'company'],
+      ['companyname', 'company'],
+      ['location', 'location'],
+      ['url', 'url'],
+      ['applyurl', 'url'],
+      ['link', 'url'],
+      ['joburl', 'url'],
+      ['description', 'description'],
+      ['jobdescription', 'description'],
+      ['date', 'date'],
+      ['dateposted', 'date'],
+      ['employmenttype', 'employmentType'],
+      ['salary', 'salary'],
+      ['salaryrange', 'salaryRange'],
+      ['image', 'image'],
+      ['logo', 'image'],
+      ['companylogourl', 'image'],
+      ['companyurl', 'companyUrl'],
+      ['remotetype', 'remoteType'],
+    ];
+    for (const [alias, key] of lookup) {
+      if (lower === alias && bucket[key]) return bucket[key];
+    }
+    return '';
+  };
+
+  return schemaRows.map((posting) => {
+    const bucket = semanticBucket(posting);
+    if (!names.length) {
+      return Object.fromEntries(Object.entries(bucket).filter(([, v]) => !!v));
+    }
+    const out: Record<string, string> = {};
+    for (const name of names) {
+      const v = valueForField(bucket, name);
+      if (v) out[name] = v;
+    }
+    return out;
+  });
+}
+
+/**
+ * When DOM item/field selectors yield no rows, parse live JobPosting JSON-LD.
+ */
+export async function tryJsonLdJobPostingListFallback(
+  page: Pick<Page, 'content' | 'url'>,
+  fieldNames: string[]
+): Promise<Record<string, any>[]> {
+  try {
+    const html = await page.content();
+    const pageUrl = typeof page.url === 'function' ? page.url() : '';
+    const schemaRows = parseJsonLdJobPostingList(html, pageUrl);
+    if (!schemaRows.length) return [];
+    const mapped = mapJsonLdRowsToConfiguredFields(schemaRows, fieldNames)
+      .map(cleanRow)
+      .filter((row) => Object.values(row).some((value) => isMeaningful(value)));
+    if (mapped.length > 0) {
+      logger.log(
+        'info',
+        `List extraction used Schema.org JobPosting JSON-LD fallback (${mapped.length} rows)`
+      );
+    }
+    return mapped;
+  } catch (error: any) {
+    logger.log(
+      'warn',
+      `JSON-LD JobPosting list fallback failed: ${error?.message || error}`
+    );
+    return [];
+  }
+}
 
 /** Query keys that are 0-based row/item offsets (SuccessFactors `startrow`, etc.). */
 const LIST_OFFSET_QUERY_KEYS = new Set(['startrow', 'offset', 'from']);
@@ -486,15 +594,26 @@ export const extractListItemsFromPage = async (
   const safeConfig = sanitizeExtractionConfig(config);
   const itemCandidates = sanitizeItemSelectors(safeConfig.itemSelector);
   const rankedFields = fieldsAsRankedLists(safeConfig.fields);
+  const fieldNames = Object.keys(rankedFields);
+
+  const emptyResult = async (winning?: string) => {
+    const fallbackRows = await tryJsonLdJobPostingListFallback(page, fieldNames);
+    return {
+      rows: fallbackRows,
+      fieldWinCounts: {} as Record<string, number[]>,
+      ...(winning ? { winningItemSelector: winning } : {}),
+    };
+  };
 
   if (itemCandidates.length === 0) {
     logger.log('warn', 'extractListItemsFromPage: empty itemSelector; skipping $$eval');
-    return { rows: [], fieldWinCounts: {} };
+    return emptyResult();
   }
 
   if (Object.keys(rankedFields).length === 0) {
     logger.log('warn', 'extractListItemsFromPage: no valid field selectors remain after sanitization');
-    return { rows: [], fieldWinCounts: {} };
+    // Still try JSON-LD with default semantic keys when fields were all invalid.
+    return emptyResult();
   }
 
   let winningItemSelector = '';
@@ -523,7 +642,7 @@ export const extractListItemsFromPage = async (
       'warn',
       `extractListItemsFromPage: no item selector matched (${itemCandidates.length} candidate(s))`
     );
-    return { rows: [], fieldWinCounts: {} };
+    return emptyResult();
   }
 
   const evalResult = await page.$$eval(
@@ -839,6 +958,12 @@ export const extractListItemsFromPage = async (
       'warn',
       'extractListItemsFromPage: matched item nodes but every field was empty after extraction — check field selectors (use :scope > child, or a more specific sub-selector)'
     );
+  }
+  if (cleaned.length === 0) {
+    const fallbackRows = await tryJsonLdJobPostingListFallback(page, fieldNames);
+    if (fallbackRows.length > 0) {
+      return { rows: fallbackRows, fieldWinCounts: {}, winningItemSelector };
+    }
   }
   return { rows: cleaned, fieldWinCounts, winningItemSelector };
 };
@@ -1273,6 +1398,26 @@ export const runListExtraction = async (
       logger.log(
         'warn',
         `List extractor: item selector not ready after boot wait (${bootSelector})`
+      );
+    }
+
+    if (looksLikeWayfairCareersBoard(effectiveStartUrl)) {
+      const wayfairRows = await fetchWayfairBoardJobsInBrowser(page, effectiveStartUrl, {
+        maxItems: maxItemsCap,
+      });
+      if (wayfairRows.length > 0) {
+        logger.log(
+          'info',
+          `Wayfair in-browser job_search_data returned ${wayfairRows.length} rows (SPA API fallback)`
+        );
+        return {
+          rows: atsBoardRowsToListExtractionRecords(wayfairRows),
+          selectorPromotions: [],
+        };
+      }
+      logger.log(
+        'warn',
+        'Wayfair careers page loaded but in-browser job_search_data returned 0 rows; continuing with DOM selectors'
       );
     }
 

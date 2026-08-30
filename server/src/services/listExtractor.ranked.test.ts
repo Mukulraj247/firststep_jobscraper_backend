@@ -3,9 +3,11 @@ import {
   applySelectorPromotions,
   computeSelectorPromotions,
   listNavigationAttempts,
+  mapJsonLdRowsToConfiguredFields,
   normalizeFieldSelectorList,
   normalizeListStartUrl,
   primaryItemSelector,
+  tryJsonLdJobPostingListFallback,
   waitForAsyncListHydration,
 } from './listExtractor';
 
@@ -139,5 +141,48 @@ describe('listNavigationAttempts', () => {
       { waitUntil: 'domcontentloaded', timeout: 75_000 },
       { waitUntil: 'commit', timeout: 20_000 },
     ]);
+  });
+});
+
+describe('mapJsonLdRowsToConfiguredFields', () => {
+  it('maps schema rows onto configured field names', () => {
+    const mapped = mapJsonLdRowsToConfiguredFields(
+      [
+        {
+          title: 'Engineer',
+          company: 'Acme',
+          url: 'https://jobs.acme.com/1',
+          location: 'Remote',
+        },
+      ],
+      ['Job Title', 'company', 'url']
+    );
+    expect(mapped).toEqual([
+      {
+        'Job Title': 'Engineer',
+        company: 'Acme',
+        url: 'https://jobs.acme.com/1',
+      },
+    ]);
+  });
+});
+
+describe('tryJsonLdJobPostingListFallback', () => {
+  it('returns rows from JobPosting JSON-LD when DOM would yield nothing', async () => {
+    const html = `<!DOCTYPE html><html><head>
+<script type="application/ld+json">
+{"@type":"JobPosting","title":"Backend Engineer","hiringOrganization":{"name":"Widget Co"},"url":"https://widget.example/jobs/be","jobLocation":{"address":{"addressLocality":"Austin","addressRegion":"TX","addressCountry":"US"}}}
+</script>
+</head><body><div class="login-wall">Sign in</div></body></html>`;
+    const page = {
+      content: async () => html,
+      url: () => 'https://www.linkedin.com/jobs/view/123',
+    };
+    const rows = await tryJsonLdJobPostingListFallback(page, ['title', 'company', 'url', 'location']);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe('Backend Engineer');
+    expect(rows[0].company).toBe('Widget Co');
+    expect(rows[0].url).toContain('/jobs/be');
+    expect(rows[0].location).toContain('Austin');
   });
 });

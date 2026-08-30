@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useCacheInvalidation, useCachedRunGroups, useGlobalInfoStore } from '../context/globalInfo';
+import { useSocketStore } from '../context/socket';
 import type { SaasRunGroup } from '../api/automation';
 import { durationFilterParamsFromValue, jobsFilterParamsFromValue } from '../components/run/runDisplay';
 import { hasActiveRunFilters, RunsFilters } from '../components/run/RunsFilters';
@@ -69,6 +70,7 @@ export const RunsPage: React.FC<RunsPageProps> = ({
   const [durationFilter, setDurationFilter] = useState('');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [expandedAccordions, setExpandedAccordions] = useState<Set<string>>(new Set());
+  const followedIstTodayRef = React.useRef(defaultRunsDate());
 
   useEffect(() => {
     const timer = setTimeout(() => setSearchDebounced(searchInput.trim()), 300);
@@ -129,6 +131,38 @@ export const RunsPage: React.FC<RunsPageProps> = ({
 
   const { notify, rerenderRuns, setRerenderRuns } = useGlobalInfoStore();
   const { invalidateRuns } = useCacheInvalidation();
+  const { queueSocket } = useSocketStore();
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const today = defaultRunsDate();
+      setDateFilter((prev) => {
+        if (prev === followedIstTodayRef.current && today !== prev) {
+          followedIstTodayRef.current = today;
+          return today;
+        }
+        if (prev === today) followedIstTodayRef.current = today;
+        return prev;
+      });
+    }, 30000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!queueSocket) return;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => invalidateRuns(), 400);
+    };
+    queueSocket.on('run-started', refresh);
+    queueSocket.on('run-completed', refresh);
+    return () => {
+      clearTimeout(timeout);
+      queueSocket.off('run-started', refresh);
+      queueSocket.off('run-completed', refresh);
+    };
+  }, [queueSocket, invalidateRuns]);
 
   const handleAccordionChange = useCallback((robotMetaId: string, isExpanded: boolean) => {
     if (!robotMetaId) return;

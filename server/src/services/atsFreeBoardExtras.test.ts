@@ -9,6 +9,7 @@ import {
   detectGoogleCareersBoard,
   detectIbmCareersBoard,
   detectExtraAtsBoard,
+  detectTalentBrewWorkdayBoard,
   workdayAppliedFacetsFromUrl,
 } from './atsFreeBoardExtras';
 
@@ -25,13 +26,23 @@ describe('atsFreeBoardExtras detection', () => {
     });
   });
 
-  it('detects hostname-only Workday boards so CXS can resolve the site slug', () => {
+  it('detects hostname-only Workday boards with known tenant site slug', () => {
     const d = detectWorkdayBoard('https://broadcom.wd1.myworkdayjobs.com');
     expect(d?.provider).toBe('workday');
     expect(d?.companyHint).toBe('Broadcom');
     expect(d?.listApiUrl).toBe(
-      'https://broadcom.wd1.myworkdayjobs.com/wday/cxs/broadcom/__resolve__/jobs'
+      'https://broadcom.wd1.myworkdayjobs.com/wday/cxs/broadcom/External_Career/jobs'
     );
+  });
+
+  it('detects Talent Brew marketing hosts via mapped Workday CXS board', () => {
+    const d = detectTalentBrewWorkdayBoard('https://jobs.empower.com/search-jobs');
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Empower');
+    expect(d?.listApiUrl).toBe(
+      'https://empower.wd12.myworkdayjobs.com/wday/cxs/empower/empower/jobs'
+    );
+    expect(detectExtraAtsBoard('https://jobs.empower.com')?.provider).toBe('workday');
   });
 
   it('detects mid-market ATS widgets', () => {

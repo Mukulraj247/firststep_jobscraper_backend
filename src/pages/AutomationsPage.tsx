@@ -20,7 +20,7 @@ import {
   AutomationSummary,
   DashboardAutomationsSummary,
 } from '../api/automation';
-import { useGlobalInfoStore } from '../context/globalInfo';
+import { useCacheInvalidation, useGlobalInfoStore } from '../context/globalInfo';
 import { useSocketStore } from '../context/socket';
 import { getScheduleLabel } from '../constants/scheduleOptions';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -82,6 +82,7 @@ export const AutomationsPage = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
   const { notify } = useGlobalInfoStore();
+  const { invalidateRuns } = useCacheInvalidation();
   const { queueSocket } = useSocketStore();
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -388,9 +389,15 @@ export const AutomationsPage = () => {
   const handleRun = (automation: AutomationSummary) => {
     void runGuardedMutation(automation, 'run', async () => {
       const result = await runAutomation(automation.id);
-      notify('info', 'Automation queued — check Run History for status');
+      invalidateRuns();
+      notify(
+        'info',
+        'Automation queued. All Runs lists today’s IST calendar day — open that automation’s group if it is not on the first page.',
+      );
       await loadAutomations();
-      if (result.runId) {
+      if (automation.id) {
+        navigate(`/runs/${automation.id}`, { state: pushReturnState(location) });
+      } else if (result.runId) {
         navigate(`/run/${result.runId}`, { state: pushReturnState(location) });
       }
     }, 'Failed to run automation');
