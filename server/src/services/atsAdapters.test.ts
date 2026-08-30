@@ -6,6 +6,8 @@ import {
   parseSmartRecruitersBoardFilters,
   parseJibeBoardFilters,
   parseWayfairBoardFilters,
+  buildWayfairSearchRequestBody,
+  fetchWayfairBoardJobsInBrowser,
   filterSmartRecruitersPostings,
   shouldSkipScrapeDoUrl,
   shouldNeverScrapeDoUrl,
@@ -1631,6 +1633,50 @@ describe('fetchAtsBoardJobs', () => {
     } finally {
       postSpy.mockRestore();
     }
+  });
+
+  it('returns null when Wayfair job_search_data responds with HTML (bot wall)', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: '<!DOCTYPE html><html><body>Access denied</body></html>',
+      } as any);
+      const result = await fetchAtsBoardJobs(
+        'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology'
+      );
+      expect(result).toBeNull();
+    } finally {
+      postSpy.mockRestore();
+    }
+  });
+
+  it('fetchWayfairBoardJobsInBrowser maps SPA XHR JSON to list rows', async () => {
+    const page = {
+      evaluate: vi.fn(async () => ({
+        jobListData: [
+          {
+            id: 1,
+            eid: '16917',
+            title: 'Software Engineer III',
+            jobTypeId: 2,
+            location: { name: 'Boston, MA', city: 'Boston', state: 'Massachusetts', country: 'United States' },
+            jobTypeDisplayName: 'Full-time',
+            createdDate: '2026-01-01',
+          },
+        ],
+      })),
+    };
+    const rows = await fetchWayfairBoardJobsInBrowser(
+      page as any,
+      'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology'
+    );
+    expect(buildWayfairSearchRequestBody(
+      'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology&locationIds=&stateIds='
+    )).toMatchObject({ teamIds: [1], countryIds: [1], locationIds: [], stateIds: [] });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].jobTitle).toBe('Software Engineer III');
+    expect(rows[0].jobUrl).toContain('/careers/job/');
   });
 
   it('maps Lever postings array', async () => {
