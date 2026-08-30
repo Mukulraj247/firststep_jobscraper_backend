@@ -1,7 +1,7 @@
 sector,company,original_url,mode,recommended_start_url,scrape_do_note
 Banks,"JPMorgan Chase & Co.",https://careers.jpmorgan.com/us/en/home,phenom_try,https://careers.jpmorgan.com/us/en/search-results,TRY /us/en/search-results
 Banks,"Bank of America",https://careers.bankofamerica.com/,bankofamerica,https://careers.bankofamerica.com/en-us/job-search,FREE list+enrich
-Banks,"Wells Fargo & Company",https://www.wellsfargojobs.com/,phenom_try,https://www.wellsfargojobs.com/us/en/search-results,TRY /us/en/search-results
+Banks,"Wells Fargo & Company",https://www.wellsfargojobs.com/,happydance,https://www.wellsfargojobs.com/en/jobs/,HappyDance /en/jobs/ RSS
 Banks,"Citigroup Inc.",https://jobs.citi.com/,phenom_try,https://jobs.citi.com/us/en/search-results,TRY /us/en/search-results
 Banks,"Morgan Stanley",https://www.morganstanley.com/people-opportunities,browser_list,https://www.morganstanley.com/people-opportunities,browser list; careerhtml enrich when detail host known
 Banks,"Goldman Sachs Group Inc.",https://www.goldmansachs.com/careers/index.html,browser_list,https://www.goldmansachs.com/careers/index.html,browser list; careerhtml enrich when detail host known

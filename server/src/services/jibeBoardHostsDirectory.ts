@@ -17,6 +17,32 @@ export const JIBE_CAREER_BOARD_BY_HOST: Record<string, JibeCareerBoardConfig> = 
     apiOrigin: 'https://uhs.jibeapply.com',
     jobsPath: '/careers/jobs',
   },
+  'careers.ulta.com': {
+    companyHint: 'Ulta Beauty',
+    apiOrigin: 'https://ulta.jibeapply.com',
+    jobsPath: '/careers/jobs',
+  },
+  'careers.spglobal.com': {
+    companyHint: 'S&P Global',
+    apiOrigin: 'https://spglobal.jibeapply.com',
+    jobsPath: '/jobs',
+  },
+  'careers.principal.com': {
+    companyHint: 'Principal',
+    apiOrigin: 'https://principal.jibeapply.com',
+    jobsPath: '/careers-home/jobs',
+  },
+  // Public SR postings API is empty; careers site exposes Jibe /api/jobs on the same host.
+  'careers.docusign.com': {
+    companyHint: 'DocuSign',
+    apiOrigin: 'https://careers.docusign.com',
+    jobsPath: '/careers-home/jobs',
+  },
+  'careers.icims.com': {
+    companyHint: 'iCIMS',
+    apiOrigin: 'https://careers.icims.com',
+    jobsPath: '/careers-home/jobs',
+  },
 };
 
 export function jibeCareerBoardConfig(url: string): JibeCareerBoardConfig | null {

@@ -31,6 +31,11 @@ import {
   resolveOracleHashVanityFusionHost,
   assertSafeFindlyApiBase,
   looksLikePhenomBoard,
+  looksLikeTalentBrewBoard,
+  parseTalentBrewBoardFilters,
+  parseTalentBrewResultsHtml,
+  looksLikeZwayamBoard,
+  parseZwayamBoardFilters,
   looksLikeNasActivateBoard,
   looksLikeHappyDanceBoard,
   looksLikeWorkdayBoard,
@@ -137,14 +142,24 @@ describe('startUrlHasCollectionFilters', () => {
       expect: true,
     },
     {
-      name: 'Intuit Phenom /search-jobs with tracking query only',
+      name: 'Intuit Talent Brew /search-jobs with tracking query only',
       url: 'https://jobs.intuit.com/search-jobs?cid=directBookmarked_directBookmarked&_gl=1*9qw10m*_gcl_au*NDIxNDI2NjkyLjE3ODc2NDUyMzg.*_ga*OTQ3MDE5NTg5LjE3ODc2NDUyNDI.*_ga_B0XHEYG9RN*czE3ODc2NDUyNDIkbzEkZzAkdDE3ODc2NDUyNDIkajYwJGwwJGgw',
       expect: true,
     },
     {
-      name: 'Intuit Phenom /search-jobs with no query',
+      name: 'Intuit Talent Brew /search-jobs with no query',
       url: 'https://jobs.intuit.com/search-jobs',
       expect: true,
+    },
+    {
+      name: "Moody's Talent Brew SEO path filters",
+      url: 'https://careers.moodys.com/en/search-jobs/technology/United%20States/49841/1/2/6252001/39x7599983215332/-98x5/50/2',
+      expect: true,
+    },
+    {
+      name: 'Empower Talent Brew→Workday marketing /search-jobs is not a collection filter shell',
+      url: 'https://jobs.empower.com/search-jobs',
+      expect: false,
     },
   ];
 
@@ -572,17 +587,15 @@ describe('detectAtsBoard', () => {
     expect(fromJob?.companyHint).toBe('stripe');
   });
 
-  it('detects DocuSign SmartRecruiters connected career site (not Greenhouse)', () => {
+  it('detects DocuSign Jibe career site (not SmartRecruiters / Greenhouse)', () => {
     const d = detectAtsBoard('https://careers.docusign.com');
-    expect(d?.provider).toBe('smartrecruiters');
+    expect(d?.provider).toBe('jibe');
     expect(d?.companyHint).toBe('DocuSign');
-    expect(d?.listApiUrl).toBe('https://api.smartrecruiters.com/v1/companies/DocuSign/postings');
+    expect(d?.listApiUrl).toBe('https://careers.docusign.com/api/jobs');
     expect(looksLikeGreenhouseBoard('https://careers.docusign.com/jobs?query=software+developer')).toBe(
       false
     );
-    expect(detectAtsBoard('https://careers.docusign.com/careers-home/jobs')?.provider).toBe(
-      'smartrecruiters'
-    );
+    expect(detectAtsBoard('https://careers.docusign.com/careers-home/jobs')?.provider).toBe('jibe');
     expect(detectAtsBoard('https://stripe.com')?.provider).not.toBe('greenhouse');
   });
 
@@ -625,6 +638,22 @@ describe('detectAtsBoard', () => {
     expect(looksLikePhenomBoard('https://jobs.uhsinc.com/careers/jobs')).toBe(false);
   });
 
+  it('detects Ulta Beauty Jibe career site (not Phenom)', () => {
+    const url =
+      'https://careers.ulta.com/careers/jobs?location=united%20states&stretch=10&stretchUnit=MILES&sortBy=distance_from&page=1&categories=Information%20Technology';
+    const d = detectAtsBoard(url);
+    expect(d?.provider).toBe('jibe');
+    expect(d?.companyHint).toBe('Ulta Beauty');
+    expect(d?.listApiUrl).toBe('https://ulta.jibeapply.com/api/jobs');
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(parseJibeBoardFilters(url)).toMatchObject({
+      location: 'united states',
+      categories: ['Information Technology'],
+    });
+    expect(startUrlHasCollectionFilters(url)).toBe(true);
+    expect(shouldPreferAtsBoardOverUiPagination(url)).toBe(true);
+  });
+
   it('detects Wayfair careers jobs board', () => {
     const url =
       'https://www.wayfair.com/careers/jobs?teamIds=1&countryIds=1&keywords=technology&locationIds=&stateIds=';
@@ -633,6 +662,19 @@ describe('detectAtsBoard', () => {
     expect(d?.companyHint).toBe('Wayfair');
     expect(d?.listApiUrl).toBe('https://www.wayfair.com/a/careers/careers/job_search_data');
     expect(startUrlHasCollectionFilters(url)).toBe(true);
+  });
+
+  it('detects Persistent Zwayam career SPA (explore-opportunities)', () => {
+    const url = 'https://careers.persistent.com/explore-opportunities';
+    expect(looksLikeZwayamBoard(url)).toBe(true);
+    const d = detectAtsBoard(url);
+    expect(d?.provider).toBe('zwayam');
+    expect(d?.companyHint).toBe('Persistent');
+    expect(d?.listApiUrl).toBe('https://public.zwayam.com/jobs/search');
+    expect(shouldPreferAtsBoardOverUiPagination(url)).toBe(true);
+    expect(parseZwayamBoardFilters(`${url}?keywords=United%20States`).keywords).toBe(
+      'United States'
+    );
   });
 
   it('autofixes untied→united and parses Jibe location + category filters', () => {
@@ -710,14 +752,14 @@ describe('detectAtsBoard', () => {
     expect(findlyHost?.provider).toBe('findly');
   });
 
-  it('detects Phenom directory hosts before Findly /job-search-results heuristic', () => {
+  it('detects Travelers / Edward Jones as Findly (migrated off Phenom directory)', () => {
     const travelers = 'https://careers.travelers.com/job-search-results';
-    expect(looksLikeFindlyBoard(travelers)).toBe(false);
-    expect(looksLikePhenomBoard(travelers)).toBe(true);
-    expect(detectAtsBoard(travelers)?.provider).toBe('phenom');
-    expect(detectAtsBoard(travelers)?.companyHint).toBe('Travelers');
-    expect(detectAtsBoard('https://careers.travelers.com/us/en/search-results')?.provider).toBe(
-      'phenom'
+    expect(looksLikeFindlyBoard(travelers)).toBe(true);
+    expect(looksLikePhenomBoard(travelers)).toBe(false);
+    expect(detectAtsBoard(travelers)?.provider).toBe('findly');
+    expect(detectAtsBoard(travelers)?.companyHint).toMatch(/Travelers/i);
+    expect(detectAtsBoard('https://careers.edwardjones.com/job-search-results/')?.provider).toBe(
+      'findly'
     );
   });
 
@@ -1535,6 +1577,39 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.rows[0].jobUrl).toContain('/careers-home/jobs/5734');
   });
 
+  it('fetches Ulta Jibe with location + category filters', async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        totalCount: 1,
+        count: 1,
+        jobs: [
+          {
+            data: {
+              slug: 'data-scientist-123',
+              title: 'Data Scientist',
+              category: ['Information Technology'],
+              full_location: 'Chicago, IL, United States',
+              country: 'United States',
+            },
+          },
+        ],
+      },
+    } as any);
+    const result = await fetchAtsBoardJobs(
+      'https://careers.ulta.com/careers/jobs?location=united%20states&stretch=10&stretchUnit=MILES&sortBy=distance_from&page=1&categories=Information%20Technology'
+    );
+    expect(getSpy).toHaveBeenCalled();
+    const requested = String(getSpy.mock.calls[0][0]);
+    expect(requested).toContain('ulta.jibeapply.com/api/jobs');
+    expect(requested).toMatch(/location=united(\+|%20)states/i);
+    expect(requested).toMatch(/categories=Information(\+|%20)Technology/i);
+    expect(requested).toContain('stretch=10');
+    expect(result?.provider).toBe('jibe');
+    expect(result?.rows.map((r) => r.jobTitle)).toEqual(['Data Scientist']);
+    expect(result?.rows[0].jobUrl).toContain('/careers/jobs/data-scientist-123');
+  });
+
   it('returns a confirmed-empty SmartRecruiters board instead of null when the API has 0 postings', async () => {
     getSpy.mockResolvedValue({
       status: 200,
@@ -1548,20 +1623,27 @@ describe('fetchAtsBoardJobs', () => {
     expect(result?.confirmedEmpty).toBe(true);
   });
 
-  it('returns null for empty DocuSign SmartRecruiters API so browser fallback can run', async () => {
+  it('returns null for empty DocuSign Jibe fetch so browser fallback can run', async () => {
     getSpy.mockResolvedValue({
       status: 200,
-      data: { totalFound: 0, content: [] },
+      data: { totalCount: 0, count: 0, jobs: [] },
     } as any);
     const vanity = await fetchAtsBoardJobs(
       'https://careers.docusign.com/careers-home/jobs?keywords=software'
     );
     expect(vanity).toBeNull();
 
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: { totalFound: 0, content: [] },
+    } as any);
     const srHost = await fetchAtsBoardJobs(
       'https://jobs.smartrecruiters.com/DocuSign?keywords=software'
     );
-    expect(srHost).toBeNull();
+    // Public SR board for DocuSign is empty — confirmedEmpty (not a connected vanity host).
+    expect(srHost?.provider).toBe('smartrecruiters');
+    expect(srHost?.rows).toEqual([]);
+    expect(srHost?.confirmedEmpty).toBe(true);
   });
 
   it('returns null for empty GitHub Jibe fetch so browser fallback can run', async () => {
@@ -1573,6 +1655,37 @@ describe('fetchAtsBoardJobs', () => {
       'https://www.github.careers/careers-home/jobs?keywords=united%20states&categories=Engineering'
     );
     expect(result).toBeNull();
+  });
+
+  it("fetches Moody's Talent Brew search-jobs/results AJAX and maps rows", async () => {
+    getSpy.mockResolvedValue({
+      status: 200,
+      data: {
+        hasJobs: true,
+        results: `
+          <section id="search-results">
+            <ul>
+              <li>
+                <h2><a href="/en/job/new-york/genai-technology-architect/49841/99720141392">GenAI Technology Architect</a></h2>
+                <span class="job-location">New York, United States</span>
+              </li>
+            </ul>
+          </section>`,
+      },
+    } as any);
+    const url =
+      'https://careers.moodys.com/en/search-jobs/technology/United%20States/49841/1/2/6252001/39x7599983215332/-98x5/50/2';
+    const result = await fetchAtsBoardJobs(url, { maxItems: 10 });
+    expect(getSpy).toHaveBeenCalled();
+    const requested = String(getSpy.mock.calls[0][0]);
+    expect(requested).toContain('careers.moodys.com/en/search-jobs/results');
+    expect(requested).toMatch(/Keywords=technology/i);
+    expect(requested).toMatch(/OrganizationIds=49841/);
+    expect(requested).toMatch(/FacetFilters%5B0%5D\.ID=6252001|FacetFilters\[0\]\.ID=6252001/);
+    expect(result?.provider).toBe('talentbrew');
+    expect(result?.rows).toHaveLength(1);
+    expect(result?.rows[0].jobTitle).toBe('GenAI Technology Architect');
+    expect(result?.rows[0].jobUrl).toContain('/en/job/new-york/genai-technology-architect/');
   });
 
   it('fetches Wayfair job_search_data with team/country/keyword filters', async () => {
@@ -1630,6 +1743,54 @@ describe('fetchAtsBoardJobs', () => {
       expect(result?.rows[0].jobUrl).toBe(
         'https://www.wayfair.com/careers/job/software-engineer-iii---visual-ai-technology/2-16917'
       );
+    } finally {
+      postSpy.mockRestore();
+    }
+  });
+
+  it('fetches Persistent Zwayam jobs/search multipart and maps rows', async () => {
+    const postSpy = vi.spyOn(atsHttpClient, 'post');
+    try {
+      postSpy.mockResolvedValue({
+        status: 200,
+        data: {
+          code: 200,
+          data: {
+            totalCount: 1,
+            facetedSearchConfig: { paginationHowMuch: '9' },
+            data: [
+              {
+                _source: {
+                  id: 1061575,
+                  jobTitle: 'Snowflake Data Engineer',
+                  location: 'United States',
+                  jobUrl: 'snowflake-data-engineer-usa-202410161515494',
+                  modifiedDate: 1700000000000,
+                  deptNameToSet: 'Engineering',
+                },
+              },
+            ],
+          },
+        },
+      } as any);
+      const result = await fetchAtsBoardJobs(
+        'https://careers.persistent.com/explore-opportunities?keywords=United%20States',
+        { maxItems: 10 }
+      );
+      expect(postSpy).toHaveBeenCalled();
+      expect(String(postSpy.mock.calls[0][0])).toBe('https://public.zwayam.com/jobs/search');
+      const body = postSpy.mock.calls[0][1];
+      const bodyText = Buffer.isBuffer(body) ? body.toString('utf8') : String(body);
+      expect(bodyText).toContain('name="filterCri"');
+      expect(bodyText).toContain('United States');
+      expect(bodyText).toContain('MTYzNDQ=');
+      expect(result?.provider).toBe('zwayam');
+      expect(result?.rows).toHaveLength(1);
+      expect(result?.rows[0].jobTitle).toBe('Snowflake Data Engineer');
+      expect(result?.rows[0].jobUrl).toContain(
+        '/jobview/snowflake-data-engineer-usa-202410161515494'
+      );
+      expect(result?.rows[0].jobUrl).toContain('id=1061575');
     } finally {
       postSpy.mockRestore();
     }
@@ -2135,13 +2296,69 @@ describe('Phenom board adapter', () => {
     expect(cfg?.refNum).not.toBe('1133910207165');
   });
 
-  it('detects Intuit Phenom /search-jobs boards so collection skips reCAPTCHA', () => {
+  it('detects Intuit Talent Brew /search-jobs boards (Radancy, not Phenom)', () => {
     const url =
       'https://jobs.intuit.com/search-jobs?cid=directBookmarked_directBookmarked&_gl=1*9qw10m*_gcl_au*NDIxNDI2NjkyLjE3ODc2NDUyMzg.*_ga*OTQ3MDE5NTg5LjE3ODc2NDUyNDI.*_ga_B0XHEYG9RN*czE3ODc2NDUyNDIkbzEkZzAkdDE3ODc2NDUyNDIkajYwJGwwJGgw';
-    expect(looksLikePhenomBoard(url)).toBe(true);
-    expect(detectAtsBoard(url)?.provider).toBe('phenom');
-    expect(detectAtsBoard(url)?.companyHint).toBe('Intuit');
-    expect(looksLikePhenomBoard('https://jobs.intuit.com/search-jobs')).toBe(true);
+    expect(looksLikeTalentBrewBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(detectAtsBoard(url)?.provider).toBe('talentbrew');
+    expect(detectAtsBoard(url)?.companyHint).toMatch(/Intuit/i);
+    expect(parseTalentBrewBoardFilters(url).organizationIds).toBe('27595');
+    expect(looksLikeTalentBrewBoard('https://jobs.intuit.com/search-jobs')).toBe(true);
+  });
+
+  it("detects Moody's Talent Brew /search-jobs SEO boards (not Phenom)", () => {
+    const url =
+      'https://careers.moodys.com/en/search-jobs/technology/United%20States/49841/1/2/6252001/39x7599983215332/-98x5/50/2';
+    expect(looksLikeTalentBrewBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(detectAtsBoard(url)?.provider).toBe('talentbrew');
+    expect(detectAtsBoard(url)?.companyHint).toBe("Moody's");
+    expect(detectAtsBoard(url)?.listApiUrl).toBe(
+      'https://careers.moodys.com/en/search-jobs/results'
+    );
+    expect(parseTalentBrewBoardFilters(url)).toMatchObject({
+      locale: 'en',
+      keywords: 'technology',
+      location: 'United States',
+      organizationIds: '49841',
+      locationType: '2',
+      locationPath: '6252001',
+      latitude: '39.7599983215332',
+      longitude: '-98.5',
+      distance: '50',
+      searchType: '2',
+    });
+    expect(shouldPreferAtsBoardOverUiPagination(url)).toBe(true);
+  });
+
+  it('does not classify Empower Talent Brew→Workday as talentbrew', () => {
+    expect(looksLikeTalentBrewBoard('https://jobs.empower.com/search-jobs')).toBe(false);
+    expect(looksLikeWorkdayBoard('https://jobs.empower.com/search-jobs')).toBe(true);
+  });
+
+  it('parses Talent Brew results HTML into job rows', () => {
+    const html = `
+      <section id="search-results" data-total-job-results="2">
+        <ul>
+          <li>
+            <h2><a href="/en/job/new-york/genai-technology-architect/49841/99720141392">GenAI Technology Architect</a></h2>
+            <span class="job-location">New York, United States</span>
+          </li>
+          <li>
+            <h2><a href="/en/job/charlotte/senior-it-auditor/49841/96571737728">Senior IT Auditor</a></h2>
+            <span class="job-location">Charlotte, United States</span>
+          </li>
+        </ul>
+      </section>`;
+    const jobs = parseTalentBrewResultsHtml(html, 'https://careers.moodys.com');
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]).toMatchObject({
+      title: 'GenAI Technology Architect',
+      jobUrl:
+        'https://careers.moodys.com/en/job/new-york/genai-technology-architect/49841/99720141392',
+      location: 'New York, United States',
+    });
   });
 
   it('detects Uber HappyDance /en/jobs lists (countries query, not Phenom)', () => {
@@ -2168,6 +2385,20 @@ describe('Phenom board adapter', () => {
     expect(detectAtsBoard('https://careers.pinterest.com/careers')?.provider).toBe('phenom');
   });
 
+  it('detects Verizon HappyDance /jobs lists so RSS collection skips Cloudflare browser scrape', () => {
+    const url =
+      'https://mycareer.verizon.com/jobs/?country=United+States+of+America&team=Technology';
+    expect(looksLikeHappyDanceBoard(url)).toBe(true);
+    expect(looksLikePhenomBoard(url)).toBe(false);
+    expect(detectAtsBoard(url)?.provider).toBe('happydance');
+    expect(detectAtsBoard(url)?.companyHint).toBe('Verizon');
+    expect(detectAtsBoard(url)?.listApiUrl).toBe(
+      'https://mycareer.verizon.com/jobs/xml/?rss=true'
+    );
+    expect(startUrlHasCollectionFilters(url)).toBe(true);
+    expect(shouldPreferAtsBoardOverUiPagination(url)).toBe(true);
+  });
+
   it('detects Box HappyDance /en/jobs lists so filtered RSS collection skips Cloudflare', () => {
     const url =
       'https://careers.box.com/en/jobs/?search=&location=Austin%2C+Texas%2C+United+States&team=Engineering&team=IT&team=Security&pagesize=20#results';
@@ -2190,6 +2421,26 @@ describe('Phenom board adapter', () => {
     expect(looksLikePhenomBoard(url)).toBe(false);
     expect(detectAtsBoard(url)?.provider).toBe('happydance');
     expect(detectAtsBoard(url)?.companyHint).toBe('Nutanix');
+  });
+
+  it('detects Wells Fargo HappyDance (migrated off Phenom search-results)', () => {
+    expect(looksLikePhenomBoard('https://www.wellsfargojobs.com/')).toBe(false);
+    expect(looksLikePhenomBoard('https://www.wellsfargojobs.com/us/en/search-results')).toBe(false);
+    expect(detectAtsBoard('https://www.wellsfargojobs.com/')?.provider).toBe('happydance');
+    expect(detectAtsBoard('https://www.wellsfargojobs.com/')?.companyHint).toBe('Wells Fargo');
+    const list =
+      'https://www.wellsfargojobs.com/en/jobs/?search=&country=United+States+of+America&team=Data+%26+Analytics&pagesize=20#results';
+    expect(looksLikeHappyDanceBoard(list)).toBe(true);
+    expect(detectAtsBoard(list)?.provider).toBe('happydance');
+    expect(detectAtsBoard(list)?.listApiUrl).toBe(
+      'https://www.wellsfargojobs.com/en/jobs/xml/?rss=true'
+    );
+    // Stale Phenom path on HappyDance host must still resolve RSS under /en/jobs/xml
+    expect(
+      detectAtsBoard(
+        'https://www.wellsfargojobs.com/us/en/search-results?team=Data+%26+Analytics'
+      )?.listApiUrl
+    ).toBe('https://www.wellsfargojobs.com/en/jobs/xml/?rss=true');
   });
 
   it('detects Qualcomm / NVIDIA-style careers.brand.com/careers PCS URLs', () => {

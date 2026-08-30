@@ -3,13 +3,22 @@ import {
   FINDLY_BOARD_HOSTS,
   FINDLY_RECOMMENDED_LIST_URL_BY_HOST,
 } from './findlyBoardHostsDirectory';
-import { looksLikeFindlyBoard, looksLikePhenomBoard, looksLikeWorkdayBoard, isSmartRecruitersVanityHost, smartRecruitersVanityJobsPath } from './atsAdapters';
+import {
+  looksLikeFindlyBoard,
+  looksLikePhenomBoard,
+  looksLikeTalentBrewBoard,
+  looksLikeWorkdayBoard,
+  isSmartRecruitersVanityHost,
+  smartRecruitersVanityJobsPath,
+  isHappyDanceBoardHost,
+} from './atsAdapters';
 import {
   isTalentBrewWorkdayHost,
   talentBrewWorkdayBoardUrl,
 } from './talentBrewWorkdayHostsDirectory';
 import { isWorkdayHostOnlyUrl, recommendedWorkdayListUrl } from './workdayBoardHostsDirectory';
 import { jibeCareerBoardConfig } from './jibeBoardHostsDirectory';
+import { zwayamCareerBoardConfig } from './zwayamBoardHostsDirectory';
 
 /**
  * Phenom list shells from docs/career-ats-ready-start-urls.csv (mode=phenom_try).
@@ -17,7 +26,6 @@ import { jibeCareerBoardConfig } from './jibeBoardHostsDirectory';
  */
 export const PHENOM_RECOMMENDED_LIST_URL_BY_HOST: Record<string, string> = {
   'careers.jpmorgan.com': 'https://careers.jpmorgan.com/us/en/search-results',
-  'wellsfargojobs.com': 'https://www.wellsfargojobs.com/us/en/search-results',
   'jobs.citi.com': 'https://jobs.citi.com/us/en/search-results',
   'jobs.pnc.com': 'https://jobs.pnc.com/us/en/search-results',
   'careers.truist.com': 'https://careers.truist.com/us/en/search-results',
@@ -30,7 +38,6 @@ export const PHENOM_RECOMMENDED_LIST_URL_BY_HOST: Record<string, string> = {
   'jobs.citizensbank.com': 'https://jobs.citizensbank.com/us/en/search-results',
   'jobs.libertymutualgroup.com': 'https://jobs.libertymutualgroup.com/us/en/search-results',
   'usaajobs.com': 'https://www.usaajobs.com/us/en/search-results',
-  'careers.travelers.com': 'https://careers.travelers.com/us/en/search-results',
   'jobs.farmersinsurance.com': 'https://jobs.farmersinsurance.com/us/en/search-results',
   'careers.amfam.com': 'https://careers.amfam.com/us/en/search-results',
   'careers.chubb.com': 'https://careers.chubb.com/us/en/search-results',
@@ -38,6 +45,13 @@ export const PHENOM_RECOMMENDED_LIST_URL_BY_HOST: Record<string, string> = {
   'jobs.cigna.com': 'https://jobs.cigna.com/us/en/search-results',
   'jobs.newyorklife.com': 'https://jobs.newyorklife.com/us/en/search-results',
   'jobs.assurant.com': 'https://jobs.assurant.com/us/en/search-results',
+};
+
+/** HappyDance PHB list shells (locale /en/jobs/). */
+export const HAPPYDANCE_RECOMMENDED_LIST_URL_BY_HOST: Record<string, string> = {
+  'wellsfargojobs.com': 'https://www.wellsfargojobs.com/en/jobs/',
+  'careers.box.com': 'https://careers.box.com/en/jobs/',
+  'careers.nutanix.com': 'https://careers.nutanix.com/en/jobs/',
 };
 
 function normalizedHost(url: string): string | null {
@@ -54,13 +68,14 @@ export function isPhenomListShellPath(pathname: string): boolean {
   if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results$/i.test(path)) return true;
   if (/\/search-jobs$/i.test(path)) return true;
   if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)+c\/[a-z0-9-]+$/i.test(path)) return true;
+  // Widgets list shells: /jobs, /global-en/jobs, /us/en/jobs (Cognizant, etc.)
+  if (/\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*jobs$/i.test(path)) return true;
   // Qualcomm / NVIDIA-style PCS list at /careers
   if (/^\/careers$/i.test(path)) return true;
   return false;
 }
 
 function defaultPhenomListUrl(origin: string, host: string): string {
-  if (host === 'jobs.intuit.com') return `${origin}/search-jobs`;
   return `${origin}/us/en/search-results`;
 }
 
@@ -124,7 +139,7 @@ export function resolveAtsBoardStartUrl(rawUrl: string): {
       url: talentBrewWorkday,
       adjusted: true,
       reason:
-        'Talent Brew marketing site resolved to public Workday CXS board (skips reCAPTCHA browser shell)',
+        'Marketing career site resolved to public Workday CXS board (skips reCAPTCHA browser shell)',
     };
   }
 
@@ -152,6 +167,40 @@ export function resolveAtsBoardStartUrl(rawUrl: string): {
         url: dest.toString(),
         adjusted: true,
         reason: 'Jibe career homepage upgraded to public jobs list shell',
+      };
+    }
+    return { url: trimmed, adjusted: false };
+  }
+
+  const zwayamBoard = zwayamCareerBoardConfig(trimmed);
+  if (zwayamBoard) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return { url: trimmed, adjusted: false };
+    }
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    const jobsPath = zwayamBoard.jobsPath.replace(/\/+$/, '') || '/explore-opportunities';
+    if (
+      path === jobsPath ||
+      path.startsWith(`${jobsPath}/`) ||
+      path === '/jobslist' ||
+      path.startsWith('/jobslist/') ||
+      path.startsWith('/jobview/')
+    ) {
+      return { url: trimmed, adjusted: false };
+    }
+    if (path === '/' || path === '/careers') {
+      const dest = new URL(`${parsed.origin}${jobsPath}`);
+      for (const [key, value] of parsed.searchParams.entries()) {
+        if (!dest.searchParams.has(key)) dest.searchParams.append(key, value);
+      }
+      if (parsed.hash && !dest.hash) dest.hash = parsed.hash;
+      return {
+        url: dest.toString(),
+        adjusted: true,
+        reason: 'Zwayam career homepage upgraded to explore-opportunities list shell',
       };
     }
     return { url: trimmed, adjusted: false };
@@ -185,32 +234,45 @@ export function resolveAtsBoardStartUrl(rawUrl: string): {
     return { url: trimmed, adjusted: false };
   }
 
-  if (looksLikeWorkdayBoard(trimmed) && isWorkdayHostOnlyUrl(trimmed)) {
-    const listBase = recommendedWorkdayListUrl(trimmed);
-    if (listBase) {
-      let parsed: URL;
-      try {
-        parsed = new URL(trimmed);
-      } catch {
-        return { url: trimmed, adjusted: false };
+  if (looksLikeWorkdayBoard(trimmed)) {
+    let parsedWorkday: URL;
+    try {
+      parsedWorkday = new URL(trimmed);
+    } catch {
+      return { url: trimmed, adjusted: false };
+    }
+    const workdayPath = parsedWorkday.pathname.replace(/\/+$/, '') || '/';
+    const phenomShapedOnWorkday =
+      /\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results$/i.test(workdayPath) ||
+      /\/search-jobs$/i.test(workdayPath) ||
+      /\/job-search-results$/i.test(workdayPath);
+    if (isWorkdayHostOnlyUrl(trimmed) || phenomShapedOnWorkday) {
+      const listBase = recommendedWorkdayListUrl(
+        phenomShapedOnWorkday
+          ? `${parsedWorkday.origin}/${parsedWorkday.search}${parsedWorkday.hash}`
+          : trimmed
+      );
+      if (listBase) {
+        let dest: URL;
+        try {
+          dest = new URL(listBase);
+        } catch {
+          return { url: trimmed, adjusted: false };
+        }
+        for (const [key, value] of parsedWorkday.searchParams.entries()) {
+          if (!dest.searchParams.has(key)) dest.searchParams.append(key, value);
+        }
+        if (parsedWorkday.hash && !dest.hash) dest.hash = parsedWorkday.hash;
+        const normalized = dest.toString();
+        if (normalized === trimmed) return { url: trimmed, adjusted: false };
+        return {
+          url: normalized,
+          adjusted: true,
+          reason: phenomShapedOnWorkday
+            ? 'Workday host with Phenom-shaped path rewritten to public career site list shell'
+            : 'Workday hostname-only URL upgraded to public career site list shell',
+        };
       }
-      let dest: URL;
-      try {
-        dest = new URL(listBase);
-      } catch {
-        return { url: trimmed, adjusted: false };
-      }
-      for (const [key, value] of parsed.searchParams.entries()) {
-        if (!dest.searchParams.has(key)) dest.searchParams.append(key, value);
-      }
-      if (parsed.hash && !dest.hash) dest.hash = parsed.hash;
-      const normalized = dest.toString();
-      if (normalized === trimmed) return { url: trimmed, adjusted: false };
-      return {
-        url: normalized,
-        adjusted: true,
-        reason: 'Workday hostname-only URL upgraded to public career site list shell',
-      };
     }
   }
 
@@ -248,8 +310,55 @@ export function resolveAtsBoardStartUrl(rawUrl: string): {
     };
   }
 
+  // HappyDance PHB (Box, Wells Fargo, …): homepage / stale Phenom paths → /en/jobs/
+  if (isHappyDanceBoardHost(host)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return { url: trimmed, adjusted: false };
+    }
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    const alreadyList =
+      /^\/[a-z]{2}(?:-[a-z]{2})?\/jobs(?:\/xml)?$/i.test(path) ||
+      /^\/jobs(?:\/xml)?$/i.test(path);
+    if (alreadyList) return { url: trimmed, adjusted: false };
+
+    const listBase = HAPPYDANCE_RECOMMENDED_LIST_URL_BY_HOST[host] || `${parsed.origin}/en/jobs/`;
+    let dest: URL;
+    try {
+      dest = new URL(listBase);
+    } catch {
+      return { url: trimmed, adjusted: false };
+    }
+    for (const [key, value] of parsed.searchParams.entries()) {
+      if (!dest.searchParams.has(key)) dest.searchParams.append(key, value);
+    }
+    if (parsed.hash && !dest.hash) dest.hash = parsed.hash;
+    const normalized = dest.toString();
+    if (normalized === trimmed) return { url: trimmed, adjusted: false };
+    const phenomShaped =
+      /\/(?:[a-z]{2}(?:-[a-z]{2})?\/)*search-results$/i.test(path) ||
+      /\/search-jobs$/i.test(path) ||
+      /\/job-search-results$/i.test(path);
+    return {
+      url: normalized,
+      adjusted: true,
+      reason: phenomShaped
+        ? 'HappyDance host with Phenom-shaped path rewritten to /en/jobs/ list shell'
+        : 'HappyDance career homepage upgraded to /en/jobs/ list shell',
+    };
+  }
+
+  // Talent Brew SEO shells on mis-tagged Phenom hosts (e.g. usaajobs.com) must not
+  // be rewritten to /us/en/search-results — that breaks the AJAX results endpoint.
+  if (looksLikeTalentBrewBoard(trimmed)) {
+    return { url: trimmed, adjusted: false };
+  }
+
   const isPhenomHost =
-    DIRECTORY_PHENOM_BOARD_HOSTS.has(host) || looksLikePhenomBoard(trimmed);
+    !/^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$/i.test(host) &&
+    (DIRECTORY_PHENOM_BOARD_HOSTS.has(host) || looksLikePhenomBoard(trimmed));
   if (!isPhenomHost) return { url: trimmed, adjusted: false };
 
   let parsed: URL;

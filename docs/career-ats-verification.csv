@@ -1,7 +1,7 @@
 sector,company,url,board_provider,detail_ats,skip_scrape_do,bucket
 "Banks","JPMorgan Chase & Co.","https://careers.jpmorgan.com/us/en/home",phenom,none,true,free_board
 "Banks","Bank of America","https://careers.bankofamerica.com/",bankofamerica,none,true,free_board
-"Banks","Wells Fargo & Company","https://www.wellsfargojobs.com/",phenom,none,true,free_board
+"Banks","Wells Fargo & Company","https://www.wellsfargojobs.com/",happydance,none,true,free_board
 "Banks","Citigroup Inc.","https://jobs.citi.com/",phenom,none,true,free_board
 "Banks","Morgan Stanley","https://www.morganstanley.com/people-opportunities",none,none,true,enrich_free_or_skip
 "Banks","Goldman Sachs Group Inc.","https://www.goldmansachs.com/careers/index.html",none,none,true,enrich_free_or_skip

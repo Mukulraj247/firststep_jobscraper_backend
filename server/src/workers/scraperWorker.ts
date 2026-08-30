@@ -96,6 +96,8 @@ import {
   looksLikeWorkdayBoard,
   looksLikeGreenhouseBoard,
   looksLikeWayfairCareersBoard,
+  looksLikeTalentBrewBoard,
+  looksLikeZwayamBoard,
   startUrlHasCollectionFilters,
   shouldSkipAtsBoardForUiPagination,
   shouldPreferAtsBoardOverUiPagination,
@@ -455,7 +457,9 @@ async function tryAtsBoardCollection(
     !looksLikePhenomBoard(startUrl) &&
     !looksLikeFindlyBoard(startUrl) &&
     !isJibeCareerHost(startUrl) &&
-    !looksLikeWayfairCareersBoard(startUrl)
+    !looksLikeWayfairCareersBoard(startUrl) &&
+    !looksLikeTalentBrewBoard(startUrl) &&
+    !looksLikeZwayamBoard(startUrl)
   ) {
     await appendRunLog(
       run,

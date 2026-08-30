@@ -156,19 +156,25 @@ const WORKDAY_SITE_GUESSES = [
   'External_Careers',
 ];
 
+const WORKDAY_INVALID_SITE = /^(?:search-results|search-jobs|job-search-results|home|careers|careers-home|us|uk|en|fr|de|es)$/i;
+
 function workdayListApiUrl(host: string, tenant: string, site: string): string {
   return `https://${host}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}/jobs`;
 }
 
 function workdaySiteCandidates(tenant: string, detectedSite: string): string[] {
   const decoded = decodeURIComponent(detectedSite || '');
-  if (decoded && decoded !== WORKDAY_SITE_RESOLVE) return [decoded];
   const ordered: string[] = [];
   const add = (value?: string) => {
     const site = String(value || '').trim();
-    if (!site || site === WORKDAY_SITE_RESOLVE || ordered.includes(site)) return;
+    if (!site || site === WORKDAY_SITE_RESOLVE || WORKDAY_INVALID_SITE.test(site) || ordered.includes(site)) {
+      return;
+    }
     ordered.push(site);
   };
+  if (decoded && decoded !== WORKDAY_SITE_RESOLVE && !WORKDAY_INVALID_SITE.test(decoded)) {
+    add(decoded);
+  }
   add(workdayKnownSiteSlug(tenant));
   for (const guess of WORKDAY_SITE_GUESSES) add(guess);
   add(tenant);
@@ -188,12 +194,16 @@ export function detectWorkdayBoard(url: string): ExtraBoardDetection | null {
   if (!m) return null;
   const tenant = m[1];
   const parts = parsed.pathname.split('/').filter(Boolean);
-  const localeLike = /^(?:en|fr|de|es|pt|zh|ja|ko|it|nl|sv|da|fi|pl|tr)(?:-[a-z]{2})?$/i;
-  const filtered = parts.filter((p) => !localeLike.test(p) && !/^(wday|cxs)$/i.test(p));
+  const localeLike =
+    /^(?:en|fr|de|es|pt|zh|ja|ko|it|nl|sv|da|fi|pl|tr|us|uk|ca|au|in|mx|br|cn|jp|kr)(?:-[a-z]{2})?$/i;
+  const nonSite =
+    /^(?:wday|cxs|job|jobs|details|search-results|search-jobs|job-search-results|home|careers|careers-home)$/i;
+  const filtered = parts.filter((p) => !localeLike.test(p) && !nonSite.test(p));
   const site = filtered[0];
   if (site && /^(job|jobs|details)$/i.test(site)) return null;
   const knownSite = workdayKnownSiteSlug(tenant);
-  const siteKey = site || knownSite || WORKDAY_SITE_RESOLVE;
+  const siteKey =
+    site && !WORKDAY_INVALID_SITE.test(site) ? site : knownSite || WORKDAY_SITE_RESOLVE;
   return {
     provider: 'workday',
     companyHint: workdayCompanyHint(tenant),

@@ -26,6 +26,17 @@ describe('atsFreeBoardExtras detection', () => {
     });
   });
 
+  it('ignores Phenom-shaped path segments on Workday hosts and uses known Nationwide site', () => {
+    const d = detectWorkdayBoard(
+      'https://nationwide.wd1.myworkdayjobs.com/us/en/search-results?q=engineer'
+    );
+    expect(d?.provider).toBe('workday');
+    expect(d?.companyHint).toBe('Nationwide');
+    expect(d?.listApiUrl).toBe(
+      'https://nationwide.wd1.myworkdayjobs.com/wday/cxs/nationwide/Nationwide/jobs'
+    );
+  });
+
   it('detects hostname-only Workday boards with known tenant site slug', () => {
     const d = detectWorkdayBoard('https://broadcom.wd1.myworkdayjobs.com');
     expect(d?.provider).toBe('workday');
