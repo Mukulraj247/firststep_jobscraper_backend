@@ -5447,7 +5447,7 @@ async function fetchWayfairBoardJobs(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     res = await httpClient.post(detected.listApiUrl, body, { headers });
     // PerimeterX / bot wall often returns 429 — brief backoff then retry.
-    if (res.status !== 429 && res.status !== 403) break;
+    if (!res || (res.status !== 429 && res.status !== 403)) break;
     await sleepMs(400 * (attempt + 1));
   }
   if (!res || res.status >= 400 || !res.data) return null;
