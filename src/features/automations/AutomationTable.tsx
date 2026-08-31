@@ -20,7 +20,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import type { AutomationSummary } from '../../api/automation';
 import { formatTagChipLabel } from '../../components/automation/TagPicker';
-import { getScheduleLabel } from '../../constants/scheduleOptions';
+import { getScheduleLabel, intervalMsFromCronClient } from '../../constants/scheduleOptions';
 import { computeNextRunRelative, formatRelativeToNow } from '../../utils/cronBuilder';
 import { FIRSTSTEP, RADIUS, tint } from '../../components/dashboard/ops/dashboardTokens';
 import {
@@ -126,6 +126,13 @@ export function ScheduleChip({
   );
 }
 
+function isServerNextRunStale(next: Date, cron: string | null | undefined): boolean {
+  const everyMs = intervalMsFromCronClient(cron);
+  if (!everyMs) return false;
+  const msUntil = next.getTime() - Date.now();
+  return msUntil > everyMs * 1.5;
+}
+
 export function NextRunLabel({ automation }: { automation: AutomationSummary }) {
   const state = scheduleDisplayState(automation.schedule);
   if (state === 'manual') {
@@ -143,13 +150,17 @@ export function NextRunLabel({ automation }: { automation: AutomationSummary }) 
     );
   }
   const tz = automation.schedule?.timezone || 'UTC';
+  const cron = automation.schedule?.cron || '';
   const serverNext = automation.schedule?.nextRunAt
     ? new Date(automation.schedule.nextRunAt)
     : null;
-  const { relative, absolute } =
-    serverNext && !Number.isNaN(serverNext.getTime())
-      ? formatRelativeToNow(serverNext, tz)
-      : computeNextRunRelative(automation.schedule?.cron || '', tz);
+  const useServerNext =
+    serverNext &&
+    !Number.isNaN(serverNext.getTime()) &&
+    !isServerNextRunStale(serverNext, cron);
+  const { relative, absolute } = useServerNext
+    ? formatRelativeToNow(serverNext, tz)
+    : computeNextRunRelative(cron, tz);
   return (
     <Tooltip title={absolute} arrow>
       <Typography variant="body2" sx={{ color: FIRSTSTEP.tealDark, fontWeight: 600, whiteSpace: 'nowrap', fontSize: '0.8125rem' }}>

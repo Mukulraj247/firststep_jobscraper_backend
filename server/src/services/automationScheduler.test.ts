@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   automationScheduleNeedsRepack,
+  isNextRunAtStaleForInterval,
+  readRobotScheduleTimestamps,
   resolveScheduleEveryMs,
 } from './automationScheduler';
 
@@ -95,5 +97,47 @@ describe('automationScheduleNeedsRepack', () => {
     expect(
       automationScheduleNeedsRepack(robot, { enabled: true, cron: '0 * * * *', timezone: 'UTC' })
     ).toBe(true);
+  });
+});
+
+describe('isNextRunAtStaleForInterval', () => {
+  it('flags daily-spread nextRunAt under hourly cron', () => {
+    const stale = new Date(Date.now() + 8 * HOUR_MS);
+    expect(isNextRunAtStaleForInterval(stale, HOUR_MS)).toBe(true);
+  });
+
+  it('accepts nextRunAt within hourly window', () => {
+    const ok = new Date(Date.now() + 40 * 60 * 1000);
+    expect(isNextRunAtStaleForInterval(ok, HOUR_MS)).toBe(false);
+  });
+});
+
+describe('readRobotScheduleTimestamps', () => {
+  it('skips stale root nextRunAt and falls back to saas', () => {
+    const staleNext = new Date(Date.now() + 10 * HOUR_MS);
+    const freshNext = new Date(Date.now() + 45 * 60 * 1000);
+    const robot = {
+      schedule: {
+        enabled: true,
+        cron: '0 * * * *',
+        every: HOUR_MS,
+        nextRunAt: staleNext,
+        timezone: 'UTC',
+      },
+      recording_meta: {
+        saasConfig: {
+          schedule: {
+            enabled: true,
+            cron: '0 * * * *',
+            every: HOUR_MS,
+            nextRunAt: freshNext,
+            timezone: 'UTC',
+          },
+        },
+      },
+    };
+    const eff = { enabled: true, cron: '0 * * * *', every: HOUR_MS, timezone: 'UTC' };
+    const { nextRunAt } = readRobotScheduleTimestamps(robot, eff as any);
+    expect(nextRunAt?.getTime()).toBe(freshNext.getTime());
   });
 });

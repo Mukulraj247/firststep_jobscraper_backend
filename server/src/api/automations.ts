@@ -2530,6 +2530,7 @@ router.put('/automations/:id/schedule', async (req: any, res: any) => {
         nextSaasConfig.schedule.every = nextSchedule.every;
       }
     }
+    robot.markModified('recording_meta');
     await robot.save();
 
     logger.log(

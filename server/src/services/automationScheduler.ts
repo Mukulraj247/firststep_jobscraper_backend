@@ -87,6 +87,31 @@ export function resolveScheduleEveryMs(
   return intervalMsFromCron(schedule.cron || '');
 }
 
+/** True when a stored nextRunAt is too far out for the active interval (e.g. daily timestamp + hourly cron). */
+export function isNextRunAtStaleForInterval(
+  nextRunAt: Date | string | number | null | undefined,
+  everyMs: number | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if (!everyMs || everyMs <= 0 || nextRunAt == null) return false;
+  const ms = new Date(nextRunAt).getTime();
+  if (Number.isNaN(ms)) return false;
+  const msUntil = ms - now.getTime();
+  return msUntil > everyMs * 1.5;
+}
+
+function resolveValidNextRunAt(
+  raw: Date | string | number | null | undefined,
+  everyMs: number | null,
+  enabled: boolean
+): Date | null {
+  if (raw == null) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  if (enabled && isNextRunAtStaleForInterval(d, everyMs)) return null;
+  return d;
+}
+
 /**
  * Whether saving `nextSchedule` should repack `nextRunAt` (new cron/interval, root vs saas
  * drift, or a stored next run that is too far out for the target interval — e.g. hourly cron
@@ -112,17 +137,23 @@ export function automationScheduleNeedsRepack(
   if (resolveScheduleEveryMs(root) !== nextEvery) return true;
 
   if (next.enabled && nextEvery) {
-    const { nextRunAt } = readRobotScheduleTimestamps(robot, prevEffective);
-    if (nextRunAt && !Number.isNaN(nextRunAt.getTime())) {
-      const msUntil = nextRunAt.getTime() - Date.now();
-      if (msUntil > nextEvery * 1.5) return true;
+    const rootTs = robot?.schedule;
+    const saasTs = robot?.recording_meta?.saasConfig?.schedule;
+    const rawNext =
+      rootTs?.nextRunAt ?? saasTs?.nextRunAt ?? prevEffective.nextRunAt ?? null;
+    if (rawNext != null) {
+      const nextRunAt = new Date(rawNext);
+      if (!Number.isNaN(nextRunAt.getTime())) {
+        const msUntil = nextRunAt.getTime() - Date.now();
+        if (msUntil > nextEvery * 1.5) return true;
+      }
     }
   }
 
   return false;
 }
 
-/** Prefer root timestamps (written on fire); fall back to saasConfig. */
+/** Prefer root timestamps (written on fire); fall back to saasConfig. Skips nextRunAt stale for the active interval. */
 export function readRobotScheduleTimestamps(robot: any, schedule: StoredSchedule): {
   lastRunAt: Date | null;
   nextRunAt: Date | null;
@@ -130,10 +161,15 @@ export function readRobotScheduleTimestamps(robot: any, schedule: StoredSchedule
   const root = robot?.schedule;
   const saas = robot?.recording_meta?.saasConfig?.schedule;
   const lastRaw = root?.lastRunAt ?? saas?.lastRunAt ?? schedule.lastRunAt ?? null;
-  const nextRaw = root?.nextRunAt ?? saas?.nextRunAt ?? schedule.nextRunAt ?? null;
+  const everyMs = resolveScheduleEveryMs(schedule);
+  const enabled = !!schedule.enabled;
+  const nextRaw =
+    resolveValidNextRunAt(root?.nextRunAt, everyMs, enabled) ??
+    resolveValidNextRunAt(saas?.nextRunAt, everyMs, enabled) ??
+    resolveValidNextRunAt(schedule.nextRunAt, everyMs, enabled);
   return {
     lastRunAt: lastRaw != null ? new Date(lastRaw) : null,
-    nextRunAt: nextRaw != null ? new Date(nextRaw) : null,
+    nextRunAt: nextRaw,
   };
 }
 
@@ -269,9 +305,6 @@ export async function syncAutomationSchedule(
     };
   }
 
-  // Enable / update path: `scheduleRecurringTrigger` uses `unique({'data.automationId': ... })`
-  // so the save upserts in place. No pre-cancel needed — that would be two Mongo ops (delete +
-  // insert) instead of one (upsert) and leaves a brief window where the trigger is missing.
   const cronExpr = nextSchedule.cron || '';
   const everyMs =
     (typeof nextSchedule.every === 'number' && nextSchedule.every > 0
@@ -280,15 +313,19 @@ export async function syncAutomationSchedule(
   const humanInterval = everyMs ? humanIntervalFromMs(everyMs) : null;
 
   let forcedNextRunAt: Date | null = null;
+  let shouldRepack = false;
   if (!options?.preserveNextRunAt) {
     const existingNextRaw =
       robot?.schedule?.nextRunAt ?? robot?.recording_meta?.saasConfig?.schedule?.nextRunAt ?? null;
     const existingMs = existingNextRaw != null ? new Date(existingNextRaw).getTime() : NaN;
     const hasFutureNext = !Number.isNaN(existingMs) && existingMs > Date.now();
-    const shouldRepack =
+    const existingNextStale =
+      hasFutureNext && isNextRunAtStaleForInterval(new Date(existingMs), everyMs);
+    shouldRepack =
       !!options?.packSlots ||
       options?.preferredNextRunAt != null ||
       !hasFutureNext ||
+      existingNextStale ||
       automationScheduleNeedsRepack(robot, nextSchedule);
 
     if (!shouldRepack && hasFutureNext) {
@@ -321,6 +358,12 @@ export async function syncAutomationSchedule(
     }
   }
 
+  // When repacking (cadence change or stale spread from daily reconfigure), cancel the existing
+  // Agenda job first so upsert does not keep an old interval's nextRunAt.
+  if (shouldRepack && !options?.preserveNextRunAt) {
+    await cancelScheduledTrigger(robot.recording_meta.id);
+  }
+
   const agendaNextRunAt = await scheduleRecurringTrigger(
     robot.recording_meta.id,
     String(userId),
@@ -346,8 +389,9 @@ export async function syncAutomationSchedule(
       : `cron ${cronExpr}`;
   logger.log('info', `Scheduled automation ${robot.recording_meta.id} with ${scheduleType} in timezone ${finalTz}`);
 
-  // Prefer Agenda's nextRunAt (may be preserved across rehydrate). Else interval-from-now or cron tick.
+  // When we packed a new first fire, prefer that over Agenda (upsert can briefly retain a stale nextRunAt).
   const computedNextRunAt =
+    (!options?.preserveNextRunAt && forcedNextRunAt) ||
     agendaNextRunAt ||
     (everyMs && humanInterval
       ? computeNextRunFromInterval(everyMs)
@@ -600,13 +644,20 @@ export async function rehydrateAutomationSchedules() {
         }
 
         try {
-          // Prefer robot.schedule over saasConfig.schedule since saasConfig may not always be populated
+          const effective = resolveEffectiveScheduleState(robot);
+          const everyMs = resolveScheduleEveryMs(effective);
+          const { nextRunAt: storedNext } = readRobotScheduleTimestamps(robot, effective);
+          const preserveNextRunAt =
+            !!storedNext &&
+            !isNextRunAtStaleForInterval(storedNext, everyMs) &&
+            !automationScheduleNeedsRepack(robot, effective);
+
           const sourceSchedule = schedule.enabled ? robot.schedule : robot.recording_meta?.saasConfig?.schedule;
           const synced = await syncAutomationSchedule(
             { ...robot, schedule: sourceSchedule },
             robot.userId,
             activeSchedule.timezone || 'UTC',
-            { preserveNextRunAt: true }
+            preserveNextRunAt ? { preserveNextRunAt: true } : { packSlots: true }
           );
           // Only update DB if schedule was successfully synced (enabled: true)
           // Avoid overwriting valid schedule data with disabled state
