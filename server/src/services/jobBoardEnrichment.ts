@@ -6,8 +6,9 @@ import JobBoardListing, {
 import { makeDescriptionSnippet, sanitizeCompanyName, decodeHtmlEntities, normalizeJobDescription, normalizeLocation, normalizeSalaryRange } from './jobPageParser';
 import { jobUrlKey, normalizeJobUrl } from './jobUrlNormalize';
 import { detectAts } from './atsAdapters';
-import { isHiringCafeUrl } from './aggregatorIdentity';
+import { isHiringCafeUrl, isAccelUrl, isAccelJobPostingUrl } from './aggregatorIdentity';
 import { pickHiringCafeJobUrl } from './hiringCafeDetail';
+import { pickAccelJobUrl } from './accelDetail';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import logger from '../logger';
 
@@ -94,9 +95,9 @@ export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnaps
     companyWebsite: asText(data.companyWebsite),
     aggregatorPostingUrl: (() => {
       const explicit = asText(data.aggregatorPostingUrl);
-      if (explicit && isHiringCafeUrl(explicit)) return explicit;
+      if (explicit && (isHiringCafeUrl(explicit) || isAccelJobPostingUrl(explicit))) return explicit;
       const jobUrl = asText(data.jobUrl);
-      if (jobUrl && isHiringCafeUrl(jobUrl)) return jobUrl;
+      if (jobUrl && (isHiringCafeUrl(jobUrl) || isAccelJobPostingUrl(jobUrl))) return jobUrl;
       return '';
     })(),
   };
@@ -111,7 +112,7 @@ export function isListRowComplete(
   if (!hasCore) return false;
 
   const source = String(opts?.source || '').trim().toLowerCase();
-  if (source === 'hiring_cafe') {
+  if (source === 'hiring_cafe' || source === 'accel') {
     return true;
   }
   return Boolean(snapshot.location);
@@ -137,9 +138,13 @@ function rowCandidateUrls(data: Record<string, any>): string[] {
   return out;
 }
 
+function isAggregatorPostingUrl(url: string): boolean {
+  return isHiringCafeUrl(url) || isAccelUrl(url);
+}
+
 /**
  * Prefer an ATS / company apply URL as the board identity.
- * Never key the board on a Hiring Cafe (aggregator) page when a real apply URL exists.
+ * Never key the board on an aggregator page (HC / Accel) when a real apply URL exists.
  * Dedup identity = normalized employer/ATS URL only.
  */
 export function pickCanonicalJobUrl(data: Record<string, any>): {
@@ -150,16 +155,16 @@ export function pickCanonicalJobUrl(data: Record<string, any>): {
     data.applyUrl || data.apply_url || data.applicationUrl || data.application_url
   );
   const companyApply =
-    explicitApply && !isHiringCafeUrl(explicitApply) ? explicitApply : null;
+    explicitApply && !isAggregatorPostingUrl(explicitApply) ? explicitApply : null;
 
   const urls = rowCandidateUrls(data);
-  const companyUrls = urls.filter((url) => !isHiringCafeUrl(url));
+  const companyUrls = urls.filter((url) => !isAggregatorPostingUrl(url));
   const atsUrl =
     (companyApply && detectAts(companyApply) ? companyApply : null) ||
     companyUrls.find((url) => Boolean(detectAts(url))) ||
     null;
 
-  // Board identity must be the employer/ATS URL — never Hiring Cafe.
+  // Board identity must be the employer/ATS URL — never aggregator hosts.
   const jobUrl = atsUrl || companyApply || companyUrls[0] || null;
   const applyUrl = companyApply || atsUrl || companyUrls.find((url) => url !== jobUrl) || companyUrls[0] || null;
 
@@ -168,8 +173,8 @@ export function pickCanonicalJobUrl(data: Record<string, any>): {
 
 /**
  * Resolve board identity for enqueue.
- * Prefer employer/ATS URL. For complete Hiring Cafe list rows with no employer apply URL yet,
- * fall back to the HC posting URL so the listing can still appear as method=list (Apply stays empty).
+ * Prefer employer/ATS URL. For complete aggregator list rows with no employer apply URL yet,
+ * fall back to the aggregator posting URL so the listing can still appear as method=list.
  */
 export function resolveBoardEnqueueIdentity(
   data: Record<string, any>,
@@ -179,17 +184,24 @@ export function resolveBoardEnqueueIdentity(
   const picked = pickCanonicalJobUrl(data);
   const source = String(listingSource || '').trim().toLowerCase();
 
-  if (picked.jobUrl && !isHiringCafeUrl(picked.jobUrl)) {
+  if (picked.jobUrl && !isAggregatorPostingUrl(picked.jobUrl)) {
     const employerApply =
-      (picked.applyUrl && !isHiringCafeUrl(picked.applyUrl) ? picked.applyUrl : '') || picked.jobUrl;
+      (picked.applyUrl && !isAggregatorPostingUrl(picked.applyUrl) ? picked.applyUrl : '') ||
+      picked.jobUrl;
     return { jobUrl: picked.jobUrl, applyUrl: employerApply, snapshot };
   }
 
-  // Soft gate: complete HC list rows still reach the board without an employer apply URL.
+  // Soft gate: complete HC / Accel list rows still reach the board without an employer apply URL.
   if (source === 'hiring_cafe' && isListRowComplete(snapshot, { source: 'hiring_cafe' })) {
     const hcPosting = normalizeJobUrl(pickHiringCafeJobUrl(data) || '');
     if (hcPosting && isHiringCafeUrl(hcPosting)) {
       return { jobUrl: hcPosting, applyUrl: '', snapshot };
+    }
+  }
+  if (source === 'accel' && isListRowComplete(snapshot, { source: 'accel' })) {
+    const accelPosting = normalizeJobUrl(pickAccelJobUrl(data) || data.aggregatorPostingUrl || '');
+    if (accelPosting && isAccelJobPostingUrl(accelPosting)) {
+      return { jobUrl: accelPosting, applyUrl: '', snapshot };
     }
   }
 
@@ -228,10 +240,10 @@ function applySnapshotToDoc(
   const desc = snapshot.jobDescription || '';
   const normalizedApply = normalizeJobUrl(applyUrl);
   const normalizedJob = normalizeJobUrl(jobUrl) || jobUrl;
-  // Never store Hiring Cafe as the Apply target when no employer URL was found.
+  // Never store aggregator hosts as the Apply target when no employer URL was found.
   const apply =
-    (normalizedApply && !isHiringCafeUrl(normalizedApply) ? normalizedApply : '') ||
-    (normalizedJob && !isHiringCafeUrl(normalizedJob) ? normalizedJob : '') ||
+    (normalizedApply && !isAggregatorPostingUrl(normalizedApply) ? normalizedApply : '') ||
+    (normalizedJob && !isAggregatorPostingUrl(normalizedJob) ? normalizedJob : '') ||
     '';
   return {
     jobTitle: snapshot.jobTitle || '',
@@ -265,10 +277,12 @@ function applySnapshotToDoc(
     companyFoundedYear: snapshot.companyFoundedYear || 0,
     companyWebsite: snapshot.companyWebsite || '',
     aggregatorPostingUrl:
-      (snapshot.aggregatorPostingUrl && isHiringCafeUrl(snapshot.aggregatorPostingUrl)
+      (snapshot.aggregatorPostingUrl &&
+      (isHiringCafeUrl(snapshot.aggregatorPostingUrl) ||
+        isAccelJobPostingUrl(snapshot.aggregatorPostingUrl))
         ? snapshot.aggregatorPostingUrl
         : '') ||
-      (isHiringCafeUrl(normalizedJob) ? normalizedJob : '') ||
+      (isHiringCafeUrl(normalizedJob) || isAccelJobPostingUrl(normalizedJob) ? normalizedJob : '') ||
       '',
     contentHash: contentHashFromFields({
       jobTitle: snapshot.jobTitle,

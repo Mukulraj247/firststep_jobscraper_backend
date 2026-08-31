@@ -1,18 +1,42 @@
 /**
- * Aggregator robots (Hiring Cafe, LinkedIn, etc.) vs company career scrapers.
+ * Aggregator robots (Hiring Cafe, LinkedIn, Accel/Getro, etc.) vs company career scrapers.
  * Stored on saasConfig so Automations can exclude them and Aggregators can list them.
  */
 
 export const AGGREGATOR_PROVIDER_HIRING_CAFE = 'hiring_cafe';
 export const AGGREGATOR_PROVIDER_LINKEDIN = 'linkedin';
+export const AGGREGATOR_PROVIDER_ACCEL = 'accel';
 
 export const AGGREGATOR_SOURCE_HIRING_CAFE = 'hiring_cafe';
 export const AGGREGATOR_SOURCE_LINKEDIN = 'linkedin';
+export const AGGREGATOR_SOURCE_ACCEL = 'accel';
+
+const ACCEL_JOB_POSTING_PATH = /\/companies\/[^/]+\/jobs\/[^/?#]+/i;
 
 export function isHiringCafeUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
     return host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
+  } catch {
+    return false;
+  }
+}
+
+/** Accel Getro job board host (jobs.accel.com). */
+export function isAccelUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'jobs.accel.com' || host.endsWith('.jobs.accel.com');
+  } catch {
+    return false;
+  }
+}
+
+/** Accel / Getro job detail: /companies/{slug}/jobs/{id-slug}. */
+export function isAccelJobPostingUrl(url: string): boolean {
+  if (!isAccelUrl(url)) return false;
+  try {
+    return ACCEL_JOB_POSTING_PATH.test(new URL(url).pathname);
   } catch {
     return false;
   }
@@ -56,6 +80,15 @@ export function applyAggregatorProviderFromUrl(
     }
     return;
   }
+  if (startUrl && isAccelUrl(startUrl)) {
+    saas.aggregatorProvider = AGGREGATOR_PROVIDER_ACCEL;
+    saas.enrichAccelDetails = true;
+    saas.enrichHiringCafeDetails = false;
+    if (saas.preferAtsCollection === undefined) {
+      saas.preferAtsCollection = false;
+    }
+    return;
+  }
   if (startUrl && isLinkedInJobsUrl(startUrl)) {
     saas.aggregatorProvider = AGGREGATOR_PROVIDER_LINKEDIN;
     saas.enrichHiringCafeDetails = false;
@@ -72,6 +105,7 @@ export function isAggregatorRobot(robot: any): boolean {
   if (
     provider === AGGREGATOR_PROVIDER_HIRING_CAFE ||
     provider === AGGREGATOR_PROVIDER_LINKEDIN ||
+    provider === AGGREGATOR_PROVIDER_ACCEL ||
     provider === 'aggregator'
   ) {
     return true;
@@ -85,8 +119,10 @@ export function isAggregatorRobot(robot: any): boolean {
       t === 'aggregator' ||
       t === 'aggregator:hiring_cafe' ||
       t === 'aggregator:linkedin' ||
+      t === 'aggregator:accel' ||
       t === 'hiring_cafe' ||
-      t === 'linkedin'
+      t === 'linkedin' ||
+      t === 'accel'
   );
 }
 
@@ -111,12 +147,26 @@ export function shouldEnrichHiringCafeDetails(robot: any): boolean {
   return provider === AGGREGATOR_PROVIDER_HIRING_CAFE || provider === '' || provider === 'aggregator';
 }
 
+/** True when post-list Accel/Getro detail HTML enrich should run. */
+export function shouldEnrichAccelDetails(robot: any): boolean {
+  if (!isAggregatorRobot(robot)) return false;
+  const cfg = robot?.recording_meta?.saasConfig || robot?.saasConfig || {};
+  if (cfg.enrichAccelDetails === false) return false;
+  const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
+  if (provider === AGGREGATOR_PROVIDER_ACCEL) return true;
+  if (cfg.enrichAccelDetails === true) return true;
+  return false;
+}
+
 export function aggregatorSourceForRobot(robot: any): string | null {
   if (!isAggregatorRobot(robot)) return null;
   const cfg = robot?.recording_meta?.saasConfig || {};
   const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
   if (provider === AGGREGATOR_PROVIDER_LINKEDIN) {
     return AGGREGATOR_SOURCE_LINKEDIN;
+  }
+  if (provider === AGGREGATOR_PROVIDER_ACCEL) {
+    return AGGREGATOR_SOURCE_ACCEL;
   }
   if (provider === AGGREGATOR_PROVIDER_HIRING_CAFE || !provider) {
     return AGGREGATOR_SOURCE_HIRING_CAFE;

@@ -22,6 +22,7 @@ import {
   isAggregatorRobot,
   isLinkedInAggregatorRobot,
   shouldEnrichHiringCafeDetails,
+  shouldEnrichAccelDetails,
 } from '../services/aggregatorIdentity';
 import {
   beginLinkedInAggregatorRun,
@@ -34,6 +35,7 @@ import {
 } from '../services/linkedinAggregatorRun';
 import { persistLinkedInAccountSession } from '../services/linkedinLogin';
 import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
+import { enrichAccelListRows } from '../services/accelDetailScrape';
 import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
 import {
   evaluateRunDrift,
@@ -767,6 +769,17 @@ async function processConfiguredListExtraction(
           ? extractionConfig.maxItems
           : 40;
       rows = (await enrichHiringCafeListRows(page, rows, {
+        maxJobs: cap,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
+    }
+
+    if (shouldEnrichAccelDetails(automation) && rows.length > 0) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 40;
+      rows = (await enrichAccelListRows(page, rows, {
         maxJobs: cap,
         onLog: (message) => appendRunLog(run, message, { flush: true }),
       })) as Record<string, any>[];

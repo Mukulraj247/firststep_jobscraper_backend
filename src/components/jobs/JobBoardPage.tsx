@@ -119,13 +119,16 @@ const asText = (value: unknown): string => {
     .trim();
 };
 
-/** Prefer employer apply URL; never use Hiring Cafe as the Apply target. */
+/** Prefer employer apply URL; never use Hiring Cafe / Accel as the Apply target. */
 const resolveApplyHref = (applyUrl: unknown, jobUrl: unknown): string => {
   const candidates = [asText(applyUrl), asText(jobUrl)].filter(Boolean);
   for (const href of candidates) {
     try {
       const host = new URL(href).hostname.toLowerCase().replace(/^www\./, '');
       if (host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe')) {
+        continue;
+      }
+      if (host === 'jobs.accel.com' || host.endsWith('.jobs.accel.com')) {
         continue;
       }
     } catch {
@@ -1339,7 +1342,9 @@ export const JobBoardPage: React.FC = () => {
               value={source || 'all'}
               options={[
                 { value: 'all', label: 'All' },
-                { value: 'hiring_cafe', label: 'Aggregator' },
+                { value: 'aggregator', label: 'Aggregator' },
+                { value: 'hiring_cafe', label: 'Hiring Cafe' },
+                { value: 'accel', label: 'Accel' },
               ]}
               onChange={(next) => {
                 setSource(next === 'all' ? '' : next);

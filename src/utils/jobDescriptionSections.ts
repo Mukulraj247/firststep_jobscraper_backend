@@ -4,9 +4,9 @@ export type JobDescriptionSection = {
   body: string;
 };
 
-/** Known JD section titles across JPMC / Workday / Greenhouse / Lever / Google / Phenom / MoDOT-style pages. */
+/** Known JD section titles across JPMC / Workday / Greenhouse / Lever / Google / Phenom / MoDOT / Accel-Getro pages. */
 const KNOWN_HEADER_RE =
-  /^(?:about(?:\s+the\s+(?:job|role|team|company|opportunity))?|job\s+(?:responsibilities|description|summary|overview|details|location)|key\s+responsibilities|responsibilities|required\s+(?:qualifications|skills|experience)|preferred\s+(?:qualifications|skills|experience)|minimum\s+qualifications|basic\s+qualifications|qualifications(?:\s*[-–—]\s*all\s+you\s+need\s+for\s+success)?|requirements|skills|benefits|what\s+we\s+offer|what\s+you(?:'|’)(?:ll|will)\s+(?:do|get|bring)|who\s+you\s+are|you\s+will|our\s+team|equal\s+opportunity(?:\s+employer)?|eeo|compensation(?:\s+and\s+benefits)?|how\s+to\s+apply|application\s+process|additional\s+information|working\s+(?:here|with\s+us)|why\s+(?:you(?:'|’)(?:ll|will)\s+love\s+this\s+position|join|us)|role\s+overview|position\s+summary|essential\s+functions|duties(?:\s+and\s+responsibilities)?|special\s+working\s+conditions|contact(?:\s+details)?|all\s+you\s+need\s+for\s+success|more\s+reasons\s+to\s+love\s+this\s+position)$/i;
+  /^(?:about(?:\s+the\s+(?:job|role|team|company|opportunity))?|job\s+(?:responsibilities|description|summary|overview|details|location)|key\s+responsibilities|responsibilities|required\s+(?:qualifications|skills|experience)|preferred\s+(?:qualifications|skills|experience)|minimum\s+qualifications|basic\s+qualifications|qualifications(?:\s*[-–—]\s*all\s+you\s+need\s+for\s+success)?|requirements|skills|benefits|what\s+we\s+offer|what\s+we(?:'|’)re\s+working\s+on|what\s+you(?:'|’)(?:ll|will)\s+(?:do|get|bring)|you\s+may\s+be\s+a\s+fit(?:\s+if)?|who\s+you\s+are|you\s+will|our\s+team|equal\s+opportunity(?:\s+employer)?|eeo|compensation(?:\s+and\s+benefits)?|how\s+to\s+apply|applying|application\s+process|additional\s+information|working\s+(?:here|with\s+us)|why\s+(?:you(?:'|’)(?:ll|will)\s+love\s+this\s+position|join|us)|role\s+overview|position\s+summary|essential\s+functions|duties(?:\s+and\s+responsibilities)?|special\s+working\s+conditions|contact(?:\s+details)?|all\s+you\s+need\s+for\s+success|more\s+reasons\s+to\s+love\s+this\s+position)$/i;
 
 function slugId(title: string, index: number): string {
   const base = title
@@ -18,7 +18,11 @@ function slugId(title: string, index: number): string {
 }
 
 function isLikelyHeading(line: string): boolean {
-  const t = line.trim().replace(/[:\-–—\s]+$/g, '').trim();
+  const t = line
+    .trim()
+    .replace(/^#+\s*/, '')
+    .replace(/[:\-–—\s]+$/g, '')
+    .trim();
   if (!t || t.length < 3) return false;
   if (t.startsWith('•') || t.startsWith('-') || t.startsWith('*')) return false;
   if (/[.!?]$/.test(t) && t.length > 40) return false;
@@ -26,7 +30,7 @@ function isLikelyHeading(line: string): boolean {
 
   // MoDOT / HC compound headers: "Job Details - More reasons…", "Contact Details - If you have…"
   if (
-    /^(?:job\s+summary|job\s+details|job\s+location|contact(?:\s+details)?|responsibilities|qualifications|minimum\s+qualifications|special\s+working\s+conditions|why\s+you(?:'|’)(?:ll|will)\s+love)\b/i.test(
+    /^(?:job\s+summary|job\s+details|job\s+location|contact(?:\s+details)?|responsibilities|qualifications|minimum\s+qualifications|special\s+working\s+conditions|why\s+you(?:'|’)(?:ll|will)\s+love|about\s+the\s+role|what\s+we(?:'|’)re\s+working|you\s+may\s+be\s+a\s+fit|applying)\b/i.test(
       t
     )
   ) {
@@ -98,9 +102,14 @@ function preprocessInlineHeadings(text: string): string {
     'Essential Functions',
     'Special Working Conditions',
     'What We Offer',
+    "What we're working on",
+    'What we’re working on',
     'What you will do',
     "What you'll do",
     "What you'll bring",
+    'You may be a fit if',
+    'You may be a fit',
+    'Applying',
     "Why you'll love this position",
     'Why you’ll love this position',
     'All you need for success',
@@ -110,6 +119,7 @@ function preprocessInlineHeadings(text: string): string {
     'About the job',
     'About the Job',
     'About the Role',
+    'About the role',
     'About Us',
     'Role Overview',
     'Position Summary',
@@ -192,7 +202,10 @@ export function splitJobDescriptionSections(
     if (isLikelyHeading(trimmed)) {
       foundHeading = true;
       flush();
-      currentTitle = trimmed.replace(/[:\-–—\s]+$/g, '').trim();
+      currentTitle = trimmed
+        .replace(/^#+\s*/, '')
+        .replace(/[:\-–—\s]+$/g, '')
+        .trim();
       currentBody = [];
       continue;
     }

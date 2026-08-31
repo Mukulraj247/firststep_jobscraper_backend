@@ -23,7 +23,7 @@ import {
   isGenericJobTitle,
   isKnownPhenomCareersHost,
 } from './jobPageParser';
-import { isHiringCafeUrl } from './aggregatorIdentity';
+import { isHiringCafeUrl, isAccelUrl, isAccelJobPostingUrl } from './aggregatorIdentity';
 import { isHiringCafeJobPostingUrl } from './hiringCafeDetail';
 import { toPublicRunDto } from './automationConfigView';
 
@@ -663,8 +663,9 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
     // Ford / Carrier / Toyota careers hosts: only keep real job-detail URLs.
     if (isKnownPhenomCareersHost(url) && !isCareersJobDetailUrl(url)) return false;
 
-    // Hiring Cafe search/index URLs are not job postings.
+    // Hiring Cafe / Accel search/index URLs are not job postings.
     if (isHiringCafeUrl(url) && !isHiringCafeJobPostingUrl(url)) return false;
+    if (isAccelUrl(url) && !isAccelJobPostingUrl(url)) return false;
   }
 
   return true;

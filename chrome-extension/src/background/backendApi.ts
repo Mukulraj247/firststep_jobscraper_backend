@@ -20,6 +20,15 @@ function isHiringCafeUrl(url: string): boolean {
   }
 }
 
+function isAccelUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'jobs.accel.com' || host.endsWith('.jobs.accel.com');
+  } catch {
+    return false;
+  }
+}
+
 function isLinkedInJobsUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -98,13 +107,16 @@ export async function saveConfigToBackend(payload: {
 
   const startUrl = payload.startUrl || payload.previewUrl || '';
   const hiringCafe = isHiringCafeUrl(startUrl) || isHiringCafeUrl(payload.previewUrl || '');
+  const accelJobs = isAccelUrl(startUrl) || isAccelUrl(payload.previewUrl || '');
   const linkedInJobs =
     isLinkedInJobsUrl(startUrl) || isLinkedInJobsUrl(payload.previewUrl || '');
 
   const listExtraction = {
     itemSelector: payload.listSelector,
     fields: buildFieldMap(payload.fields),
-    uniqueKey: getSuggestedUniqueKey(payload.fields) || (hiringCafe ? 'url' : undefined),
+    uniqueKey:
+      getSuggestedUniqueKey(payload.fields) ||
+      (hiringCafe || accelJobs ? 'url' : undefined),
     maxItems:
       typeof payload.maxItems === 'number' && payload.maxItems > 0
         ? payload.maxItems
@@ -147,9 +159,16 @@ export async function saveConfigToBackend(payload: {
       ...(tags !== undefined ? { tags } : {}),
       ...(hiringCafe
         ? { aggregatorProvider: 'hiring_cafe', preferAtsCollection: false, enrichHiringCafeDetails: true }
-        : linkedInJobs
-          ? { aggregatorProvider: 'linkedin', preferAtsCollection: false, enrichHiringCafeDetails: false }
-          : {}),
+        : accelJobs
+          ? {
+              aggregatorProvider: 'accel',
+              preferAtsCollection: false,
+              enrichAccelDetails: true,
+              enrichHiringCafeDetails: false,
+            }
+          : linkedInJobs
+            ? { aggregatorProvider: 'linkedin', preferAtsCollection: false, enrichHiringCafeDetails: false }
+            : {}),
     },
   };
 

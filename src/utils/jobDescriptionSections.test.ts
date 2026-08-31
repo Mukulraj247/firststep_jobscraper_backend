@@ -109,3 +109,36 @@ describe('MoDOT-style job description sections', () => {
     ).toBeGreaterThan(40);
   });
 });
+
+const ACCEL_JD = `About Sapiom
+
+Sapiom is the end-to-end platform that removes barriers to ship and scale agentic products. We unify what an agent needs to act in the world — compute and sandboxes, memory, identity, spend controls, storage and queues, monitoring — provisioned together as one thing.
+
+## About the role
+
+Agents can think now. They still can't act — not economically, not reliably, not with anyone in control. Teams build a great demo in days, then find that running it in production is brutally hard. Closing that gap is the whole company. We're a flat org. Nobody has a lane.
+
+## What we're working on
+
+Routing and capacity for every model call. Metering and billing correctness across two charging layers. Reliability at sustained scale after a 10–20x increase. The control plane for credential-scoped permissions. Agent execution with sandboxed runs.
+
+## You may be a fit if
+
+You have strong engineering fundamentals and write good code quickly. You've shipped something that ran in production and that you were responsible for when it broke.
+
+## Applying
+
+A recruiter screen, then a technical screen. If those go well, a three-part loop: an architecture deep dive, a hands-on AI project, and a conversation with our founder.`;
+
+describe('Accel-style job description sections', () => {
+  it('splits About the role / What we are working on / You may be a fit / Applying', () => {
+    expect(looksLikeRichJobDescription(ACCEL_JD)).toBe(true);
+    const sections = splitJobDescriptionSections(ACCEL_JD);
+    const titles = sections.map((s) => s.title.toLowerCase());
+    expect(titles.some((t) => /about the role|about sapiom|about/.test(t))).toBe(true);
+    expect(titles.some((t) => /working on|fit|applying|role/.test(t))).toBe(true);
+    const body = sections.map((s) => s.body).join('\n');
+    expect(body).toMatch(/Closing that gap/i);
+    expect(body).toMatch(/recruiter screen/i);
+  });
+});

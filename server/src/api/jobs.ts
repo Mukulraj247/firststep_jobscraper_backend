@@ -151,7 +151,8 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
     const host = rawApply ? new URL(rawApply).hostname.toLowerCase().replace(/^www\./, '') : '';
     const isHc =
       host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
-    if (!rawApply || isHc) applyUrl = '';
+    const isAccel = host === 'jobs.accel.com' || host.endsWith('.jobs.accel.com');
+    if (!rawApply || isHc || isAccel) applyUrl = '';
   } catch {
     applyUrl = rawApply;
   }

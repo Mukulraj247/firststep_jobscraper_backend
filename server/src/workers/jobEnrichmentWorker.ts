@@ -467,11 +467,14 @@ async function persistResult(
 
 async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics): Promise<void> {
   const listFields = snapshotAsFields(doc);
-  const isHiringCafeSource = String(doc.source || '').toLowerCase() === 'hiring_cafe';
+  const sourceKey = String(doc.source || '').toLowerCase();
+  const isHiringCafeSource = sourceKey === 'hiring_cafe';
+  const isAccelSource = sourceKey === 'accel';
+  const isAggregatorHtmlSource = isHiringCafeSource || isAccelSource;
 
-  // Hiring Cafe aggregators: never leave the HC posting URL for ATS / employer scrapes.
+  // Aggregator HTML sources: never leave the posting URL for ATS / employer scrapes.
   // Light HTML path below handles incomplete rows.
-  if (!isHiringCafeSource) {
+  if (!isAggregatorHtmlSource) {
     // Tier 0: ATS direct — try jobUrl first, then applyUrl if they differ.
     const atsCandidates = [doc.jobUrl, doc.applyUrl].filter(
       (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index
@@ -503,9 +506,9 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   }
 
   // CDN / social / aggregator hosts: never spend scrape.do.
-  // Hiring Cafe source uses light HTML instead — do not expire those rows here.
+  // HC / Accel sources use light HTML instead — do not expire those rows here.
   if (
-    !isHiringCafeSource &&
+    !isAggregatorHtmlSource &&
     (shouldNeverScrapeDoUrl(doc.jobUrl || '') || shouldNeverScrapeDoUrl(doc.applyUrl || ''))
   ) {
     metrics.expired += 1;
@@ -528,6 +531,93 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       method: 'list',
       tier: 0,
       creditsSpent: 0,
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
+  // Accel: light HTTP HTML of the Accel posting only — never scrape.do / employer pages.
+  if (isAccelSource) {
+    const list = doc.listSnapshot || {};
+    const { isAccelJobPostingUrl } = await import('../services/aggregatorIdentity');
+    const accelPosting =
+      String(doc.aggregatorPostingUrl || '').trim() ||
+      String(list.aggregatorPostingUrl || '').trim() ||
+      (isAccelJobPostingUrl(doc.jobUrl || '') ? String(doc.jobUrl || '').trim() : '');
+
+    if (accelPosting && isAccelJobPostingUrl(accelPosting)) {
+      try {
+        const {
+          fetchAccelPostingHtml,
+          enrichAccelRowFromHtml,
+          isAccelHtmlJobPage,
+        } = await import('../services/accelHtmlLight');
+        const light = await fetchAccelPostingHtml(accelPosting);
+        if (light.ok && light.html && isAccelHtmlJobPage(light.html)) {
+          const mergedRow = enrichAccelRowFromHtml({}, light.html, accelPosting);
+          const fields: ParsedJobFields = {
+            jobTitle: String(mergedRow.jobTitle || ''),
+            companyName: String(mergedRow.companyName || ''),
+            jobDescription: String(mergedRow.jobDescription || ''),
+            location: String(mergedRow.location || ''),
+            salaryRange: String(mergedRow.salaryRange || ''),
+            employmentType: String(mergedRow.employmentType || ''),
+            remoteType: String(mergedRow.remoteType || ''),
+            date: String(mergedRow.date || ''),
+            applyUrl: String(mergedRow.applyUrl || ''),
+            companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
+            jobCategory: String(mergedRow.jobCategory || ''),
+            source: 'html',
+          };
+          const merged = mergeParsedFields(fields, listFields);
+          const status = boardListingStatus(merged, doc.jobUrl);
+          await persistResult(doc, merged, {
+            status,
+            method: 'list',
+            tier: 0,
+            creditsSpent: 0,
+            incrementAttempts: true,
+            structured: {
+              about: String(mergedRow.about || ''),
+              skills: [],
+              responsibilities: [],
+              minimumQualifications: [],
+              preferredQualifications: [],
+              benefits: [],
+            },
+          });
+          await JobBoardListing.updateOne(
+            { _id: doc._id },
+            {
+              $set: {
+                aggregatorPostingUrl: accelPosting,
+                'listSnapshot.aggregatorPostingUrl': accelPosting,
+                ...(mergedRow.seniorityLevel
+                  ? { seniorityLevel: String(mergedRow.seniorityLevel) }
+                  : {}),
+              },
+            }
+          );
+          if (status === 'ready') metrics.ready += 1;
+          else metrics.failed += 1;
+          circuitBreaker.recordSuccess();
+          return;
+        }
+      } catch (err: any) {
+        logger.log('warn', `Accel light enrich failed: ${err?.message || err}`);
+      }
+    }
+
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      error: 'accel_html_only_no_employer_scrape',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;
@@ -672,10 +762,11 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
 
   const applyUrl = String(doc.applyUrl || '').trim();
   const jobUrl = String(doc.jobUrl || '').trim();
+  const { isAccelUrl: isAccelHostUrl } = await import('../services/aggregatorIdentity');
   const scrapeTargetUrl =
-    applyUrl && !isHiringCafeUrl(applyUrl)
+    applyUrl && !isHiringCafeUrl(applyUrl) && !isAccelHostUrl(applyUrl)
       ? applyUrl
-      : isHiringCafeUrl(jobUrl)
+      : isHiringCafeUrl(jobUrl) || isAccelHostUrl(jobUrl)
         ? ''
         : jobUrl;
 
@@ -686,7 +777,10 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       method: 'list',
       tier: 0,
       creditsSpent: 0,
-      error: isHiringCafeUrl(jobUrl) ? 'hiring_cafe_skip_scrape_do' : 'no_scrape_target',
+      error:
+        isHiringCafeUrl(jobUrl) || isAccelHostUrl(jobUrl)
+          ? 'aggregator_skip_scrape_do'
+          : 'no_scrape_target',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;

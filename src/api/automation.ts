@@ -35,6 +35,8 @@ export interface AutomationSummary {
   name: string;
   companyName?: string;
   tags?: string[];
+  /** Aggregator provider when listed under Aggregators (hiring_cafe, accel, linkedin). */
+  aggregatorProvider?: string;
   targetUrl: string;
   /** Robot meta updated-at string from the server (used for stale snapshots). */
   updatedAt?: string;
@@ -201,7 +203,7 @@ export const getDashboardAggregators = async (params?: {
   });
   const data = response.data || {};
   return {
-    provider: data.provider || 'hiring_cafe',
+    provider: data.provider || 'all',
     searches: data.searches || [],
     pagination: data.pagination || { page: 1, limit, total: 0, totalPages: 1 },
     summary: data.summary || {

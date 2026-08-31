@@ -196,7 +196,6 @@ export const AggregatorsPage = () => {
     id: idFilterDebounced,
     tags: tagFilter,
     schedule: scheduleCronFilter,
-    provider: 'hiring_cafe',
   };
 
   const {
@@ -215,6 +214,9 @@ export const AggregatorsPage = () => {
         const company = search.companyName?.trim() || '';
         if (/^(hc|hiring\s*cafe|hiringcafe)$/i.test(company)) {
           return { ...search, companyName: 'Aggregator' };
+        }
+        if (/^(accel|jobs\.accel)$/i.test(company)) {
+          return { ...search, companyName: 'Accel' };
         }
         return search;
       }),
@@ -291,7 +293,6 @@ export const AggregatorsPage = () => {
         {
           page: page + 1,
           limit: rowsPerPage,
-          provider: 'hiring_cafe',
           ...(tagFilter.length ? { tags: tagFilter } : {}),
           ...(nameFilterDebounced ? { q: nameFilterDebounced } : {}),
           ...(idFilterDebounced ? { id: idFilterDebounced } : {}),
