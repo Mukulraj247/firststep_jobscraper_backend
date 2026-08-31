@@ -31,6 +31,10 @@ export interface IJobBoardListSnapshot {
   visaSponsorship?: string;
   companyEmployeeCount?: number;
   companyFoundedYear?: number;
+  /** Employer homepage from aggregator (e.g. code.org) — not the apply URL. */
+  companyWebsite?: string;
+  /** Hiring Cafe /job/{slug} used for light HTML re-fetch; never an employer URL. */
+  aggregatorPostingUrl?: string;
 }
 
 export interface IJobBoardEnrichment {
@@ -81,6 +85,8 @@ export interface IJobBoardListing extends Document {
   visaSponsorship: string;
   companyEmployeeCount: number;
   companyFoundedYear: number;
+  companyWebsite: string;
+  aggregatorPostingUrl: string;
   status: JobBoardStatus;
   priority: number;
   leaseUntil: Date | null;
@@ -123,6 +129,8 @@ const ListSnapshotSchema = new Schema(
     visaSponsorship: { type: String, default: '' },
     companyEmployeeCount: { type: Number, default: 0 },
     companyFoundedYear: { type: Number, default: 0 },
+    companyWebsite: { type: String, default: '' },
+    aggregatorPostingUrl: { type: String, default: '' },
   },
   { _id: false }
 );
@@ -183,6 +191,8 @@ const JobBoardListingSchema: Schema = new Schema(
     visaSponsorship: { type: String, default: '' },
     companyEmployeeCount: { type: Number, default: 0 },
     companyFoundedYear: { type: Number, default: 0 },
+    companyWebsite: { type: String, default: '' },
+    aggregatorPostingUrl: { type: String, default: '' },
     status: {
       type: String,
       enum: ['queued', 'enriching', 'ready', 'partial', 'failed', 'expired'],

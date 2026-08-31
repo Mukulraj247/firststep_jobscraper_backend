@@ -211,6 +211,10 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
     (typeof list.companyFoundedYear === 'number' && list.companyFoundedYear > 0
       ? list.companyFoundedYear
       : 0);
+  const companyWebsite = String(row.companyWebsite || list.companyWebsite || '').trim();
+  const aggregatorPostingUrl = String(
+    row.aggregatorPostingUrl || list.aggregatorPostingUrl || ''
+  ).trim();
 
   return {
     id: row._id?.toString?.() || String(row.id),
@@ -250,6 +254,8 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
         : {}),
       ...(companyEmployeeCount > 0 ? { companyEmployeeCount } : {}),
       ...(companyFoundedYear > 0 ? { companyFoundedYear } : {}),
+      ...(companyWebsite ? { companyWebsite } : {}),
+      ...(aggregatorPostingUrl ? { aggregatorPostingUrl } : {}),
     },
   };
 }

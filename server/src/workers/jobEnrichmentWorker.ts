@@ -467,39 +467,47 @@ async function persistResult(
 
 async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics): Promise<void> {
   const listFields = snapshotAsFields(doc);
+  const isHiringCafeSource = String(doc.source || '').toLowerCase() === 'hiring_cafe';
 
-  // Tier 0: ATS direct — try jobUrl first, then applyUrl if they differ.
-  const atsCandidates = [doc.jobUrl, doc.applyUrl].filter(
-    (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index
-  );
-  let ats: Awaited<ReturnType<typeof fetchAtsJob>> = null;
-  for (const url of atsCandidates) {
-    ats = await fetchAtsJob(url);
-    await yieldEventLoop();
-    if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) break;
-    ats = null;
-  }
-  if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) {
-    metrics.ats_hit += 1;
-    const merged = mergeParsedFields(ats.fields, listFields);
-    const status = boardListingStatus(merged, doc.jobUrl);
-    await persistResult(doc, merged, {
-      status,
-      method: 'ats',
-      tier: 0,
-      creditsSpent: 0,
-      incrementAttempts: true,
-      externalJobId: ats.externalJobId,
-    });
-    if (status === 'ready') metrics.ready += 1;
-    else metrics.failed += 1;
-    circuitBreaker.recordSuccess();
-    return;
+  // Hiring Cafe aggregators: never leave the HC posting URL for ATS / employer scrapes.
+  // Light HTML path below handles incomplete rows.
+  if (!isHiringCafeSource) {
+    // Tier 0: ATS direct — try jobUrl first, then applyUrl if they differ.
+    const atsCandidates = [doc.jobUrl, doc.applyUrl].filter(
+      (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index
+    );
+    let ats: Awaited<ReturnType<typeof fetchAtsJob>> = null;
+    for (const url of atsCandidates) {
+      ats = await fetchAtsJob(url);
+      await yieldEventLoop();
+      if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) break;
+      ats = null;
+    }
+    if (ats?.fields && (ats.fields.jobTitle || ats.fields.jobDescription)) {
+      metrics.ats_hit += 1;
+      const merged = mergeParsedFields(ats.fields, listFields);
+      const status = boardListingStatus(merged, doc.jobUrl);
+      await persistResult(doc, merged, {
+        status,
+        method: 'ats',
+        tier: 0,
+        creditsSpent: 0,
+        incrementAttempts: true,
+        externalJobId: ats.externalJobId,
+      });
+      if (status === 'ready') metrics.ready += 1;
+      else metrics.failed += 1;
+      circuitBreaker.recordSuccess();
+      return;
+    }
   }
 
   // CDN / social / aggregator hosts: never spend scrape.do.
-  // ATS misses still fall through to a cheap scrape.do fallback.
-  if (shouldNeverScrapeDoUrl(doc.jobUrl || '') || shouldNeverScrapeDoUrl(doc.applyUrl || '')) {
+  // Hiring Cafe source uses light HTML instead — do not expire those rows here.
+  if (
+    !isHiringCafeSource &&
+    (shouldNeverScrapeDoUrl(doc.jobUrl || '') || shouldNeverScrapeDoUrl(doc.applyUrl || ''))
+  ) {
     metrics.expired += 1;
     await persistResult(doc, listFields, {
       status: 'expired',
@@ -520,6 +528,100 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       method: 'list',
       tier: 0,
       creditsSpent: 0,
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
+  // Hiring Cafe: light HTTP HTML of the HC posting only — never scrape.do / employer pages.
+  if (isHiringCafeSource) {
+    const list = doc.listSnapshot || {};
+    const hcPosting =
+      String(doc.aggregatorPostingUrl || '').trim() ||
+      String(list.aggregatorPostingUrl || '').trim() ||
+      (isHiringCafeUrl(doc.jobUrl || '') ? String(doc.jobUrl || '').trim() : '');
+
+    if (hcPosting && isHiringCafeUrl(hcPosting)) {
+      try {
+        const {
+          fetchHiringCafePostingHtml,
+          enrichHiringCafeRowFromHtml,
+          isHiringCafeHtmlJobPage,
+        } = await import('../services/hiringCafeHtmlLight');
+        const light = await fetchHiringCafePostingHtml(hcPosting);
+        if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
+          const mergedRow = enrichHiringCafeRowFromHtml({}, light.html, hcPosting);
+          const fields: ParsedJobFields = {
+            jobTitle: String(mergedRow.jobTitle || ''),
+            companyName: String(mergedRow.companyName || ''),
+            jobDescription: String(mergedRow.jobDescription || ''),
+            location: String(mergedRow.location || ''),
+            salaryRange: String(mergedRow.salaryRange || ''),
+            employmentType: String(mergedRow.employmentType || ''),
+            remoteType: String(mergedRow.remoteType || ''),
+            date: String(mergedRow.date || ''),
+            applyUrl: String(mergedRow.applyUrl || ''),
+            companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
+            jobCategory: String(mergedRow.jobCategory || ''),
+            source: 'html',
+          };
+          const merged = mergeParsedFields(fields, listFields);
+          const status = boardListingStatus(merged, doc.jobUrl);
+          await persistResult(doc, merged, {
+            status,
+            method: 'list',
+            tier: 0,
+            creditsSpent: 0,
+            incrementAttempts: true,
+            structured: {
+              about: String(mergedRow.about || ''),
+              skills: Array.isArray(mergedRow.skills) ? (mergedRow.skills as string[]) : [],
+              responsibilities: Array.isArray(mergedRow.responsibilities)
+                ? (mergedRow.responsibilities as string[])
+                : [],
+              minimumQualifications: Array.isArray(mergedRow.minimumQualifications)
+                ? (mergedRow.minimumQualifications as string[])
+                : [],
+              preferredQualifications: Array.isArray(mergedRow.preferredQualifications)
+                ? (mergedRow.preferredQualifications as string[])
+                : [],
+              benefits: Array.isArray(mergedRow.benefits) ? (mergedRow.benefits as string[]) : [],
+            },
+          });
+          // Persist HC-only extras that persistResult's structured path may omit.
+          await JobBoardListing.updateOne(
+            { _id: doc._id },
+            {
+              $set: {
+                companyWebsite: String(mergedRow.companyWebsite || ''),
+                aggregatorPostingUrl: hcPosting,
+                companyEmployeeCount: Number(mergedRow.companyEmployeeCount || 0) || 0,
+                companyFoundedYear: Number(mergedRow.companyFoundedYear || 0) || 0,
+                'listSnapshot.companyWebsite': String(mergedRow.companyWebsite || ''),
+                'listSnapshot.aggregatorPostingUrl': hcPosting,
+              },
+            }
+          );
+          if (status === 'ready') metrics.ready += 1;
+          else metrics.failed += 1;
+          circuitBreaker.recordSuccess();
+          return;
+        }
+      } catch (err: any) {
+        logger.log('warn', `Hiring Cafe light enrich failed: ${err?.message || err}`);
+      }
+    }
+
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      error: 'hiring_cafe_html_only_no_employer_scrape',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;

@@ -8,6 +8,11 @@ import {
 } from './hiringCafeDetail';
 import { isHiringCafeUrl } from './aggregatorIdentity';
 import {
+  enrichHiringCafeRowFromHtml,
+  fetchHiringCafePostingHtml,
+  isHiringCafeHtmlJobPage,
+} from './hiringCafeHtmlLight';
+import {
   HIRING_CAFE_DETAIL_BETWEEN_MS,
   HIRING_CAFE_DETAIL_GOTO_MS,
   HIRING_CAFE_DETAIL_RENDER_MS,
@@ -59,6 +64,7 @@ async function readApplyUrlFromPage(page: Page): Promise<string> {
 /**
  * Fallback: click "Apply directly on employer's site" and capture the popup URL.
  * The control is a <button> with no href — navigation is JS-driven.
+ * Only used when light HTML did not include apply_url.
  */
 async function resolveApplyUrlByClick(page: Page): Promise<string> {
   const apply = page.locator('[data-testid="job-page-apply"]').first();
@@ -80,6 +86,47 @@ async function resolveApplyUrlByClick(page: Page): Promise<string> {
   return '';
 }
 
+/**
+ * Browser fallback when light HTTP HTML is missing `__NEXT_DATA__`.
+ * Still only opens the Hiring Cafe posting URL — never the employer site for JD content.
+ */
+async function enrichViaBrowser(
+  page: Page,
+  row: Record<string, unknown>,
+  postingUrl: string
+): Promise<{ row: Record<string, unknown>; applyResolved: boolean }> {
+  await page.goto(postingUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: HIRING_CAFE_DETAIL_GOTO_MS,
+  });
+  await waitForHiringCafeJobContent(page);
+
+  const html = await page.content();
+  const parsed = parseHiringCafeJobPageHtml(html, postingUrl);
+
+  let applyUrl =
+    preferExternalApplyUrl(parsed.applyUrl) ||
+    extractHiringCafeApplyUrl(html, postingUrl) ||
+    (await readApplyUrlFromPage(page));
+
+  if (!applyUrl) {
+    applyUrl = await resolveApplyUrlByClick(page);
+  }
+
+  const merged = mergeHiringCafeDetailIntoRow(row, { ...parsed, applyUrl }, postingUrl);
+  merged.aggregatorPostingUrl = postingUrl;
+  merged._enrichMethod = 'browser';
+  return {
+    row: merged,
+    applyResolved: Boolean(applyUrl && !isHiringCafeUrl(applyUrl)),
+  };
+}
+
+/**
+ * Enrich list rows from Hiring Cafe Full View pages.
+ * Prefer light HTTP HTML (`__NEXT_DATA__`) — browser only when that fails.
+ * Never scrapes employer/apply pages for job content.
+ */
 export async function enrichHiringCafeListRows(
   page: Page,
   rows: Record<string, unknown>[],
@@ -93,6 +140,8 @@ export async function enrichHiringCafeListRows(
   let enriched = 0;
   let failed = 0;
   let applyResolved = 0;
+  let lightHits = 0;
+  let browserHits = 0;
   const out: Record<string, unknown>[] = [];
 
   for (const row of rows) {
@@ -103,33 +152,22 @@ export async function enrichHiringCafeListRows(
     }
     seen.add(postingUrl);
     try {
-      // 1) Open Hiring Cafe posting URL in Playwright
-      await page.goto(postingUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: HIRING_CAFE_DETAIL_GOTO_MS,
-      });
-      await waitForHiringCafeJobContent(page);
-
-      // 2) Parse full job details from rendered HTML / __NEXT_DATA__
-      const html = await page.content();
-      const parsed = parseHiringCafeJobPageHtml(html, postingUrl);
-
-      // 3) Resolve external employer apply URL (never Hiring Cafe)
-      let applyUrl =
-        preferExternalApplyUrl(parsed.applyUrl) ||
-        extractHiringCafeApplyUrl(html, postingUrl) ||
-        (await readApplyUrlFromPage(page));
-
-      if (!applyUrl) {
-        applyUrl = await resolveApplyUrlByClick(page);
+      // 1) Light path: plain HTTP GET of HC posting HTML (no Chromium / scrape.do)
+      const light = await fetchHiringCafePostingHtml(postingUrl);
+      if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
+        const merged = enrichHiringCafeRowFromHtml(row, light.html, postingUrl);
+        if (merged.applyUrl && !isHiringCafeUrl(String(merged.applyUrl))) applyResolved += 1;
+        out.push(merged);
+        enriched += 1;
+        lightHits += 1;
+      } else {
+        // 2) Fallback: open HC posting in the existing Playwright page
+        const viaBrowser = await enrichViaBrowser(page, row, postingUrl);
+        if (viaBrowser.applyResolved) applyResolved += 1;
+        out.push(viaBrowser.row);
+        enriched += 1;
+        browserHits += 1;
       }
-
-      if (applyUrl && !isHiringCafeUrl(applyUrl)) applyResolved += 1;
-
-      out.push(
-        mergeHiringCafeDetailIntoRow(row, { ...parsed, applyUrl }, postingUrl)
-      );
-      enriched += 1;
     } catch (err: any) {
       failed += 1;
       logger.log(
@@ -153,7 +191,8 @@ export async function enrichHiringCafeListRows(
   }
 
   const message =
-    `Hiring Cafe detail scrape: ${enriched} postings enriched, ${applyResolved} employer apply URLs, ${failed} failed`;
+    `Hiring Cafe detail scrape: ${enriched} enriched (${lightHits} http-html, ${browserHits} browser), ` +
+    `${applyResolved} employer apply URLs, ${failed} failed`;
   if (opts?.onLog) await opts.onLog(message);
   else logger.log('info', message);
   return out;

@@ -91,6 +91,14 @@ export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnaps
     visaSponsorship: asText(data.visaSponsorship).toLowerCase(),
     companyEmployeeCount: asExperience(data.companyEmployeeCount),
     companyFoundedYear: asExperience(data.companyFoundedYear),
+    companyWebsite: asText(data.companyWebsite),
+    aggregatorPostingUrl: (() => {
+      const explicit = asText(data.aggregatorPostingUrl);
+      if (explicit && isHiringCafeUrl(explicit)) return explicit;
+      const jobUrl = asText(data.jobUrl);
+      if (jobUrl && isHiringCafeUrl(jobUrl)) return jobUrl;
+      return '';
+    })(),
   };
 }
 
@@ -255,6 +263,13 @@ function applySnapshotToDoc(
     visaSponsorship: snapshot.visaSponsorship || '',
     companyEmployeeCount: snapshot.companyEmployeeCount || 0,
     companyFoundedYear: snapshot.companyFoundedYear || 0,
+    companyWebsite: snapshot.companyWebsite || '',
+    aggregatorPostingUrl:
+      (snapshot.aggregatorPostingUrl && isHiringCafeUrl(snapshot.aggregatorPostingUrl)
+        ? snapshot.aggregatorPostingUrl
+        : '') ||
+      (isHiringCafeUrl(normalizedJob) ? normalizedJob : '') ||
+      '',
     contentHash: contentHashFromFields({
       jobTitle: snapshot.jobTitle,
       companyName: snapshot.companyName,

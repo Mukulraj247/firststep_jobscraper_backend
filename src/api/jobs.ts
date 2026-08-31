@@ -37,6 +37,8 @@ export interface JobBoardJob {
     visaSponsorship?: string;
     companyEmployeeCount?: number;
     companyFoundedYear?: number;
+    companyWebsite?: string;
+    aggregatorPostingUrl?: string;
     [key: string]: any;
   };
 }

@@ -37,6 +37,8 @@ export const CANONICAL_JOB_FIELD_ORDER = [
   'visaSponsorship',
   'companyEmployeeCount',
   'companyFoundedYear',
+  'companyWebsite',
+  'aggregatorPostingUrl',
 ] as const;
 
 export type CanonicalJobData = Record<
@@ -205,6 +207,8 @@ export const buildCanonicalJobDataSync = (
     visaSponsorship,
     companyEmployeeCount: asPositiveInt(data.companyEmployeeCount),
     companyFoundedYear: asPositiveInt(data.companyFoundedYear),
+    companyWebsite: str(data.companyWebsite),
+    aggregatorPostingUrl: str(data.aggregatorPostingUrl),
   };
 };
 
