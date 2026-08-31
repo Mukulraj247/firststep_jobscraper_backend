@@ -36,8 +36,8 @@ import {
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
 import {
   sectionBodyLines,
-  splitJobDescriptionSections,
-  extractCardHighlights,
+  buildJobDetailSections,
+  resolveCardHighlights,
 } from '../../utils/jobDescriptionSections';
 import { OpsHeroBackdrop } from '../dashboard/ops/OpsHeroBackdrop';
 import {
@@ -320,56 +320,7 @@ const DescriptionSections: React.FC<{
   };
 }> = ({ text, fallbackTitle, structured }) => {
   const { t } = useTranslation();
-  const asList = (v: unknown): string[] =>
-    Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
-
-  const structuredBlocks: { title: string; body: string }[] = [];
-  if (structured) {
-    if (asText(structured.about)) {
-      structuredBlocks.push({ title: 'About the job', body: asText(structured.about) });
-    }
-    const minQ = asList(structured.minimumQualifications);
-    if (minQ.length) {
-      structuredBlocks.push({
-        title: 'Minimum qualifications',
-        body: minQ.map((b) => `• ${b}`).join('\n'),
-      });
-    }
-    const prefQ = asList(structured.preferredQualifications);
-    if (prefQ.length) {
-      structuredBlocks.push({
-        title: 'Preferred qualifications',
-        body: prefQ.map((b) => `• ${b}`).join('\n'),
-      });
-    }
-    const resp = asList(structured.responsibilities);
-    if (resp.length) {
-      structuredBlocks.push({
-        title: 'Responsibilities',
-        body: resp.map((b) => `• ${b}`).join('\n'),
-      });
-    }
-    const bens = asList(structured.benefits);
-    if (bens.length) {
-      structuredBlocks.push({ title: 'Benefits', body: bens.map((b) => `• ${b}`).join('\n') });
-    }
-    const skills = asList(structured.skills);
-    if (skills.length) {
-      structuredBlocks.push({ title: 'Skills', body: skills.map((b) => `• ${b}`).join('\n') });
-    }
-    const certs = asList(structured.certifications);
-    if (certs.length) {
-      structuredBlocks.push({
-        title: 'Certifications',
-        body: certs.map((b) => `• ${b}`).join('\n'),
-      });
-    }
-  }
-
-  const sections =
-    structuredBlocks.length > 0
-      ? structuredBlocks.map((s, i) => ({ id: `structured-${i}`, title: s.title, body: s.body }))
-      : splitJobDescriptionSections(text, fallbackTitle);
+  const sections = buildJobDetailSections(text, fallbackTitle, structured);
 
   if (sections.length === 0) {
     return <Typography color="text.secondary">{t('jobboard.no_description')}</Typography>;
@@ -431,27 +382,17 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
   const employment = asText(data.employmentType);
   const remote = asText(data.remoteType);
   const fullDesc = toReadableDescription(data.jobDescription);
-  const parsed = extractCardHighlights(fullDesc);
   const asList = (v: unknown): string[] =>
     Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
-  const highlights = {
-    about: asText(data.about) || parsed.about,
-    minimumQualifications:
-      asList(data.minimumQualifications).length > 0
-        ? asList(data.minimumQualifications)
-        : parsed.minimumQualifications,
-    preferredQualifications:
-      asList(data.preferredQualifications).length > 0
-        ? asList(data.preferredQualifications)
-        : parsed.preferredQualifications,
-    responsibilities:
-      asList(data.responsibilities).length > 0 ? asList(data.responsibilities) : parsed.responsibilities,
-    benefits: asList(data.benefits).length > 0 ? asList(data.benefits) : parsed.benefits,
-    skills: asList(data.skills).length > 0 ? asList(data.skills) : parsed.skills,
-    experienceLabel: parsed.experienceLabel,
-    employmentHint: parsed.employmentHint,
-    remoteHint: parsed.remoteHint,
-  };
+  const highlights = resolveCardHighlights(fullDesc, {
+    about: asText(data.about),
+    minimumQualifications: asList(data.minimumQualifications),
+    preferredQualifications: asList(data.preferredQualifications),
+    responsibilities: asList(data.responsibilities),
+    benefits: asList(data.benefits),
+    skills: asList(data.skills),
+    certifications: asList(data.certifications),
+  });
   const posted = formatRelative(data.date, job.createdAt);
   const postedExact = formatPosted(data.date, job.createdAt);
   const logo = resolveCompanyLogo(company, asText(data.companyLogoUrl));

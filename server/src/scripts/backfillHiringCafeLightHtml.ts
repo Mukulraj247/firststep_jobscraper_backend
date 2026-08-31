@@ -90,6 +90,7 @@ async function main() {
   const dryRun = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
   const limit = Math.max(0, parseInt(process.env.LIMIT || '0', 10) || 0);
   const delayMs = Math.max(0, parseInt(process.env.DELAY_MS || '200', 10) || 200);
+  const retry429 = Math.max(0, parseInt(process.env.RETRY_429 || '4', 10) || 4);
   const dbName = process.env.MONGODB_DATABASE || undefined;
 
   await mongoose.connect(uri, dbName ? { dbName } : undefined);
@@ -101,7 +102,7 @@ async function main() {
   const applyToHc = await loadApplyUrlToHcMap(db);
   console.log(`Mapped ${applyToHc.size} employer apply URLs → HC postings`);
 
-  const filter = {
+  const filter: Record<string, unknown> = {
     $or: [
       { source: 'hiring_cafe' },
       { jobUrl: /hiring\.?cafe\.com\/job\//i },
@@ -109,6 +110,19 @@ async function main() {
       { 'listSnapshot.aggregatorPostingUrl': /hiring\.?cafe/i },
     ],
   };
+
+  // Retry mode: only rows that still lack a stored HC posting URL from a prior backfill.
+  if (process.env.ONLY_MISSING === '1' || process.env.ONLY_MISSING === 'true') {
+    filter.$and = [
+      {
+        $or: [
+          { aggregatorPostingUrl: { $exists: false } },
+          { aggregatorPostingUrl: '' },
+          { aggregatorPostingUrl: null },
+        ],
+      },
+    ];
+  }
 
   const total = await board.countDocuments(filter);
   console.log(`Hiring Cafe board rows matched: ${total}`);
@@ -152,7 +166,18 @@ async function main() {
     process.stdout.write(`  [${stats.scanned}/${rows.length}] ${postingUrl.slice(0, 78)}… `);
 
     try {
-      const light = await fetchHiringCafePostingHtml(postingUrl);
+      let light = await fetchHiringCafePostingHtml(postingUrl);
+      let attempt = 0;
+      while (
+        (!light.ok || /429/.test(String(light.error || ''))) &&
+        attempt < retry429
+      ) {
+        attempt += 1;
+        const wait = Math.min(30_000, 1500 * Math.pow(2, attempt));
+        console.log(`429/backoff ${wait}ms…`);
+        await sleep(wait);
+        light = await fetchHiringCafePostingHtml(postingUrl);
+      }
       if (!light.ok || !light.html || !isHiringCafeHtmlJobPage(light.html)) {
         stats.fetchFail += 1;
         console.log(`FAIL ${light.error || 'no next_data'}`);

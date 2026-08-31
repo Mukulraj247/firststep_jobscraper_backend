@@ -374,6 +374,7 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
     info.apply_url
   );
 
+  // Company tagline / one-liner — UI labels this "About the company", not job summary.
   const about = firstString(company.tagline, v5.company_tagline, v5Company.tagline);
   const fromSummary = requirementsSummary
     ? requirementsSummary

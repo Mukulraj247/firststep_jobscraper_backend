@@ -462,6 +462,21 @@ router.get('/jobs', async (req: any, res: any) => {
       status: 1,
       enrichment: 1,
       companyLogoUrl: 1,
+      about: 1,
+      minimumQualifications: 1,
+      preferredQualifications: 1,
+      responsibilities: 1,
+      benefits: 1,
+      skills: 1,
+      certifications: 1,
+      seniorityLevel: 1,
+      roleType: 1,
+      educationRequirement: 1,
+      visaSponsorship: 1,
+      companyEmployeeCount: 1,
+      companyFoundedYear: 1,
+      companyWebsite: 1,
+      aggregatorPostingUrl: 1,
       listSnapshot: 1,
       createdAt: 1,
       lastSeenAt: 1,
@@ -521,7 +536,7 @@ router.get('/jobs/:id', async (req: any, res: any) => {
       status: { $in: ['ready', 'partial'] },
     })
       .select(
-        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl listSnapshot createdAt lastSeenAt'
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
       )
       .lean();
 
