@@ -31,7 +31,7 @@ describe('summarizeHiringCafeUrl', () => {
 
   it('falls back when the URL has no searchState', () => {
     const summary = summarizeHiringCafeUrl('https://hiringcafe.com/');
-    expect(summary.headline).toBe('Hiring Cafe search');
+    expect(summary.headline).toBe('Aggregator');
     expect(summary.host).toBe('hiringcafe.com');
   });
 });

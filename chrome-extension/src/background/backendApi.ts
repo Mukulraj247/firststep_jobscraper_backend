@@ -20,6 +20,19 @@ function isHiringCafeUrl(url: string): boolean {
   }
 }
 
+function isLinkedInJobsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (host !== 'linkedin.com' && !host.endsWith('.linkedin.com')) return false;
+    const path = parsed.pathname.toLowerCase();
+    if (path.includes('/preload')) return false;
+    return path.includes('/jobs');
+  } catch {
+    return false;
+  }
+}
+
 function buildAuthHeaders(state: { apiKey?: string }): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (state.apiKey && state.apiKey.trim()) {
@@ -85,6 +98,8 @@ export async function saveConfigToBackend(payload: {
 
   const startUrl = payload.startUrl || payload.previewUrl || '';
   const hiringCafe = isHiringCafeUrl(startUrl) || isHiringCafeUrl(payload.previewUrl || '');
+  const linkedInJobs =
+    isLinkedInJobsUrl(startUrl) || isLinkedInJobsUrl(payload.previewUrl || '');
 
   const listExtraction = {
     itemSelector: payload.listSelector,
@@ -132,7 +147,9 @@ export async function saveConfigToBackend(payload: {
       ...(tags !== undefined ? { tags } : {}),
       ...(hiringCafe
         ? { aggregatorProvider: 'hiring_cafe', preferAtsCollection: false, enrichHiringCafeDetails: true }
-        : {}),
+        : linkedInJobs
+          ? { aggregatorProvider: 'linkedin', preferAtsCollection: false, enrichHiringCafeDetails: false }
+          : {}),
     },
   };
 

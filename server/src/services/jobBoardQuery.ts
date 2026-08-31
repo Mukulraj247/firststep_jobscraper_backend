@@ -46,7 +46,9 @@ export function applyJobBoardListFilters(
   }
 
   const source = String(filters.source || '').trim();
-  if (source) {
+  if (source === 'aggregator') {
+    and.push({ source: { $in: ['hiring_cafe', 'linkedin'] } });
+  } else if (source) {
     next.source = source;
   }
 

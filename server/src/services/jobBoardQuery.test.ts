@@ -20,4 +20,10 @@ describe('applyJobBoardListFilters', () => {
     expect(JSON.stringify(and)).toMatch(/remoteType/i);
     expect(JSON.stringify(and)).toMatch(/employmentType/i);
   });
+
+  it('filters combined aggregator sources', () => {
+    const match = applyJobBoardListFilters({ ownerId: 'u1' }, { source: 'aggregator' });
+    const and = match.$and as Record<string, unknown>[];
+    expect(and).toEqual([{ source: { $in: ['hiring_cafe', 'linkedin'] } }]);
+  });
 });

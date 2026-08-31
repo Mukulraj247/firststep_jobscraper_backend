@@ -36,7 +36,7 @@ export const automationQueryKey = (query: AutomationQuery) => [
 
 export const aggregatorQueryKey = (query: AutomationQuery & { provider?: string }) => [
   ...aggregatorQueryKeys.all,
-  query.provider || 'hiring_cafe',
+  query.provider || 'all',
   query.page,
   query.pageSize,
   query.q,
@@ -76,7 +76,7 @@ const fetchAggregators: AggregatorFetcher = (query, signal) =>
   getDashboardAggregators({
     page: query.page,
     limit: query.pageSize,
-    provider: query.provider || 'hiring_cafe',
+    ...(query.provider ? { provider: query.provider } : {}),
     ...(query.tags.length ? { tags: query.tags } : {}),
     ...(query.q ? { q: query.q } : {}),
     ...(query.id ? { id: query.id } : {}),

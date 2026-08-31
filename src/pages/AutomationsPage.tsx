@@ -763,6 +763,7 @@ export const AutomationsPage = () => {
           <AutomationConfigPage
             automationId={configTargetId}
             onClose={() => setConfigTargetId(null)}
+            onSaved={loadAutomations}
             embedded
           />
         ) : null}

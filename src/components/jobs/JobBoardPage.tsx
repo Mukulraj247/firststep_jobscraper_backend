@@ -1398,7 +1398,7 @@ export const JobBoardPage: React.FC = () => {
               value={source || 'all'}
               options={[
                 { value: 'all', label: 'All' },
-                { value: 'hiring_cafe', label: 'Hiring Cafe' },
+                { value: 'hiring_cafe', label: 'Aggregator' },
               ]}
               onChange={(next) => {
                 setSource(next === 'all' ? '' : next);

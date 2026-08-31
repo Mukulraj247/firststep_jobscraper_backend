@@ -122,12 +122,15 @@ function SectionPaper({ title, children, action }: { title: string; children: Re
 export type AutomationConfigPageProps = {
   automationId?: string;
   onClose?: () => void;
+  /** Called after a successful save (before close). */
+  onSaved?: () => void | Promise<void>;
   embedded?: boolean;
 };
 
 export const AutomationConfigPage = ({
   automationId,
   onClose,
+  onSaved,
   embedded = false,
 }: AutomationConfigPageProps = {}) => {
   const { id: routeId = '' } = useParams();
@@ -505,7 +508,7 @@ export const AutomationConfigPage = ({
 
     setSaving(true);
     try {
-      await updateAutomationConfig(id, {
+      const result = await updateAutomationConfig(id, {
         name,
         companyName: companyName.trim(),
         tags,
@@ -513,6 +516,9 @@ export const AutomationConfigPage = ({
         ...(webhook.trim() ? { webhookUrl: webhook } : {}),
         config: configPayload,
       });
+      if (result?.automation?.schedule?.nextRunAt) {
+        setNextRunAt(result.automation.schedule.nextRunAt);
+      }
       if (clearProxy) {
         setProxyConfigured(false);
         setClearProxy(false);
@@ -524,6 +530,7 @@ export const AutomationConfigPage = ({
         setProxyConfigured(true);
       }
       notify('success', 'Automation configuration saved');
+      await onSaved?.();
       close();
     } catch (error: any) {
       notify('error', error?.response?.data?.error || 'Failed to save automation config');

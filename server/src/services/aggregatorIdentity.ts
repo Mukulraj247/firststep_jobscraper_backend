@@ -1,11 +1,13 @@
 /**
- * Aggregator robots (Hiring Cafe, etc.) vs company career scrapers.
+ * Aggregator robots (Hiring Cafe, LinkedIn, etc.) vs company career scrapers.
  * Stored on saasConfig so Automations can exclude them and Aggregators can list them.
  */
 
 export const AGGREGATOR_PROVIDER_HIRING_CAFE = 'hiring_cafe';
+export const AGGREGATOR_PROVIDER_LINKEDIN = 'linkedin';
 
 export const AGGREGATOR_SOURCE_HIRING_CAFE = 'hiring_cafe';
+export const AGGREGATOR_SOURCE_LINKEDIN = 'linkedin';
 
 export function isHiringCafeUrl(url: string): boolean {
   try {
@@ -16,7 +18,31 @@ export function isHiringCafeUrl(url: string): boolean {
   }
 }
 
-/** Stamp Hiring Cafe searches as aggregators when the client omitted aggregatorProvider. */
+/** LinkedIn jobs search / collection URLs (not preload or auth walls). */
+export function isLinkedInJobsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (host !== 'linkedin.com' && !host.endsWith('.linkedin.com')) return false;
+    const path = parsed.pathname.toLowerCase();
+    if (path.includes('/preload')) return false;
+    if (path.includes('/authwall')) return false;
+    return path.includes('/jobs');
+  } catch {
+    return false;
+  }
+}
+
+export function isLinkedInHostUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'linkedin.com' || host.endsWith('.linkedin.com');
+  } catch {
+    return false;
+  }
+}
+
+/** Stamp aggregator provider from start URL when client omitted aggregatorProvider. */
 export function applyAggregatorProviderFromUrl(
   startUrl: string | undefined,
   saas: Record<string, unknown>
@@ -28,6 +54,14 @@ export function applyAggregatorProviderFromUrl(
     if (saas.preferAtsCollection === undefined) {
       saas.preferAtsCollection = false;
     }
+    return;
+  }
+  if (startUrl && isLinkedInJobsUrl(startUrl)) {
+    saas.aggregatorProvider = AGGREGATOR_PROVIDER_LINKEDIN;
+    saas.enrichHiringCafeDetails = false;
+    if (saas.preferAtsCollection === undefined) {
+      saas.preferAtsCollection = false;
+    }
   }
 }
 
@@ -35,14 +69,37 @@ export function applyAggregatorProviderFromUrl(
 export function isAggregatorRobot(robot: any): boolean {
   const cfg = robot?.recording_meta?.saasConfig || robot?.saasConfig || {};
   const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
-  if (provider === AGGREGATOR_PROVIDER_HIRING_CAFE || provider === 'aggregator') return true;
+  if (
+    provider === AGGREGATOR_PROVIDER_HIRING_CAFE ||
+    provider === AGGREGATOR_PROVIDER_LINKEDIN ||
+    provider === 'aggregator'
+  ) {
+    return true;
+  }
   const tags = [
     ...(Array.isArray(robot?.recording_meta?.tags) ? robot.recording_meta.tags : []),
     ...(Array.isArray(cfg.tags) ? cfg.tags : []),
   ].map((t: unknown) => String(t || '').toLowerCase());
   return tags.some(
-    (t) => t === 'aggregator' || t === 'aggregator:hiring_cafe' || t === 'hiring_cafe'
+    (t) =>
+      t === 'aggregator' ||
+      t === 'aggregator:hiring_cafe' ||
+      t === 'aggregator:linkedin' ||
+      t === 'hiring_cafe' ||
+      t === 'linkedin'
   );
+}
+
+export function isLinkedInAggregatorRobot(robot: any): boolean {
+  if (!isAggregatorRobot(robot)) return false;
+  const cfg = robot?.recording_meta?.saasConfig || robot?.saasConfig || {};
+  const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
+  if (provider === AGGREGATOR_PROVIDER_LINKEDIN) return true;
+  const tags = [
+    ...(Array.isArray(robot?.recording_meta?.tags) ? robot.recording_meta.tags : []),
+    ...(Array.isArray(cfg.tags) ? cfg.tags : []),
+  ].map((t: unknown) => String(t || '').toLowerCase());
+  return tags.includes('linkedin');
 }
 
 /** True when post-list detail visits should run (Hiring Cafe posting pages). */
@@ -51,17 +108,16 @@ export function shouldEnrichHiringCafeDetails(robot: any): boolean {
   const cfg = robot?.recording_meta?.saasConfig || robot?.saasConfig || {};
   if (cfg.enrichHiringCafeDetails === false) return false;
   const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
-  return (
-    provider === AGGREGATOR_PROVIDER_HIRING_CAFE ||
-    provider === '' ||
-    provider === 'aggregator'
-  );
+  return provider === AGGREGATOR_PROVIDER_HIRING_CAFE || provider === '' || provider === 'aggregator';
 }
 
 export function aggregatorSourceForRobot(robot: any): string | null {
   if (!isAggregatorRobot(robot)) return null;
   const cfg = robot?.recording_meta?.saasConfig || {};
   const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
+  if (provider === AGGREGATOR_PROVIDER_LINKEDIN) {
+    return AGGREGATOR_SOURCE_LINKEDIN;
+  }
   if (provider === AGGREGATOR_PROVIDER_HIRING_CAFE || !provider) {
     return AGGREGATOR_SOURCE_HIRING_CAFE;
   }
@@ -87,4 +143,25 @@ export function aggregatorRobotsOnlyMongoClause(provider?: string): Record<strin
   return {
     'recording_meta.saasConfig.aggregatorProvider': { $exists: true, $nin: [null, ''] },
   };
+}
+
+/** Validate LinkedIn aggregator start URL at create time. */
+export function validateLinkedInAggregatorUrl(url: string): { ok: true } | { ok: false; error: string } {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) {
+    return { ok: false, error: 'LinkedIn aggregator URL is required' };
+  }
+  if (!isLinkedInHostUrl(trimmed)) {
+    return { ok: false, error: 'LinkedIn aggregator URL must be on linkedin.com' };
+  }
+  if (trimmed.toLowerCase().includes('/preload')) {
+    return { ok: false, error: 'LinkedIn preload URLs are not valid job search targets' };
+  }
+  if (!isLinkedInJobsUrl(trimmed)) {
+    return {
+      ok: false,
+      error: 'LinkedIn aggregator URL must be a jobs search URL (path contains /jobs)',
+    };
+  }
+  return { ok: true };
 }

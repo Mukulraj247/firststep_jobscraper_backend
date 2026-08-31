@@ -452,7 +452,7 @@ export const DashboardPage = () => {
 
           <SectionHeading
             title="ScoutX enrichment credits"
-            caption="Company scrapers only (ATS-first + scraping algorithm). Hiring Cafe and n8n are excluded."
+            caption="Company scrapers only (ATS-first + scraping algorithm). Aggregators and n8n are excluded."
           />
           <Box
             sx={{

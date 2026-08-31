@@ -21,3 +21,20 @@ export const sessionStateExists = async (userId: string, automationId: string): 
     return false;
   }
 };
+
+/** Per LinkedIn ENV account session (auto-rotation pool). */
+export const getLinkedInAccountSessionPath = async (accountId: string): Promise<string> => {
+  await ensureSessionDir();
+  const safeId = String(accountId).replace(/[^a-zA-Z0-9_-]/g, '');
+  return path.join(SESSION_DIR, `linkedin-${safeId}.json`);
+};
+
+export const linkedInAccountSessionExists = async (accountId: string): Promise<boolean> => {
+  try {
+    const filePath = await getLinkedInAccountSessionPath(accountId);
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+};

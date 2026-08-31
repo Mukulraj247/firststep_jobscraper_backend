@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -209,6 +209,17 @@ export const AggregatorsPage = () => {
   } = useQuery(aggregatorQueryOptions(aggregatorQuery));
 
   const searches = aggregatorData?.searches ?? [];
+  const displaySearches = useMemo(
+    () =>
+      searches.map((search) => {
+        const company = search.companyName?.trim() || '';
+        if (/^(hc|hiring\s*cafe|hiringcafe)$/i.test(company)) {
+          return { ...search, companyName: 'Aggregator' };
+        }
+        return search;
+      }),
+    [searches]
+  );
   const summary: AggregatorSummary | null = aggregatorData?.summary ?? null;
   const totalCount = aggregatorData?.pagination.total ?? 0;
   const isRefreshing = isFetching && !isLoading;
@@ -376,7 +387,7 @@ export const AggregatorsPage = () => {
     const trimmedName = createName.trim();
     const trimmedUrl = createUrl.trim();
     if (!trimmedName || !trimmedUrl) {
-      setCreateError('Name and Hiring Cafe search URL are required.');
+      setCreateError('Name and aggregator URL are required.');
       return;
     }
     if (creating) return;
@@ -386,7 +397,7 @@ export const AggregatorsPage = () => {
       await createAutomation({
         name: trimmedName,
         startUrl: trimmedUrl,
-        companyName: 'Hiring Cafe',
+        companyName: 'Aggregator',
         tags: ['aggregator', 'hiring_cafe'],
         config: {
           aggregatorProvider: 'hiring_cafe',
@@ -401,12 +412,12 @@ export const AggregatorsPage = () => {
       setCreateOpen(false);
       setCreateName('');
       setCreateUrl('');
-      notify('success', 'Hiring Cafe search created — scheduled hourly');
+      notify('success', 'Aggregator created — scheduled hourly');
       await loadAggregators();
     } catch (e: unknown) {
       setCreateError(
         (e as { response?: { data?: { error?: string } } })?.response?.data?.error ||
-          'Failed to create search'
+          'Failed to create aggregator'
       );
     } finally {
       setCreating(false);
@@ -425,7 +436,7 @@ export const AggregatorsPage = () => {
           navigate(`/run/${result.runId}`, { state: pushReturnState(location) });
         }
       },
-      'Failed to run search'
+      'Failed to run aggregator'
     );
   };
 
@@ -457,7 +468,7 @@ export const AggregatorsPage = () => {
         setDeleteTarget(null);
         await loadAggregators();
       },
-      'Failed to delete search'
+      'Failed to delete aggregator'
     );
   };
 
@@ -606,15 +617,15 @@ export const AggregatorsPage = () => {
           >
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="overline" sx={heroGlassOverlineSx}>
-                Job aggregators
+                Aggregator
               </Typography>
               <Typography sx={heroGlassTitleSx('md')}>Aggregators</Typography>
               <Typography variant="body2" sx={{ ...heroGlassSubtitleSx, maxWidth: 560 }}>
-                Hiring Cafe searches with the same schedule, next-run, and actions as Automations.
+                Aggregators with the same schedule, next-run, and actions as Automations.
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                 {freshnessLabel}
-                {summary ? ` · ${summary.totalAutomations} searches` : ''}
+                {summary ? ` · ${summary.totalAutomations} aggregators` : ''}
                 {summary?.activeScheduledCount
                   ? ` · ${summary.activeScheduledCount} scheduled`
                   : ''}
@@ -642,7 +653,7 @@ export const AggregatorsPage = () => {
                 }}
                 sx={heroGlassPrimaryButtonSx}
               >
-                New search
+                New aggregator
               </Button>
             </Stack>
           </Stack>
@@ -757,7 +768,7 @@ export const AggregatorsPage = () => {
               <AutomationEmptyState variant="filtered-empty" onClearFilters={handleClearFilters} />
             ) : isMobile ? (
               <AutomationCardList
-                automations={searches}
+                automations={displaySearches}
                 pending={pendingActions}
                 errors={rowActionErrors}
                 copiedScoutId={copiedScoutId}
@@ -767,7 +778,7 @@ export const AggregatorsPage = () => {
               />
             ) : (
               <AutomationTable
-                automations={searches}
+                automations={displaySearches}
                 pending={pendingActions}
                 errors={rowActionErrors}
                 copiedScoutId={copiedScoutId}
@@ -847,7 +858,7 @@ export const AggregatorsPage = () => {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>New Hiring Cafe search</DialogTitle>
+        <DialogTitle>New aggregator</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 0.5 }}>
             {createError ? <Alert severity="error">{createError}</Alert> : null}
@@ -859,11 +870,11 @@ export const AggregatorsPage = () => {
               autoFocus
             />
             <TextField
-              label="Hiring Cafe search URL"
+              label="Aggregator URL"
               fullWidth
               value={createUrl}
               onChange={(e) => setCreateUrl(e.target.value)}
-              placeholder="https://hiringcafe.com/..."
+              placeholder="https://..."
               helperText="Scheduled hourly by default — change cadence from the Schedule action."
             />
           </Stack>
@@ -896,6 +907,7 @@ export const AggregatorsPage = () => {
           <AutomationConfigPage
             automationId={configTargetId}
             onClose={() => setConfigTargetId(null)}
+            onSaved={loadAggregators}
             embedded
           />
         ) : null}

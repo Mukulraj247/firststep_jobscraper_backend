@@ -77,7 +77,7 @@ export function summarizeHiringCafeUrl(url: string): HiringCafeSearchSummary {
     }
   }
 
-  const headline = chips[0] || 'Hiring Cafe search';
+  const headline = chips[0] || 'Aggregator';
   const rest = chips.slice(1);
   return {
     headline,

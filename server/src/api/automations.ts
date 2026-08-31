@@ -6,7 +6,13 @@ import Run from '../models/Run';
 import ExtractedData from '../models/ExtractedData';
 import logger from '../logger';
 import moment from 'moment-timezone';
-import { syncAutomationSchedule, resolveEffectiveScheduleState, readRobotScheduleTimestamps, repackAllAutomationSchedules } from '../services/automationScheduler';
+import {
+  automationScheduleNeedsRepack,
+  syncAutomationSchedule,
+  resolveEffectiveScheduleState,
+  readRobotScheduleTimestamps,
+  repackAllAutomationSchedules,
+} from '../services/automationScheduler';
 import { reconfigureDailySchedulesForOwner } from '../services/scheduleReconfigure';
 import {
   applyColumnOverrides,
@@ -801,16 +807,16 @@ router.get('/dashboard/automations', async (req: any, res: any) => {
 router.get('/dashboard/aggregators', async (req: any, res: any) => {
   try {
     const { page, limit, skip } = parseListPagination(req);
-    const { aggregatorRobotsOnlyMongoClause, AGGREGATOR_PROVIDER_HIRING_CAFE } = await import(
+    const { aggregatorRobotsOnlyMongoClause } = await import(
       '../services/aggregatorIdentity'
     );
     const provider =
-      req.query.provider != null
+      req.query.provider != null && String(req.query.provider).trim()
         ? String(req.query.provider).trim()
-        : AGGREGATOR_PROVIDER_HIRING_CAFE;
+        : undefined;
     const ownerFilter: any = {
       ...ownerIdFilter(req.user.id),
-      ...aggregatorRobotsOnlyMongoClause(provider || undefined),
+      ...aggregatorRobotsOnlyMongoClause(provider),
     };
 
     const tagsFilterRaw = req.query.tags != null ? String(req.query.tags).trim() : '';
@@ -942,7 +948,7 @@ router.get('/dashboard/aggregators', async (req: any, res: any) => {
 
     const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
     return res.json({
-      provider: provider || AGGREGATOR_PROVIDER_HIRING_CAFE,
+      provider: provider || 'all',
       searches,
       pagination: { page, limit, total, totalPages },
       summary: {
@@ -1375,8 +1381,16 @@ router.post('/automations', async (req: any, res: any) => {
     const { applyAggregatorProviderFromUrl } = await import('../services/aggregatorIdentity');
     applyAggregatorProviderFromUrl(normalizedStartUrl, saasIncoming as Record<string, unknown>);
 
-    // Aggregator searches: reuse listExtraction from an existing Hiring Cafe template when omitted.
     const aggregatorProvider = String((saasIncoming as any).aggregatorProvider || '').trim();
+    if (aggregatorProvider === 'linkedin') {
+      const { validateLinkedInAggregatorUrl } = await import('../services/aggregatorIdentity');
+      const linkedInValidation = validateLinkedInAggregatorUrl(normalizedStartUrl);
+      if (!linkedInValidation.ok) {
+        return res.status(400).json({ error: linkedInValidation.error });
+      }
+    }
+
+    // Aggregator searches: reuse listExtraction from an existing template when omitted.
     if (aggregatorProvider && !(saasIncoming as any).listExtraction) {
       const template = await Robot.findOne({
         ...ownerIdFilter(req.user.id),
@@ -1687,12 +1701,8 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
       delete (nextSaasConfig as any).schedule.preferredNextRunAt;
     }
 
-    const prevSchedule = (prevSaas as any).schedule || {};
     const nextSched = (nextSaasConfig as any).schedule || {};
-    const scheduleChanged =
-      !!prevSchedule.enabled !== !!nextSched.enabled ||
-      String(prevSchedule.cron || '') !== String(nextSched.cron || '') ||
-      String(prevSchedule.timezone || '') !== String(nextSched.timezone || '');
+    const scheduleNeedsRepack = automationScheduleNeedsRepack(robot.toJSON(), nextSched);
     const preferredFromBody =
       req.body?.preferredNextRunAt ||
       (incoming as any)?.schedule?.preferredNextRunAt ||
@@ -1709,7 +1719,7 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
       },
       req.user.id,
       incomingTimezone,
-      scheduleChanged
+      scheduleNeedsRepack
         ? {
             packSlots: true,
             ...(preferredFromBody ? { preferredNextRunAt: preferredFromBody } : {}),
@@ -1719,6 +1729,16 @@ router.put('/automations/:id/config', async (req: any, res: any) => {
 
     robot.recording_meta = nextMeta;
     robot.schedule = nextSchedule;
+    if (nextMeta.saasConfig?.schedule) {
+      nextMeta.saasConfig.schedule.nextRunAt = nextSchedule.nextRunAt ?? null;
+      nextMeta.saasConfig.schedule.lastRunAt = nextSchedule.lastRunAt ?? null;
+      if (nextSchedule.every) {
+        nextMeta.saasConfig.schedule.every = nextSchedule.every;
+      }
+      nextMeta.saasConfig.schedule.cron = nextSchedule.cron || nextMeta.saasConfig.schedule.cron || '';
+      nextMeta.saasConfig.schedule.enabled = !!nextSchedule.enabled;
+      nextMeta.saasConfig.schedule.timezone = nextSchedule.timezone || nextMeta.saasConfig.schedule.timezone || 'UTC';
+    }
     robot.markModified('recording_meta');
     await robot.save();
     const publicConfig = toPublicAutomationConfig(nextMeta.saasConfig);
@@ -2503,6 +2523,13 @@ router.put('/automations/:id/schedule', async (req: any, res: any) => {
 
     robot.recording_meta = nextMeta;
     robot.schedule = nextSchedule;
+    if (nextSaasConfig.schedule) {
+      nextSaasConfig.schedule.nextRunAt = nextSchedule.nextRunAt ?? null;
+      nextSaasConfig.schedule.lastRunAt = nextSchedule.lastRunAt ?? null;
+      if (nextSchedule.every) {
+        nextSaasConfig.schedule.every = nextSchedule.every;
+      }
+    }
     await robot.save();
 
     logger.log(

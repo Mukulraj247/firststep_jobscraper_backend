@@ -15,9 +15,24 @@ import {
 import { runListExtraction, applySelectorPromotions, primaryItemSelector } from '../services/listExtractor';
 import {
   LINKEDIN_NO_SESSION_HINT,
+  linkedInPoolCanAuthenticate,
   shouldFailFastLinkedInWithoutSession,
 } from '../services/linkedinSessionGate';
-import { isAggregatorRobot, shouldEnrichHiringCafeDetails } from '../services/aggregatorIdentity';
+import {
+  isAggregatorRobot,
+  isLinkedInAggregatorRobot,
+  shouldEnrichHiringCafeDetails,
+} from '../services/aggregatorIdentity';
+import {
+  beginLinkedInAggregatorRun,
+  ensureLinkedInAggregatorSessionOnPage,
+  finishLinkedInAggregatorRun,
+  getLinkedInAggregatorStorageStatePath,
+  isLinkedInBlockError,
+  tryRotateLinkedInAggregatorAccount,
+  type LinkedInAggregatorRunHandle,
+} from '../services/linkedinAggregatorRun';
+import { persistLinkedInAccountSession } from '../services/linkedinLogin';
 import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
 import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
 import {
@@ -628,6 +643,7 @@ async function processConfiguredListExtraction(
     blockResources?: boolean;
     onPoolKey?: (poolKey: string) => void;
     listStartUrl?: string;
+    linkedInHandle?: LinkedInAggregatorRunHandle | null;
   }
 ): Promise<{ poolKey: string }> {
   const lease = await acquirePooledPage({
@@ -653,6 +669,20 @@ async function processConfiguredListExtraction(
       { flush: true }
     );
     await applyAutomationRuntimeConfig(page, automation);
+
+    if (options?.linkedInHandle) {
+      await appendRunLog(
+        run,
+        `LinkedIn account pool: using account ${options.linkedInHandle.lease.accountId}`,
+        { flush: true }
+      );
+      await ensureLinkedInAggregatorSessionOnPage(
+        page,
+        options.linkedInHandle,
+        listStartUrl
+      );
+      await persistLinkedInAccountSession(page, options.linkedInHandle.lease.accountId);
+    }
 
     if (await detectCloudflareChallenge(page)) {
       await appendRunLog(run, 'Cloudflare challenge detected before extraction. Waiting for verification to complete...');
@@ -849,6 +879,7 @@ async function buildIdentityProfile(
     failedProxyServers?: string[];
     lastFailureWasProxyTunnel?: boolean;
     retryReason?: ScraperRetryReason;
+    storageStatePathOverride?: string;
   }
 ) {
   let failedProxyServers = normalizeFailedProxyServers(opts?.failedProxyServers);
@@ -877,9 +908,11 @@ async function buildIdentityProfile(
   const shouldReuseSession = config?.reuseSession !== false;
   const targetUrl = config?.targetUrl;
   const antiBotTarget = isAntiBotTarget(targetUrl);
-  const storageStatePath = shouldReuseSession && await sessionStateExists(String(userId), automationId)
-    ? await getSessionStatePath(String(userId), automationId)
-    : undefined;
+  const storageStatePath =
+    opts?.storageStatePathOverride ||
+    (shouldReuseSession && (await sessionStateExists(String(userId), automationId))
+      ? await getSessionStatePath(String(userId), automationId)
+      : undefined);
 
   let browserType = config?.browserType;
   let headless = config?.headless !== false;
@@ -1151,6 +1184,24 @@ export async function runScraperJobPayload(
   const targetHost = hostnameFromUrl(automation?.recording_meta?.url);
   let browserId: string | null = null;
   let extractionPoolKey: string | null = null;
+  let linkedInHandle: LinkedInAggregatorRunHandle | null = null;
+  let linkedInHandleReleased = false;
+
+  const releaseLinkedInHandle = async (
+    outcome: 'ok' | 'blocked' | 'released',
+    errorMessage?: string
+  ) => {
+    if (!linkedInHandle || linkedInHandleReleased) return;
+    linkedInHandleReleased = true;
+    try {
+      await finishLinkedInAggregatorRun(linkedInHandle, outcome, errorMessage);
+    } catch (releaseErr: any) {
+      logger.log(
+        'warn',
+        `LinkedIn account pool release failed for run ${runId}: ${releaseErr?.message || releaseErr}`
+      );
+    }
+  };
 
   // Park without burning attempts when this host's circuit is open.
   if (targetHost) {
@@ -1262,6 +1313,46 @@ export async function runScraperJobPayload(
     }
 
     // LinkedIn without cookies/session → login wall + long ZeroRows. Fail fast.
+    const linkedInAggregator = isLinkedInAggregatorRobot(automation);
+    const linkedInPoolReady = linkedInPoolCanAuthenticate();
+
+    if (linkedInAggregator && useListExtraction && !linkedInPoolReady) {
+      const poolHint =
+        'LinkedIn aggregator requires LINKEDIN_ACCOUNT_N_EMAIL and LINKEDIN_ACCOUNT_N_PASSWORD in ENV.';
+      await appendRunLog(run, poolHint, { flush: true });
+      await finalizeExtractedListRows({
+        run,
+        automation,
+        userId: String(userId),
+        rows: [],
+        extractionMethod: 'browser',
+        skipLayoutChangeSuggestion: true,
+        zeroRowsHint: poolHint,
+      });
+      return;
+    }
+
+    if (linkedInAggregator && linkedInPoolReady && useListExtraction) {
+      try {
+        linkedInHandle = await beginLinkedInAggregatorRun(String(runId));
+      } catch (poolErr: any) {
+        const poolHint =
+          poolErr?.message ||
+          'No eligible LinkedIn accounts available (spacing, cooldown, or daily cap).';
+        await appendRunLog(run, poolHint, { flush: true });
+        await finalizeExtractedListRows({
+          run,
+          automation,
+          userId: String(userId),
+          rows: [],
+          extractionMethod: 'browser',
+          skipLayoutChangeSuggestion: true,
+          zeroRowsHint: poolHint,
+        });
+        return;
+      }
+    }
+
     if (useListExtraction) {
       const reuseSession = config?.reuseSession !== false;
       const hasReusableStorageState =
@@ -1271,9 +1362,11 @@ export async function runScraperJobPayload(
           url: listStartUrl || automation?.recording_meta?.url,
           cookies: config?.cookies,
           hasReusableStorageState,
+          hasLinkedInAccountPool: linkedInAggregator && linkedInPoolReady,
         })
       ) {
         await appendRunLog(run, LINKEDIN_NO_SESSION_HINT, { flush: true });
+        await releaseLinkedInHandle('blocked', LINKEDIN_NO_SESSION_HINT);
         await finalizeExtractedListRows({
           run,
           automation,
@@ -1287,6 +1380,11 @@ export async function runScraperJobPayload(
       }
     }
 
+    let linkedInStorageStateOverride: string | undefined;
+    if (linkedInHandle) {
+      linkedInStorageStateOverride = await getLinkedInAggregatorStorageStatePath(linkedInHandle);
+    }
+
     const builtIdentity = await buildIdentityProfile(
       String(userId),
       automationId,
@@ -1296,6 +1394,7 @@ export async function runScraperJobPayload(
         failedProxyServers,
         lastFailureWasProxyTunnel: data._lastFailureWasProxyTunnel,
         retryReason: data._retryReason,
+        storageStatePathOverride: linkedInStorageStateOverride,
       }
     );
     const {
@@ -1335,21 +1434,64 @@ export async function runScraperJobPayload(
       extractionPoolKey = key;
     };
 
+    const runConfiguredListExtraction = async (
+      identity: typeof selectedIdentity,
+      handle: LinkedInAggregatorRunHandle | null,
+      extra?: {
+        isolatedBrowserKey?: string;
+        blockResources?: boolean;
+      }
+    ) =>
+      processConfiguredListExtraction(run, automation, String(userId), config, identity, {
+        onPoolKey: rememberPoolKey,
+        listStartUrl,
+        linkedInHandle: handle,
+        ...extra,
+      });
+
     const executionFn = useListExtraction
       ? async () => {
+          let activeHandle = linkedInHandle;
+          let activeIdentity = selectedIdentity;
           try {
-            const result = await processConfiguredListExtraction(
-              run,
-              automation,
-              String(userId),
-              config,
-              selectedIdentity,
-              { onPoolKey: rememberPoolKey, listStartUrl }
-            );
+            const result = await runConfiguredListExtraction(activeIdentity, activeHandle);
             executionResult = result;
             extractionPoolKey = result.poolKey;
           } catch (firstError: any) {
-            const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+            const firstMessage =
+              firstError instanceof Error ? firstError.message : String(firstError);
+
+            if (activeHandle && isLinkedInBlockError(firstError)) {
+              const rotated = await tryRotateLinkedInAggregatorAccount(
+                String(runId),
+                activeHandle,
+                firstMessage
+              );
+              if (rotated) {
+                linkedInHandle = rotated;
+                activeHandle = rotated;
+                linkedInHandleReleased = false;
+                const rotatedStorage = await getLinkedInAggregatorStorageStatePath(rotated);
+                activeIdentity = {
+                  ...activeIdentity,
+                  storageStatePath: rotatedStorage,
+                };
+                if (extractionPoolKey) {
+                  await evictBrowserFromPool(extractionPoolKey).catch(() => {});
+                  extractionPoolKey = null;
+                }
+                await appendRunLog(
+                  run,
+                  `LinkedIn account rotated to account ${rotated.lease.accountId} after block`,
+                  { flush: true }
+                );
+                const retryResult = await runConfiguredListExtraction(activeIdentity, activeHandle);
+                executionResult = retryResult;
+                extractionPoolKey = retryResult.poolKey;
+                return;
+              }
+            }
+
             if (!isNavigationNetworkFailure(firstMessage)) {
               throw firstError;
             }
@@ -1388,19 +1530,10 @@ export async function runScraperJobPayload(
             }
 
             const isolatedKey = `net-fallback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const fallbackResult = await processConfiguredListExtraction(
-              run,
-              automation,
-              String(userId),
-              config,
-              selectedIdentity,
-              {
-                isolatedBrowserKey: isolatedKey,
-                blockResources: false,
-                onPoolKey: rememberPoolKey,
-                listStartUrl,
-              }
-            );
+            const fallbackResult = await runConfiguredListExtraction(activeIdentity, activeHandle, {
+              isolatedBrowserKey: isolatedKey,
+              blockResources: false,
+            });
             executionResult = fallbackResult;
             extractionPoolKey = fallbackResult.poolKey;
           }
@@ -1551,10 +1684,18 @@ export async function runScraperJobPayload(
     }
 
     recordHostSuccess(targetHost);
+    await releaseLinkedInHandle('ok');
     return;
   } catch (error: any) {
     const message = error instanceof Error ? error.message : String(error);
     const latestRun = await Run.findOne({ runId });
+
+    if (linkedInHandle) {
+      await releaseLinkedInHandle(
+        isLinkedInBlockError(error) ? 'blocked' : 'released',
+        isLinkedInBlockError(error) ? message : undefined
+      );
+    }
 
     if (browserId) {
       try {

@@ -78,6 +78,50 @@ export function resolveEffectiveScheduleState(robot: any): StoredSchedule {
   return fromRoot;
 }
 
+/** Resolve the interval length for a stored schedule (explicit `every` or preset cron). */
+export function resolveScheduleEveryMs(
+  schedule?: Partial<StoredSchedule> | null
+): number | null {
+  if (!schedule) return null;
+  if (typeof schedule.every === 'number' && schedule.every > 0) return schedule.every;
+  return intervalMsFromCron(schedule.cron || '');
+}
+
+/**
+ * Whether saving `nextSchedule` should repack `nextRunAt` (new cron/interval, root vs saas
+ * drift, or a stored next run that is too far out for the target interval — e.g. hourly cron
+ * with a daily-spread timestamp left over from reconfigure-daily).
+ */
+export function automationScheduleNeedsRepack(
+  robot: any,
+  nextScheduleInput?: Partial<StoredSchedule> | null
+): boolean {
+  const prevEffective = resolveEffectiveScheduleState(robot);
+  const next = buildAutomationScheduleState(nextScheduleInput);
+
+  if (!!prevEffective.enabled !== !!next.enabled) return true;
+  if (String(prevEffective.cron || '').trim() !== String(next.cron || '').trim()) return true;
+  if (String(prevEffective.timezone || 'UTC') !== String(next.timezone || 'UTC')) return true;
+
+  const prevEvery = resolveScheduleEveryMs(prevEffective);
+  const nextEvery = resolveScheduleEveryMs(next);
+  if (prevEvery !== nextEvery) return true;
+
+  const root = buildAutomationScheduleState(robot?.schedule);
+  if (String(root.cron || '').trim() !== String(next.cron || '').trim()) return true;
+  if (resolveScheduleEveryMs(root) !== nextEvery) return true;
+
+  if (next.enabled && nextEvery) {
+    const { nextRunAt } = readRobotScheduleTimestamps(robot, prevEffective);
+    if (nextRunAt && !Number.isNaN(nextRunAt.getTime())) {
+      const msUntil = nextRunAt.getTime() - Date.now();
+      if (msUntil > nextEvery * 1.5) return true;
+    }
+  }
+
+  return false;
+}
+
 /** Prefer root timestamps (written on fire); fall back to saasConfig. */
 export function readRobotScheduleTimestamps(robot: any, schedule: StoredSchedule): {
   lastRunAt: Date | null;
@@ -241,7 +285,11 @@ export async function syncAutomationSchedule(
       robot?.schedule?.nextRunAt ?? robot?.recording_meta?.saasConfig?.schedule?.nextRunAt ?? null;
     const existingMs = existingNextRaw != null ? new Date(existingNextRaw).getTime() : NaN;
     const hasFutureNext = !Number.isNaN(existingMs) && existingMs > Date.now();
-    const shouldRepack = !!options?.packSlots || options?.preferredNextRunAt != null || !hasFutureNext;
+    const shouldRepack =
+      !!options?.packSlots ||
+      options?.preferredNextRunAt != null ||
+      !hasFutureNext ||
+      automationScheduleNeedsRepack(robot, nextSchedule);
 
     if (!shouldRepack && hasFutureNext) {
       forcedNextRunAt = new Date(existingMs);

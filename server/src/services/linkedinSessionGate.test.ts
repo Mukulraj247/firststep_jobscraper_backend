@@ -57,6 +57,17 @@ describe('shouldFailFastLinkedInWithoutSession', () => {
     ).toBe(false);
   });
 
+  it('is false when LinkedIn ENV account pool is configured', () => {
+    expect(
+      shouldFailFastLinkedInWithoutSession({
+        url: 'https://www.linkedin.com/jobs/',
+        cookies: [],
+        hasReusableStorageState: false,
+        hasLinkedInAccountPool: true,
+      })
+    ).toBe(false);
+  });
+
   it('is false for non-LinkedIn URLs', () => {
     expect(
       shouldFailFastLinkedInWithoutSession({

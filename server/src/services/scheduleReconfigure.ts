@@ -313,10 +313,12 @@ async function persistDailyTimestamps(input: {
       $set: {
         'schedule.lastRunAt': input.lastRunAt,
         'schedule.nextRunAt': input.nextRunAt,
+        'schedule.cron': '0 0 * * *',
         'schedule.every': DAILY_INTERVAL_MS,
         'schedule.updatedAt': new Date().toISOString(),
         'recording_meta.saasConfig.schedule.lastRunAt': input.lastRunAt,
         'recording_meta.saasConfig.schedule.nextRunAt': input.nextRunAt,
+        'recording_meta.saasConfig.schedule.cron': '0 0 * * *',
         'recording_meta.saasConfig.schedule.every': DAILY_INTERVAL_MS,
       },
     },
