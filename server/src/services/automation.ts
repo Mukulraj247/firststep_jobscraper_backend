@@ -34,8 +34,10 @@ import {
   isAidevboardUrl,
   isAidevboardJobPostingUrl,
   isStartupsGalleryUrl,
+  shouldEnrichStartupsGalleryDetails,
 } from './aggregatorIdentity';
 import { isHiringCafeJobPostingUrl } from './hiringCafeDetail';
+import { normalizeStartupsGalleryListRow } from './startupsGalleryDetail';
 import { toPublicRunDto } from './automationConfigView';
 
 export interface AutomationRuntimeConfig {
@@ -694,6 +696,12 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
   // Transform once; both the persisted documents and the rows handed to
   // destinations (webhook / Sheets / Airtable / DB) get the override shape.
   const rows = extracted
+    .map((row) => ({
+      ...row,
+      data: shouldEnrichStartupsGalleryDetails(robot)
+        ? normalizeStartupsGalleryListRow(row.data)
+        : row.data,
+    }))
     .filter((row) => shouldKeepExtractedJobRow(row.data))
     .map((row) => ({
       source: row.source,

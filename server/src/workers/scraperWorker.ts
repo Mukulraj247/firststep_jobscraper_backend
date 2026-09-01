@@ -27,6 +27,7 @@ import {
   shouldEnrichCapitalGDetails,
   shouldEnrichChoppingBlockDetails,
   shouldEnrichAidevboardDetails,
+  shouldEnrichStartupsGalleryDetails,
 } from '../services/aggregatorIdentity';
 import {
   beginLinkedInAggregatorRun,
@@ -43,6 +44,7 @@ import { enrichAccelListRows } from '../services/accelDetailScrape';
 import { enrichConsiderListRows } from '../services/sequoiaDetailScrape';
 import { enrichChoppingBlockListRows } from '../services/choppingblockDetailScrape';
 import { enrichAidevboardListRows } from '../services/aidevboardDetailScrape';
+import { enrichStartupsGalleryListRows } from '../services/startupsGalleryListScrape';
 import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
 import {
   evaluateRunDrift,
@@ -822,6 +824,17 @@ async function processConfiguredListExtraction(
           ? extractionConfig.maxItems
           : 40;
       rows = (await enrichAidevboardListRows(page, rows, {
+        maxJobs: cap,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
+    }
+
+    if (shouldEnrichStartupsGalleryDetails(automation)) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 80;
+      rows = (await enrichStartupsGalleryListRows(page, rows, {
         maxJobs: cap,
         onLog: (message) => appendRunLog(run, message, { flush: true }),
       })) as Record<string, any>[];

@@ -14,13 +14,31 @@ import {
 import { mapAidevboardApiJob, pickAidevboardJobUrl, preferExternalApplyUrl } from './aidevboardDetail';
 import { fetchAidevboardJobHtml } from './aidevboardApiLight';
 import { isStartupsGalleryUrl, isAidevboardUrl } from './aggregatorIdentity';
+import {
+  normalizeStartupsGalleryListRow,
+  parseStartupsGalleryCardLabel,
+  pickAtsUrlFromRow,
+  isStartupsGalleryListRowUsable,
+} from './startupsGalleryDetail';
 
-vi.mock('axios', () => ({
-  default: {
+vi.mock('axios', () => {
+  const interceptors = {
+    request: { use: vi.fn() },
+    response: { use: vi.fn() },
+  };
+  const instance = {
     get: vi.fn(),
-    create: vi.fn(() => ({ get: vi.fn(), post: vi.fn() })),
-  },
-}));
+    post: vi.fn(),
+    interceptors,
+  };
+  return {
+    default: {
+      get: vi.fn(),
+      create: vi.fn(() => instance),
+      interceptors,
+    },
+  };
+});
 
 const axiosGet = axios.get as unknown as ReturnType<typeof vi.fn>;
 
@@ -170,5 +188,35 @@ describe('startups.gallery list_ats', () => {
   it('recognizes gallery host (list rows should key on employer ATS URLs)', () => {
     expect(isStartupsGalleryUrl('https://startups.gallery/jobs')).toBe(true);
     expect(isStartupsGalleryUrl('https://boards.greenhouse.io/vast/jobs/1')).toBe(false);
+  });
+
+  it('parses card label into title, location, and date', () => {
+    const parsed = parseStartupsGalleryCardLabel(
+      'Senior Software Engineer — Infra Agent Systems UK Together AI · London · Posted on Sep 1, 2026'
+    );
+    expect(parsed.location).toBe('London');
+    expect(parsed.date).toBe('Sep 1, 2026');
+    expect(parsed.jobTitle).toMatch(/Together AI/i);
+  });
+
+  it('normalizes gallery list rows to ATS URLs and splits title/company', () => {
+    const card =
+      'AI Agent Security Architect Replit · Foster City, CA · Posted on Sep 1, 2026';
+    const normalized = normalizeStartupsGalleryListRow({
+      url: 'https://startups.gallery/jobs',
+      jobTitle: card,
+      title: card,
+    });
+    expect(pickAtsUrlFromRow(normalized)).toBe('');
+
+    const withAts = normalizeStartupsGalleryListRow({
+      url: 'https://jobs.ashbyhq.com/replit/df7b6d30-9da1-4ace-8121-17c2aa55aa6f',
+      jobTitle: card,
+    });
+    expect(withAts.jobUrl).toMatch(/jobs\.ashbyhq\.com\/replit/i);
+    expect(String(withAts.jobTitle)).toMatch(/AI Agent Security Architect/i);
+    expect(String(withAts.companyName)).toMatch(/Replit/i);
+    expect(withAts.location).toBe('Foster City, CA');
+    expect(isStartupsGalleryListRowUsable(withAts)).toBe(true);
   });
 });

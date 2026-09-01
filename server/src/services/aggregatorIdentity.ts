@@ -459,6 +459,17 @@ export function shouldEnrichAidevboardDetails(robot: any): boolean {
   return false;
 }
 
+/** True when post-list startups.gallery ATS link normalize / DOM harvest should run. */
+export function shouldEnrichStartupsGalleryDetails(robot: any): boolean {
+  if (!isAggregatorRobot(robot)) return false;
+  const cfg = robot?.recording_meta?.saasConfig || robot?.saasConfig || {};
+  if (cfg.enrichStartupsGalleryDetails === false) return false;
+  const provider = String(cfg.aggregatorProvider || cfg.provider || '').trim().toLowerCase();
+  if (provider === AGGREGATOR_PROVIDER_STARTUPS_GALLERY) return true;
+  if (cfg.enrichStartupsGalleryDetails === true) return true;
+  return false;
+}
+
 /**
  * HC / Accel / Chopping Block / AI Dev Board enrich from aggregator payload only.
  * Consider (Sequoia/CapitalG) and startups.gallery use ATS/employer paths.

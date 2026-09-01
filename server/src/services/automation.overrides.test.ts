@@ -5,6 +5,7 @@ import {
   shouldKeepExtractedJobRow,
   type ColumnOverride,
 } from './automation';
+import { normalizeStartupsGalleryListRow } from './startupsGalleryDetail';
 
 describe('collectOmitKeys', () => {
   it('collects original and rename targets for omitted columns', () => {
@@ -314,5 +315,20 @@ describe('shouldKeepExtractedJobRow', () => {
         companyName: 'Acme',
       })
     ).toBe(true);
+  });
+
+  it('drops startups.gallery index URLs but keeps normalized ATS hrefs', () => {
+    expect(
+      shouldKeepExtractedJobRow({
+        jobUrl: 'https://startups.gallery/jobs?position=software',
+        jobTitle: 'Senior Engineer',
+      })
+    ).toBe(false);
+    const normalized = normalizeStartupsGalleryListRow({
+      url: 'https://job-boards.greenhouse.io/togetherai/jobs/5222270007',
+      jobTitle:
+        'Senior Software Engineer — Infra Agent Systems UK Together AI · London · Posted on Sep 1, 2026',
+    });
+    expect(shouldKeepExtractedJobRow(normalized as Record<string, any>)).toBe(true);
   });
 });
