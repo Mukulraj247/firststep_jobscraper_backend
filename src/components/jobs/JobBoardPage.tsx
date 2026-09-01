@@ -34,7 +34,7 @@ import {
   WorkOutline,
 } from '@mui/icons-material';
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
-import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
+import { resolveJobBoardCompany, resolveJobBoardLocation } from '../../utils/jobBoardDisplay';
 import {
   sectionBodyLines,
   buildJobDetailSections,
@@ -368,14 +368,23 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
   const isDark = theme.palette.mode === 'dark';
   const data = job.data || {};
   const title = asText(data.jobTitle) || 'Untitled role';
-  const company = asText(data.companyName) || 'Company not listed';
-  const locationFull = asText(data.location);
+  const fullDesc = toReadableDescription(data.jobDescription);
+  const company =
+    resolveJobBoardCompany({
+      companyName: data.companyName,
+      jobDescription: fullDesc,
+      aggregatorPostingUrl: data.aggregatorPostingUrl,
+      jobUrl: data.jobUrl,
+    }) || 'Company not listed';
+  const locationFull = resolveJobBoardLocation({
+    location: data.location,
+    remoteType: data.remoteType,
+  });
   const location = formatCardLocation(locationFull);
   const salary = asText(data.salaryRange);
   const category = asText(data.jobCategory);
   const employment = asText(data.employmentType);
   const remote = asText(data.remoteType);
-  const fullDesc = toReadableDescription(data.jobDescription);
   const asList = (v: unknown): string[] =>
     Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
   const highlights = resolveCardHighlights(fullDesc, {
@@ -798,8 +807,18 @@ const JobDetailModal: React.FC<{
 
   const data = job?.data || {};
   const title = asText(data.jobTitle) || 'Untitled role';
-  const company = asText(data.companyName) || 'Company not listed';
-  const location = asText(data.location);
+  const fullDesc = toReadableDescription(data.jobDescription);
+  const company =
+    resolveJobBoardCompany({
+      companyName: data.companyName,
+      jobDescription: fullDesc,
+      aggregatorPostingUrl: data.aggregatorPostingUrl,
+      jobUrl: data.jobUrl,
+    }) || 'Company not listed';
+  const location = resolveJobBoardLocation({
+    location: data.location,
+    remoteType: data.remoteType,
+  });
   const salary = asText(data.salaryRange);
   const employment = asText(data.employmentType);
   const remote = asText(data.remoteType);

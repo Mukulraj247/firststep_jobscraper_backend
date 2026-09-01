@@ -4,6 +4,8 @@ import {
   parseChoppingBlockJobPageHtml,
   pickChoppingBlockJobUrl,
   mergeChoppingBlockDetailIntoRow,
+  deriveChoppingBlockCompany,
+  isChoppingBlockNoiseCompany,
 } from './choppingblockDetail';
 import {
   fetchChoppingBlockPostingHtml,
@@ -37,6 +39,27 @@ const CB_HTML = `
 </body></html>
 `;
 
+const REPLIT_POSTING =
+  'https://www.choppingblock.ai/jobs/ai-agent-security-architect-at-replit';
+
+const REPLIT_HTML = `
+<html><head>
+<title>AI Agent Security Architect at Replit | AI Chopping Block</title>
+<meta property="og:title" content="AI Agent Security Architect at Replit | AI Chopping Block"/>
+</head><body>
+  <h1 class="heading-style-h4">AI Agent Security Architect</h1>
+  <div class="job-header_metatag-list">
+    <div class="job-header_metatag-link"><div class="text-size-regular">501-1000</div></div>
+    <div class="tag is-small is-round-left"><img class="job_country_flag" alt="US.svg"/><div class="text-weight-medium">United States</div></div>
+  </div>
+  <a href="https://jobs.ashbyhq.com/replit/df7b6d30-9da1-4ace-8121-17c2aa55aa6f/application">Apply now</a>
+  <div class="w-richtext">
+    <p>Replit is the agentic software creation platform that enables anyone to build applications using natural language.</p>
+    <p>We are looking for an AI Agent Security Architect to function as the primary technical authority for Replit's autonomous and AI agent security blueprint.</p>
+  </div>
+</body></html>
+`;
+
 describe('choppingblock detail', () => {
   beforeEach(() => axiosGet.mockReset());
 
@@ -59,6 +82,41 @@ describe('choppingblock detail', () => {
     );
     expect(merged.companyName).toBe('OpenAI');
     expect(merged.applyUrl).toBeUndefined();
+  });
+
+  it('overwrites Top AI list noise with detail employer', () => {
+    const merged = mergeChoppingBlockDetailIntoRow(
+      { companyName: 'Top AI', location: 'remote' },
+      {
+        jobTitle: 'AI Agent Security Architect',
+        companyName: 'Replit',
+        jobDescription: 'Replit is the agentic software creation platform.',
+        location: 'United States',
+      },
+      REPLIT_POSTING
+    );
+    expect(merged.companyName).toBe('Replit');
+    expect(merged.location).toBe('United States');
+  });
+
+  it('parses Replit posting metadata from live-style HTML', () => {
+    const parsed = parseChoppingBlockJobPageHtml(REPLIT_HTML, REPLIT_POSTING);
+    expect(parsed.jobTitle).toMatch(/AI Agent Security Architect/i);
+    expect(parsed.companyName).toBe('Replit');
+    expect(parsed.location).toBe('United States');
+    expect(parsed.companyEmployeeCount).toBe(751);
+    expect(parsed.applyUrl).toMatch(/ashbyhq\.com\/replit/i);
+  });
+
+  it('derives company from slug when stored name is portal noise', () => {
+    expect(isChoppingBlockNoiseCompany('Top AI')).toBe(true);
+    expect(
+      deriveChoppingBlockCompany(
+        REPLIT_POSTING,
+        'Replit is the agentic software creation platform.',
+        'Top AI'
+      )
+    ).toBe('Replit');
   });
 
   it('refuses non-choppingblock light fetch', async () => {

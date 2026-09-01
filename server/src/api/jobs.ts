@@ -20,6 +20,7 @@ import {
   titleFromJobUrl,
 } from '../services/jobPageParser';
 import { isAggregatorApplyHost } from '../services/aggregatorIdentity';
+import { deriveChoppingBlockCompany } from '../services/choppingblockDetail';
 
 const router = Router();
 
@@ -108,13 +109,21 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   let title = decodeHtmlEntities(row.jobTitle || list.jobTitle || '');
   const jobUrl = row.jobUrl || '';
   title = preferJobUrlTitle(title, jobUrl || row.applyUrl || '');
-  const company =
-    sanitizeCompanyName(row.companyName || '') ||
-    sanitizeCompanyName(list.companyName || '') ||
-    '';
   const description = normalizeJobDescription(
     pickBestDescription(row.jobDescription || '', list.jobDescription || '')
   );
+  const companyRaw =
+    sanitizeCompanyName(row.companyName || '') ||
+    sanitizeCompanyName(list.companyName || '') ||
+    '';
+  const company =
+    String(row.source || '').toLowerCase() === 'choppingblock'
+      ? deriveChoppingBlockCompany(
+          String(row.aggregatorPostingUrl || list.aggregatorPostingUrl || jobUrl || ''),
+          description,
+          companyRaw
+        ) || companyRaw
+      : companyRaw;
   if (
     !opts?.allowIncomplete &&
     !isBoardQualityPass({
