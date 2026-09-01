@@ -682,7 +682,7 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
     if (isConsiderBoardUrl(url) && !isConsiderJobPostingUrl(url)) return false;
     if (isChoppingBlockUrl(url) && !isChoppingBlockJobPostingUrl(url)) return false;
     if (isAidevboardUrl(url) && !isAidevboardJobPostingUrl(url)) return false;
-    // startups.gallery list pages are not employer postings; keep ATS hrefs only.
+    // startups.gallery list pages are not employer postings; keep outbound employer hrefs.
     if (isStartupsGalleryUrl(url)) return false;
   }
 

@@ -1,5 +1,5 @@
 /**
- * startups.gallery: normalize list rows to ATS URLs; fallback DOM harvest when selectors miss.
+ * startups.gallery: normalize list rows to employer apply URLs; fallback DOM harvest when selectors miss.
  */
 
 import type { Page } from 'playwright';
@@ -9,42 +9,47 @@ import logger from '../logger';
 import {
   normalizeStartupsGalleryListRow,
   isStartupsGalleryListRowUsable,
+  isStartupsGalleryEmployerJobHref,
 } from './startupsGalleryDetail';
-
-const ATS_HOST_RE =
-  /(?:jobs\.ashbyhq\.com|(?:job-boards|boards(?:\.eu)?)\.greenhouse\.io|jobs\.lever\.co|apply\.workable\.com|jobs\.smartrecruiters\.com)/i;
 
 export async function harvestStartupsGalleryJobsFromPage(
   page: Page
 ): Promise<Record<string, unknown>[]> {
-  const raw = await page.evaluate((hostPattern) => {
-    const re = new RegExp(hostPattern, 'i');
+  const raw = await page.evaluate(() => {
     const seen = new Set<string>();
     const out: { href: string; text: string }[] = [];
     for (const el of Array.from(document.querySelectorAll('a[href]'))) {
       const a = el as HTMLAnchorElement;
       const href = String(a.href || '').split('#')[0] || '';
-      if (!href || !re.test(href) || seen.has(href)) continue;
+      if (!href || !/^https?:\/\//i.test(href) || seen.has(href)) continue;
+      try {
+        const host = new URL(href).hostname.toLowerCase();
+        if (host === 'startups.gallery' || host.endsWith('.startups.gallery')) continue;
+      } catch {
+        continue;
+      }
       seen.add(href);
       const text = (a.textContent || '').replace(/\s+/g, ' ').trim();
       if (text.length < 8) continue;
       out.push({ href, text });
     }
     return out;
-  }, ATS_HOST_RE.source);
+  });
 
-  return raw.map((item) =>
-    normalizeStartupsGalleryListRow({
-      jobUrl: item.href,
-      url: item.href,
-      applyUrl: item.href,
-      jobTitle: item.text,
-      title: item.text,
-    })
-  );
+  return raw
+    .filter((item) => isStartupsGalleryEmployerJobHref(item.href))
+    .map((item) =>
+      normalizeStartupsGalleryListRow({
+        jobUrl: item.href,
+        url: item.href,
+        applyUrl: item.href,
+        jobTitle: item.text,
+        title: item.text,
+      })
+    );
 }
 
-/** Scroll the Framer feed and merge ATS links (cards lazy-load below the fold). */
+/** Scroll the Framer feed and merge employer job links (cards lazy-load below the fold). */
 export async function scrollAndHarvestStartupsGalleryJobs(
   page: Page,
   maxJobs: number
@@ -120,13 +125,13 @@ export async function runStartupsGalleryFastHarvest(
   opts?: { maxJobs?: number; onLog?: (msg: string) => void }
 ): Promise<Record<string, unknown>[]> {
   const log = opts?.onLog || (() => {});
-  log(`startups.gallery: navigating ${safeOutboundUrlLogLabel(startUrl)} for ATS link harvest`);
+  log(`startups.gallery: navigating ${safeOutboundUrlLogLabel(startUrl)} for employer link harvest`);
   await navigateStartupsGalleryListPage(page, startUrl);
   log(
-    'startups.gallery: scrolling feed and collecting employer ATS URLs (Ashby/Greenhouse/Lever/Workable/SmartRecruiters)'
+    'startups.gallery: scrolling feed and collecting employer job URLs (ATS, Phenom careers, and other apply links)'
   );
   log(
-    'startups.gallery: each ATS URL is queued for job-board enrichment (ATS JSON → scrape.do/Phenom fallback, same as company automations)'
+    'startups.gallery: each employer URL is queued for enrichment (ATS JSON → Phenom → scrape.do fallback)'
   );
   return enrichStartupsGalleryListRows(page, [], opts);
 }
@@ -145,18 +150,18 @@ export async function enrichStartupsGalleryListRows(
 
   const usableBefore = normalized.length;
   if (usableBefore < Math.min(rows.length, 3)) {
-    log('startups.gallery: list selectors yielded few ATS rows — harvesting employer links from page');
+    log('startups.gallery: list selectors yielded few rows — harvesting employer links from page');
     try {
       const harvested = await scrollAndHarvestStartupsGalleryJobs(page, maxJobs);
       if (harvested.length > normalized.length) {
         normalized = harvested;
-        log(`startups.gallery: collected ${harvested.length} employer ATS URLs from gallery page`);
+        log(`startups.gallery: collected ${harvested.length} employer job URLs from gallery page`);
       }
     } catch (err: unknown) {
       log(`startups.gallery DOM harvest failed: ${String((err as Error)?.message || err)}`);
     }
   } else if (usableBefore > 0) {
-    log(`startups.gallery: normalized ${usableBefore} list rows to ATS URLs`);
+    log(`startups.gallery: normalized ${usableBefore} list rows to employer apply URLs`);
   }
 
   const seen = new Set<string>();

@@ -18,7 +18,9 @@ import {
   normalizeStartupsGalleryListRow,
   parseStartupsGalleryCardLabel,
   pickAtsUrlFromRow,
+  pickEmployerUrlFromRow,
   isStartupsGalleryListRowUsable,
+  isStartupsGalleryEmployerJobHref,
 } from './startupsGalleryDetail';
 
 vi.mock('axios', () => {
@@ -218,5 +220,20 @@ describe('startups.gallery list_ats', () => {
     expect(String(withAts.companyName)).toMatch(/Replit/i);
     expect(withAts.location).toBe('Foster City, CA');
     expect(isStartupsGalleryListRowUsable(withAts)).toBe(true);
+  });
+
+  it('accepts non-ATS employer careers URLs for Phenom / scrape.do enrichment', () => {
+    const card = 'Software Engineer Acme · Remote · Posted on Sep 1, 2026';
+    const careersUrl = 'https://careers.acme.example/jobs/software-engineer';
+    expect(isStartupsGalleryEmployerJobHref(careersUrl)).toBe(true);
+    expect(isStartupsGalleryEmployerJobHref('https://startups.gallery/jobs')).toBe(false);
+
+    const withCareers = normalizeStartupsGalleryListRow({
+      jobUrl: careersUrl,
+      jobTitle: card,
+    });
+    expect(pickEmployerUrlFromRow(withCareers)).toBe(careersUrl);
+    expect(withCareers.jobUrl).toBe(careersUrl);
+    expect(isStartupsGalleryListRowUsable(withCareers)).toBe(true);
   });
 });

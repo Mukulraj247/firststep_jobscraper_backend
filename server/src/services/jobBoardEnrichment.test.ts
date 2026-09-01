@@ -195,7 +195,7 @@ describe('jobBoardEnrichment helpers', () => {
     expect(identity?.jobUrl).toContain('weekdayJdUid=abc-123');
   });
 
-  it('resolveBoardEnqueueIdentity requires ATS URL for startups_gallery', () => {
+  it('resolveBoardEnqueueIdentity requires employer URL for startups_gallery', () => {
     expect(
       resolveBoardEnqueueIdentity(
         {
@@ -218,5 +218,17 @@ describe('jobBoardEnrichment helpers', () => {
       'startups_gallery'
     );
     expect(identity?.jobUrl).toBe('https://boards.greenhouse.io/acme/jobs/123');
+
+    const careersIdentity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: 'https://careers.acme.example/jobs/software-engineer',
+        applyUrl: 'https://careers.acme.example/jobs/software-engineer',
+        jobTitle: 'Software Engineer',
+        companyName: 'Acme',
+        jobDescription: 'x'.repeat(450),
+      },
+      'startups_gallery'
+    );
+    expect(careersIdentity?.jobUrl).toBe('https://careers.acme.example/jobs/software-engineer');
   });
 });

@@ -317,7 +317,7 @@ describe('shouldKeepExtractedJobRow', () => {
     ).toBe(true);
   });
 
-  it('drops startups.gallery index URLs but keeps normalized ATS hrefs', () => {
+  it('drops startups.gallery index URLs but keeps normalized employer hrefs', () => {
     expect(
       shouldKeepExtractedJobRow({
         jobUrl: 'https://startups.gallery/jobs?position=software',
@@ -330,5 +330,11 @@ describe('shouldKeepExtractedJobRow', () => {
         'Senior Software Engineer — Infra Agent Systems UK Together AI · London · Posted on Sep 1, 2026',
     });
     expect(shouldKeepExtractedJobRow(normalized as Record<string, any>)).toBe(true);
+
+    const careers = normalizeStartupsGalleryListRow({
+      url: 'https://careers.acme.example/jobs/software-engineer',
+      jobTitle: 'Software Engineer Acme · Remote · Posted on Sep 1, 2026',
+    });
+    expect(shouldKeepExtractedJobRow(careers as Record<string, any>)).toBe(true);
   });
 });
