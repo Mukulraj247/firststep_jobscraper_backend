@@ -160,7 +160,7 @@ export function parseSequoiaJobPageHtml(html: string, postingUrl: string): Sequo
     source: 'html',
   };
 
-  const merged = mergeParsedFields({}, fromDom as ParsedJobFields);
+  const merged = mergeParsedFields(fromDom as ParsedJobFields, null);
   return {
     ...merged,
     applyUrl: preferExternalApplyUrl(merged.applyUrl, applyUrl),

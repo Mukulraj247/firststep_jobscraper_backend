@@ -145,7 +145,7 @@ export async function fetchAidevboardJobHtml(postingUrl: string): Promise<FetchA
       applyUrl,
       aggregatorPostingUrl: url,
       jobId,
-      source: 'html',
+      enrichMethod: 'html',
     };
     return {
       ok: Boolean(fields.jobTitle || (fields.jobDescription && fields.jobDescription.length > 100)),
@@ -168,6 +168,6 @@ export function enrichAidevboardRowFromFields(
   postingUrl: string
 ): Record<string, unknown> {
   const merged = mergeAidevboardDetailIntoRow(listRow, fields, postingUrl);
-  merged._enrichMethod = fields.source === 'api' ? 'api' : 'http_html';
+  merged._enrichMethod = fields.enrichMethod === 'api' ? 'api' : 'http_html';
   return merged;
 }

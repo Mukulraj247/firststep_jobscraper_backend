@@ -8,6 +8,7 @@ import { sanitizeCompanyName, normalizeJobDescription, type ParsedJobFields } fr
 export type AidevboardStructuredFields = Partial<ParsedJobFields> & {
   aggregatorPostingUrl?: string;
   jobId?: string;
+  enrichMethod?: 'api' | 'html';
 };
 
 export function preferExternalApplyUrl(...candidates: unknown[]): string {
@@ -79,7 +80,7 @@ export function mapAidevboardApiJob(job: Record<string, unknown>): AidevboardStr
     applyUrl: preferExternalApplyUrl(job.apply_url, job.applyUrl),
     companyLogoUrl: String(job.company_logo_url || '').trim(),
     date: String(job.published_at || job.created_at || '').trim(),
-    source: 'api',
+    enrichMethod: 'api',
     aggregatorPostingUrl: postingUrl,
     jobId: id,
   };

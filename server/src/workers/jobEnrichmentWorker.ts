@@ -703,7 +703,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
             applyUrl: String(mergedRow.applyUrl || ''),
             companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
             jobCategory: '',
-            source: result.method === 'api' ? 'api' : 'html',
+            source: 'html',
           };
           const merged = mergeParsedFields(fields, listFields);
           const status = boardListingStatus(merged, doc.jobUrl);
