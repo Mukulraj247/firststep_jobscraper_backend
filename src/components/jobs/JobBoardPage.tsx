@@ -55,6 +55,7 @@ import {
 } from '../dashboard/ops/dashboardTokens';
 import {
   ADDED_DATE_PRESETS,
+  JOB_BOARD_SOURCE_OPTIONS,
   JOB_TYPE_OPTIONS,
   WORK_MODE_OPTIONS,
   formatFacetOptionLabel,
@@ -1340,12 +1341,7 @@ export const JobBoardPage: React.FC = () => {
             <JobBoardChipFilter
               caption="SOURCE"
               value={source || 'all'}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'aggregator', label: 'Aggregator' },
-                { value: 'hiring_cafe', label: 'Hiring Cafe' },
-                { value: 'accel', label: 'Accel' },
-              ]}
+              options={JOB_BOARD_SOURCE_OPTIONS}
               onChange={(next) => {
                 setSource(next === 'all' ? '' : next);
                 setPage(1);

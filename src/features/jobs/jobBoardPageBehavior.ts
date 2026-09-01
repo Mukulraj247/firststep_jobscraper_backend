@@ -20,6 +20,12 @@ export const ADDED_DATE_PRESETS: Array<{ value: JobBoardAddedPreset; label: stri
   { value: 'all', label: 'All' },
 ];
 
+/** Hiring Cafe, Accel, and LinkedIn are aggregator providers — not their own Source chips. */
+export const JOB_BOARD_SOURCE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'aggregator', label: 'Aggregator' },
+];
+
 export const WORK_MODE_OPTIONS = [
   { value: '', label: 'Any' },
   { value: 'Remote', label: 'Remote' },

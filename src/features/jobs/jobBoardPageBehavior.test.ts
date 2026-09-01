@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ADDED_DATE_PRESETS,
   JOB_BOARD_FILTER_CONTROLS,
+  JOB_BOARD_SOURCE_OPTIONS,
   addedSinceMs,
   formatFacetOptionLabel,
   formatJobBoardDate,
@@ -37,6 +38,13 @@ describe('job board filters', () => {
       '7d',
       'all',
     ]);
+  });
+
+  it('source chips are All and Aggregator only — Hiring Cafe and Accel stay under Aggregator', () => {
+    expect(JOB_BOARD_SOURCE_OPTIONS.map((option) => option.value)).toEqual(['all', 'aggregator']);
+    expect(JOB_BOARD_SOURCE_OPTIONS.map((option) => option.value)).not.toContain('hiring_cafe');
+    expect(JOB_BOARD_SOURCE_OPTIONS.map((option) => option.value)).not.toContain('accel');
+    expect(JOB_BOARD_SOURCE_OPTIONS.map((option) => option.value)).not.toContain('linkedin');
   });
 
   it('maps added-date presets to createdAt lookback windows', () => {
