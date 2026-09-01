@@ -3,6 +3,9 @@
  */
 
 import type { Page } from 'playwright';
+import { listNavigationAttempts } from './listExtractor';
+import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
+import logger from '../logger';
 import {
   normalizeStartupsGalleryListRow,
   isStartupsGalleryListRowUsable,
@@ -39,6 +42,55 @@ export async function harvestStartupsGalleryJobsFromPage(
       title: item.text,
     })
   );
+}
+
+/** Navigate the gallery list page without waiting on brittle Framer item selectors. */
+export async function navigateStartupsGalleryListPage(page: Page, startUrl: string): Promise<void> {
+  const url = String(startUrl || '').trim();
+  await assertSafeOutboundUrl(url);
+  const attempts = listNavigationAttempts(url);
+  let lastError: unknown;
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    try {
+      await page.goto(url, attempt);
+      lastError = undefined;
+      break;
+    } catch (error: unknown) {
+      lastError = error;
+      if (index < attempts.length - 1) {
+        logger.log(
+          'warn',
+          `startups.gallery goto failed (${attempt.waitUntil}, ${attempt.timeout}ms): ${(error as Error)?.message}; retrying`
+        );
+      }
+    }
+  }
+  if (lastError) throw lastError;
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 10_000 });
+  } catch {
+    /* SPA analytics keep network open */
+  }
+  // Framer feed cards often paint after first paint.
+  await page.waitForTimeout(1_500);
+  logger.log('info', `startups.gallery navigation to ${safeOutboundUrlLogLabel(url)} completed`);
+}
+
+/**
+ * Fast path: load startups.gallery and harvest outbound ATS links directly.
+ * Avoids 45s+ waits on extension-recorded Framer class selectors.
+ */
+export async function runStartupsGalleryFastHarvest(
+  page: Page,
+  startUrl: string,
+  opts?: { maxJobs?: number; onLog?: (msg: string) => void }
+): Promise<Record<string, unknown>[]> {
+  const log = opts?.onLog || (() => {});
+  log(`startups.gallery: navigating ${safeOutboundUrlLogLabel(startUrl)} for ATS link harvest`);
+  await navigateStartupsGalleryListPage(page, startUrl);
+  log('startups.gallery: harvesting Ashby/Greenhouse/Lever links from DOM');
+  return enrichStartupsGalleryListRows(page, [], opts);
 }
 
 export async function enrichStartupsGalleryListRows(

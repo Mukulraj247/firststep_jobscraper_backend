@@ -44,7 +44,10 @@ import { enrichAccelListRows } from '../services/accelDetailScrape';
 import { enrichConsiderListRows } from '../services/sequoiaDetailScrape';
 import { enrichChoppingBlockListRows } from '../services/choppingblockDetailScrape';
 import { enrichAidevboardListRows } from '../services/aidevboardDetailScrape';
-import { enrichStartupsGalleryListRows } from '../services/startupsGalleryListScrape';
+import {
+  enrichStartupsGalleryListRows,
+  runStartupsGalleryFastHarvest,
+} from '../services/startupsGalleryListScrape';
 import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
 import {
   evaluateRunDrift,
@@ -760,8 +763,40 @@ async function processConfiguredListExtraction(
       extractionConfig.pagination.loadMoreWaitMs = config.pagination.loadMoreWaitMs;
     }
 
-    const extractionResult = await runListExtraction(page, listStartUrl, extractionConfig);
-    let rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
+    let rows: Record<string, any>[] = [];
+    let extractionResult: Awaited<ReturnType<typeof runListExtraction>> | null = null;
+    let startupsGalleryFastHarvestDone = false;
+
+    if (shouldEnrichStartupsGalleryDetails(automation)) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 80;
+      rows = (await runStartupsGalleryFastHarvest(page, listStartUrl, {
+        maxJobs: cap,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
+      if (rows.length > 0) {
+        startupsGalleryFastHarvestDone = true;
+        await appendRunLog(
+          run,
+          `startups.gallery: fast ATS harvest returned ${rows.length} rows (skipped Framer selector wait)`,
+          { flush: true }
+        );
+      } else {
+        await appendRunLog(
+          run,
+          'startups.gallery: fast ATS harvest returned 0 rows — falling back to configured selectors',
+          { flush: true }
+        );
+      }
+    }
+
+    if (rows.length === 0) {
+      await appendRunLog(run, 'Running list extraction (navigation + selector pass)…', { flush: true });
+      extractionResult = await runListExtraction(page, listStartUrl, extractionConfig);
+      rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
+    }
     const promotions = Array.isArray(extractionResult?.selectorPromotions)
       ? extractionResult.selectorPromotions
       : [];
@@ -829,7 +864,7 @@ async function processConfiguredListExtraction(
       })) as Record<string, any>[];
     }
 
-    if (shouldEnrichStartupsGalleryDetails(automation)) {
+    if (shouldEnrichStartupsGalleryDetails(automation) && rows.length > 0 && !startupsGalleryFastHarvestDone) {
       const cap =
         typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
           ? extractionConfig.maxItems
@@ -848,7 +883,7 @@ async function processConfiguredListExtraction(
           const prevList = (prevSaas?.listExtraction || {}) as Record<string, any>;
           const nextFields = applySelectorPromotions(prevList.fields || extractionConfig.fields || {}, promotions);
           const nextItemSelector =
-            extractionResult.winningItemSelector ||
+            extractionResult?.winningItemSelector ||
             primaryItemSelector(prevList.itemSelector || extractionConfig.itemSelector);
           const nextList = {
             ...prevList,
