@@ -227,6 +227,7 @@ describe('startups.gallery list_ats', () => {
     const careersUrl = 'https://careers.acme.example/jobs/software-engineer';
     expect(isStartupsGalleryEmployerJobHref(careersUrl)).toBe(true);
     expect(isStartupsGalleryEmployerJobHref('https://startups.gallery/jobs')).toBe(false);
+    expect(isStartupsGalleryEmployerJobHref('https://tally.so/r/VLlEz6')).toBe(false);
 
     const withCareers = normalizeStartupsGalleryListRow({
       jobUrl: careersUrl,

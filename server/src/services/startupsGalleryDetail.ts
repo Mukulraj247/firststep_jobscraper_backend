@@ -84,14 +84,19 @@ export function pickAtsUrlFromRow(data: Record<string, unknown>): string {
   return '';
 }
 
+const BLOCKED_EMPLOYER_HOSTS = new Set(['tally.so', 'www.tally.so']);
+
 /** External employer apply URL from a gallery card (not startups.gallery or other aggregators). */
 export function isStartupsGalleryEmployerJobHref(href: string): boolean {
   const url = String(href || '').trim().split('#')[0];
   if (!url || !/^https?:\/\//i.test(url)) return false;
   try {
     const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
     if (!host || host === 'localhost') return false;
+    if (BLOCKED_EMPLOYER_HOSTS.has(host) || BLOCKED_EMPLOYER_HOSTS.has(parsed.hostname.toLowerCase())) {
+      return false;
+    }
     if (isStartupsGalleryUrl(url) || isAggregatorHostUrl(url)) return false;
     if (shouldNeverScrapeDoUrl(url)) return false;
     if (/\.(?:png|jpe?g|gif|svg|webp|css|js|woff2?)(?:\?|$)/i.test(parsed.pathname)) return false;

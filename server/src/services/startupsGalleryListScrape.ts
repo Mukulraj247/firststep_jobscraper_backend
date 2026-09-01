@@ -111,7 +111,29 @@ export async function navigateStartupsGalleryListPage(page: Page, startUrl: stri
     /* SPA analytics keep network open */
   }
   // Framer feed cards often paint after first paint.
-  await page.waitForTimeout(1_500);
+  await page.waitForTimeout(2_500);
+  try {
+    await page.waitForFunction(
+      () => {
+        for (const el of Array.from(document.querySelectorAll('a[href]'))) {
+          const href = String((el as HTMLAnchorElement).href || '');
+          try {
+            const host = new URL(href).hostname.toLowerCase();
+            if (host === 'startups.gallery' || host.endsWith('.startups.gallery')) continue;
+            if (/^https?:\/\//i.test(href) && (el.textContent || '').replace(/\s+/g, ' ').trim().length >= 8) {
+              return true;
+            }
+          } catch {
+            /* ignore malformed href */
+          }
+        }
+        return false;
+      },
+      { timeout: 20_000 }
+    );
+  } catch {
+    /* proceed with scroll harvest even if cards stay slow */
+  }
   logger.log('info', `startups.gallery navigation to ${safeOutboundUrlLogLabel(url)} completed`);
 }
 
@@ -149,7 +171,8 @@ export async function enrichStartupsGalleryListRows(
     .filter((row) => isStartupsGalleryListRowUsable(row));
 
   const usableBefore = normalized.length;
-  if (usableBefore < Math.min(rows.length, 3)) {
+  // Harvest when fewer than 3 usable rows (includes fast-harvest path with rows=[]).
+  if (usableBefore < 3) {
     log('startups.gallery: list selectors yielded few rows — harvesting employer links from page');
     try {
       const harvested = await scrollAndHarvestStartupsGalleryJobs(page, maxJobs);
