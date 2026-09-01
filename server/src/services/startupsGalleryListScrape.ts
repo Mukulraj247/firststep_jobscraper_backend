@@ -44,6 +44,39 @@ export async function harvestStartupsGalleryJobsFromPage(
   );
 }
 
+/** Scroll the Framer feed and merge ATS links (cards lazy-load below the fold). */
+export async function scrollAndHarvestStartupsGalleryJobs(
+  page: Page,
+  maxJobs: number
+): Promise<Record<string, unknown>[]> {
+  const cap = Math.max(1, maxJobs);
+  const byUrl = new Map<string, Record<string, unknown>>();
+  const merge = (rows: Record<string, unknown>[]) => {
+    for (const row of rows) {
+      if (!isStartupsGalleryListRowUsable(row)) continue;
+      const key = String(row.jobUrl || row.url || '')
+        .trim()
+        .toLowerCase();
+      if (!key || byUrl.has(key)) continue;
+      byUrl.set(key, row);
+    }
+  };
+
+  merge(await harvestStartupsGalleryJobsFromPage(page));
+
+  for (let step = 0; step < 14 && byUrl.size < cap; step += 1) {
+    const before = byUrl.size;
+    await page.evaluate(() => {
+      window.scrollBy(0, Math.max(window.innerHeight * 0.85, 480));
+    });
+    await page.waitForTimeout(650);
+    merge(await harvestStartupsGalleryJobsFromPage(page));
+    if (byUrl.size === before) break;
+  }
+
+  return Array.from(byUrl.values()).slice(0, cap);
+}
+
 /** Navigate the gallery list page without waiting on brittle Framer item selectors. */
 export async function navigateStartupsGalleryListPage(page: Page, startUrl: string): Promise<void> {
   const url = String(startUrl || '').trim();
@@ -89,7 +122,12 @@ export async function runStartupsGalleryFastHarvest(
   const log = opts?.onLog || (() => {});
   log(`startups.gallery: navigating ${safeOutboundUrlLogLabel(startUrl)} for ATS link harvest`);
   await navigateStartupsGalleryListPage(page, startUrl);
-  log('startups.gallery: harvesting Ashby/Greenhouse/Lever links from DOM');
+  log(
+    'startups.gallery: scrolling feed and collecting employer ATS URLs (Ashby/Greenhouse/Lever/Workable/SmartRecruiters)'
+  );
+  log(
+    'startups.gallery: each ATS URL is queued for job-board enrichment (ATS JSON → scrape.do/Phenom fallback, same as company automations)'
+  );
   return enrichStartupsGalleryListRows(page, [], opts);
 }
 
@@ -107,12 +145,12 @@ export async function enrichStartupsGalleryListRows(
 
   const usableBefore = normalized.length;
   if (usableBefore < Math.min(rows.length, 3)) {
-    log('startups.gallery: list selectors yielded few ATS rows — harvesting Ashby/Greenhouse links from page');
+    log('startups.gallery: list selectors yielded few ATS rows — harvesting employer links from page');
     try {
-      const harvested = await harvestStartupsGalleryJobsFromPage(page);
+      const harvested = await scrollAndHarvestStartupsGalleryJobs(page, maxJobs);
       if (harvested.length > normalized.length) {
         normalized = harvested;
-        log(`startups.gallery: harvested ${harvested.length} ATS job links from DOM`);
+        log(`startups.gallery: collected ${harvested.length} employer ATS URLs from gallery page`);
       }
     } catch (err: unknown) {
       log(`startups.gallery DOM harvest failed: ${String((err as Error)?.message || err)}`);

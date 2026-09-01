@@ -780,7 +780,7 @@ async function processConfiguredListExtraction(
         startupsGalleryFastHarvestDone = true;
         await appendRunLog(
           run,
-          `startups.gallery: fast ATS harvest returned ${rows.length} rows (skipped Framer selector wait)`,
+          `startups.gallery: collected ${rows.length} employer ATS URLs — job-board worker will enrich each (ATS → scrape.do)`,
           { flush: true }
         );
       } else {
@@ -797,9 +797,8 @@ async function processConfiguredListExtraction(
       extractionResult = await runListExtraction(page, listStartUrl, extractionConfig);
       rows = Array.isArray(extractionResult?.rows) ? extractionResult.rows : [];
     }
-    const promotions = Array.isArray(extractionResult?.selectorPromotions)
-      ? extractionResult.selectorPromotions
-      : [];
+    const selectorPromotions = extractionResult?.selectorPromotions;
+    const promotions = Array.isArray(selectorPromotions) ? selectorPromotions : [];
     if (config?.captcha?.pauseOnDetect !== false && (await detectCaptcha(page))) {
       throw new CaptchaEncounteredError(
         { present: true, kind: 'text-marker', evidence: 'post-extraction body text' },
