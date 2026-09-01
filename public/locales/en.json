@@ -681,7 +681,16 @@
           }
       }
     },
+    "common": {
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "close": "Close"
+    },
     "runs_table": {
+      "delete_confirm": {
+        "title": "Delete run \"{{name}}\"?",
+        "message": "Are you sure you want to delete the run \"{{name}}\"?"
+      },
       "run_type_chips": {
         "manual_run": "Manual",
         "scheduled_run": "Scheduled", 
@@ -695,6 +704,7 @@
         "scheduled": "Scheduled",
         "queued": "Queued",
         "failed": "Failed",
+        "dead": "Dead",
         "aborted": "Aborted",
         "pending": "Pending"
       },

@@ -35,6 +35,7 @@ import {
 } from '@mui/icons-material';
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
 import { resolveJobBoardCompany, resolveJobBoardLocation } from '../../utils/jobBoardDisplay';
+import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
 import {
   sectionBodyLines,
   buildJobDetailSections,
