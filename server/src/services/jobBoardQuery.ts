@@ -47,7 +47,20 @@ export function applyJobBoardListFilters(
 
   const source = String(filters.source || '').trim();
   if (source === 'aggregator') {
-    and.push({ source: { $in: ['hiring_cafe', 'linkedin', 'accel'] } });
+    and.push({
+      source: {
+        $in: [
+          'hiring_cafe',
+          'linkedin',
+          'accel',
+          'sequoia',
+          'capitalg',
+          'choppingblock',
+          'aidevboard',
+          'startups_gallery',
+        ],
+      },
+    });
   } else if (source) {
     next.source = source;
   }

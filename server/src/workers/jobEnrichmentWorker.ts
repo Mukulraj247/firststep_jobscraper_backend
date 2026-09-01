@@ -3,12 +3,19 @@ import JobBoardListing, { IJobBoardListing } from '../models/JobBoardListing';
 import EnrichmentCreditBudget from '../models/EnrichmentCreditBudget';
 import { getLlmUsageToday, addLlmUsage } from '../models/LlmUsageBudget';
 import { fetchAtsJob, detectAts, shouldNeverScrapeDoUrl, shouldSkipScrapeDoUrl } from '../services/atsAdapters';
-import { isHiringCafeUrl } from '../services/aggregatorIdentity';
+import {
+  isHiringCafeUrl,
+  isConsiderBoardUrl,
+  isConsiderJobPostingUrl,
+  usesAggregatorHtmlOnlyEnrichment,
+  usesConsiderApplyThenAtsEnrichment,
+} from '../services/aggregatorIdentity';
 import {
   fetchBrowserJobFallback,
   shouldTryBrowserJobFallback,
 } from '../services/browserJobFallback';
 import { scrapeJobPage } from '../services/scrapeDoClient';
+import { jobUrlKey, normalizeJobUrl } from '../services/jobUrlNormalize';
 import {
   descriptionQualityScore,
   decodeHtmlEntities,
@@ -470,14 +477,70 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   const sourceKey = String(doc.source || '').toLowerCase();
   const isHiringCafeSource = sourceKey === 'hiring_cafe';
   const isAccelSource = sourceKey === 'accel';
-  const isAggregatorHtmlSource = isHiringCafeSource || isAccelSource;
+  const isConsiderAtsSource = usesConsiderApplyThenAtsEnrichment(sourceKey);
+  // HC / Accel / Chopping Block / AI Dev Board stay on aggregator payload only.
+  const isAggregatorHtmlSource = usesAggregatorHtmlOnlyEnrichment(sourceKey);
+
+  // Consider (Sequoia / CapitalG): if employer apply missing, light-fetch posting to resolve it.
+  if (isConsiderAtsSource) {
+    const list = doc.listSnapshot || {};
+    const hasEmployerApply =
+      Boolean(doc.applyUrl && !isConsiderBoardUrl(String(doc.applyUrl))) ||
+      Boolean(doc.jobUrl && !isConsiderBoardUrl(String(doc.jobUrl)));
+    if (!hasEmployerApply) {
+      const considerPosting =
+        String(doc.aggregatorPostingUrl || '').trim() ||
+        String(list.aggregatorPostingUrl || '').trim() ||
+        (isConsiderJobPostingUrl(doc.jobUrl || '') ? String(doc.jobUrl || '').trim() : '');
+      if (considerPosting && isConsiderJobPostingUrl(considerPosting)) {
+        try {
+          const {
+            fetchConsiderPostingHtml,
+            enrichConsiderRowFromHtml,
+            isConsiderHtmlJobPage,
+          } = await import('../services/sequoiaHtmlLight');
+          const light = await fetchConsiderPostingHtml(considerPosting);
+          if (light.ok && light.html && isConsiderHtmlJobPage(light.html)) {
+            const mergedRow = enrichConsiderRowFromHtml({}, light.html, considerPosting);
+            const externalApply = String(mergedRow.applyUrl || '').trim();
+            if (externalApply && !isConsiderBoardUrl(externalApply)) {
+              const normalizedApply = normalizeJobUrl(externalApply) || externalApply;
+              doc.applyUrl = normalizedApply;
+              if (!doc.jobUrl || isConsiderBoardUrl(String(doc.jobUrl))) {
+                doc.jobUrl = normalizedApply;
+              }
+              await JobBoardListing.updateOne(
+                { _id: doc._id },
+                {
+                  $set: {
+                    applyUrl: normalizedApply,
+                    jobUrl: doc.jobUrl,
+                    jobUrlKey: jobUrlKey(doc.jobUrl) || undefined,
+                    aggregatorPostingUrl: considerPosting,
+                    'listSnapshot.aggregatorPostingUrl': considerPosting,
+                    ...(mergedRow.jobTitle ? { jobTitle: String(mergedRow.jobTitle) } : {}),
+                    ...(mergedRow.companyName ? { companyName: String(mergedRow.companyName) } : {}),
+                    ...(mergedRow.location ? { location: String(mergedRow.location) } : {}),
+                  },
+                }
+              );
+            }
+          }
+        } catch (err: any) {
+          logger.log('warn', `Consider apply resolve failed: ${err?.message || err}`);
+        }
+      }
+    }
+  }
 
   // Aggregator HTML sources: never leave the posting URL for ATS / employer scrapes.
   // Light HTML path below handles incomplete rows.
   if (!isAggregatorHtmlSource) {
     // Tier 0: ATS direct — try jobUrl first, then applyUrl if they differ.
+    // Consider + startups.gallery rows reach this branch.
     const atsCandidates = [doc.jobUrl, doc.applyUrl].filter(
-      (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index
+      (url, index, all): url is string =>
+        Boolean(url) && !isConsiderBoardUrl(url) && all.indexOf(url) === index
     );
     let ats: Awaited<ReturnType<typeof fetchAtsJob>> = null;
     for (const url of atsCandidates) {
@@ -507,6 +570,27 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
 
   // CDN / social / aggregator hosts: never spend scrape.do.
   // HC / Accel sources use light HTML instead — do not expire those rows here.
+  // Consider: if still stuck on board hosts after resolve, skip scrape.do.
+  if (
+    isConsiderAtsSource &&
+    isConsiderBoardUrl(doc.jobUrl || '') &&
+    (!doc.applyUrl || isConsiderBoardUrl(String(doc.applyUrl || '')))
+  ) {
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      error: 'consider_no_employer_apply_url',
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
   if (
     !isAggregatorHtmlSource &&
     (shouldNeverScrapeDoUrl(doc.jobUrl || '') || shouldNeverScrapeDoUrl(doc.applyUrl || ''))
@@ -523,14 +607,129 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  // List already complete: do not spend scrape.do credits.
-  if (isListRowComplete(doc.listSnapshot || {}, { source: doc.source })) {
+  // HTML-only aggregators: light-fetch before list-complete short-circuit.
+  // Chopping Block: light HTML of CB posting only.
+  if (sourceKey === 'choppingblock') {
+    const list = doc.listSnapshot || {};
+    const { isChoppingBlockJobPostingUrl } = await import('../services/aggregatorIdentity');
+    const cbPosting =
+      String(doc.aggregatorPostingUrl || '').trim() ||
+      String(list.aggregatorPostingUrl || '').trim() ||
+      (isChoppingBlockJobPostingUrl(doc.jobUrl || '') ? String(doc.jobUrl || '').trim() : '');
+    if (cbPosting && isChoppingBlockJobPostingUrl(cbPosting)) {
+      try {
+        const {
+          fetchChoppingBlockPostingHtml,
+          enrichChoppingBlockRowFromHtml,
+          isChoppingBlockHtmlJobPage,
+        } = await import('../services/choppingblockHtmlLight');
+        const light = await fetchChoppingBlockPostingHtml(cbPosting);
+        if (light.ok && light.html && isChoppingBlockHtmlJobPage(light.html)) {
+          const mergedRow = enrichChoppingBlockRowFromHtml({}, light.html, cbPosting);
+          const fields: ParsedJobFields = {
+            jobTitle: String(mergedRow.jobTitle || ''),
+            companyName: String(mergedRow.companyName || ''),
+            jobDescription: String(mergedRow.jobDescription || ''),
+            location: String(mergedRow.location || ''),
+            salaryRange: String(mergedRow.salaryRange || ''),
+            employmentType: String(mergedRow.employmentType || ''),
+            remoteType: String(mergedRow.remoteType || ''),
+            date: String(mergedRow.date || ''),
+            applyUrl: String(mergedRow.applyUrl || ''),
+            companyLogoUrl: '',
+            jobCategory: '',
+            source: 'html',
+          };
+          const merged = mergeParsedFields(fields, listFields);
+          const status = boardListingStatus(merged, doc.jobUrl);
+          await persistResult(doc, merged, {
+            status,
+            method: 'list',
+            tier: 0,
+            creditsSpent: 0,
+            incrementAttempts: true,
+          });
+          if (status === 'ready') metrics.ready += 1;
+          else metrics.failed += 1;
+          circuitBreaker.recordSuccess();
+          return;
+        }
+      } catch (err: any) {
+        logger.log('warn', `Chopping Block light enrich failed: ${err?.message || err}`);
+      }
+    }
     const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
-      status,
+      status: status === 'ready' ? 'ready' : 'partial',
       method: 'list',
       tier: 0,
       creditsSpent: 0,
+      error: 'choppingblock_html_only_no_employer_scrape',
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
+  // AI Dev Board: API/HTML of ADB posting only.
+  if (sourceKey === 'aidevboard') {
+    const list = doc.listSnapshot || {};
+    const { isAidevboardJobPostingUrl } = await import('../services/aggregatorIdentity');
+    const adbPosting =
+      String(doc.aggregatorPostingUrl || '').trim() ||
+      String(list.aggregatorPostingUrl || '').trim() ||
+      (isAidevboardJobPostingUrl(doc.jobUrl || '') ? String(doc.jobUrl || '').trim() : '');
+    if (adbPosting && isAidevboardJobPostingUrl(adbPosting)) {
+      try {
+        const { aidevboardJobIdFromUrl } = await import('../services/aidevboardDetail');
+        const { fetchAidevboardJobById, enrichAidevboardRowFromFields } = await import(
+          '../services/aidevboardApiLight'
+        );
+        const jobId = aidevboardJobIdFromUrl(adbPosting);
+        const result = await fetchAidevboardJobById(jobId);
+        if (result.ok && result.fields) {
+          const mergedRow = enrichAidevboardRowFromFields({}, result.fields, adbPosting);
+          const fields: ParsedJobFields = {
+            jobTitle: String(mergedRow.jobTitle || ''),
+            companyName: String(mergedRow.companyName || ''),
+            jobDescription: String(mergedRow.jobDescription || ''),
+            location: String(mergedRow.location || ''),
+            salaryRange: String(mergedRow.salaryRange || ''),
+            employmentType: String(mergedRow.employmentType || ''),
+            remoteType: String(mergedRow.remoteType || ''),
+            date: String(mergedRow.date || ''),
+            applyUrl: String(mergedRow.applyUrl || ''),
+            companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
+            jobCategory: '',
+            source: result.method === 'api' ? 'api' : 'html',
+          };
+          const merged = mergeParsedFields(fields, listFields);
+          const status = boardListingStatus(merged, doc.jobUrl);
+          await persistResult(doc, merged, {
+            status,
+            method: 'list',
+            tier: 0,
+            creditsSpent: 0,
+            incrementAttempts: true,
+          });
+          if (status === 'ready') metrics.ready += 1;
+          else metrics.failed += 1;
+          circuitBreaker.recordSuccess();
+          return;
+        }
+      } catch (err: any) {
+        logger.log('warn', `AI Dev Board light enrich failed: ${err?.message || err}`);
+      }
+    }
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      error: 'aidevboard_html_only_no_employer_scrape',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;
@@ -634,7 +833,8 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       String(list.aggregatorPostingUrl || '').trim() ||
       (isHiringCafeUrl(doc.jobUrl || '') ? String(doc.jobUrl || '').trim() : '');
 
-    if (hcPosting && isHiringCafeUrl(hcPosting)) {
+    const { isHiringCafeJobPostingUrl } = await import('../services/hiringCafeDetail');
+    if (hcPosting && isHiringCafeJobPostingUrl(hcPosting)) {
       try {
         const {
           fetchHiringCafePostingHtml,
@@ -720,6 +920,27 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
+  // List already complete: skip scrape.do for career listings (not ATS-first aggregators).
+  const needsEmployerScrape =
+    usesConsiderApplyThenAtsEnrichment(sourceKey) || sourceKey === 'startups_gallery';
+  if (
+    isListRowComplete(doc.listSnapshot || {}, { source: doc.source }) &&
+    !needsEmployerScrape
+  ) {
+    const status = boardListingStatus(listFields, doc.jobUrl);
+    await persistResult(doc, listFields, {
+      status,
+      method: 'list',
+      tier: 0,
+      creditsSpent: 0,
+      incrementAttempts: true,
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
+
   // Wait for rate limiter token
   while (!rateLimiter.tryTake()) {
     await new Promise((r) => setTimeout(r, Math.min(rateLimiter.msUntilToken(), 2000)));
@@ -762,11 +983,19 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
 
   const applyUrl = String(doc.applyUrl || '').trim();
   const jobUrl = String(doc.jobUrl || '').trim();
-  const { isAccelUrl: isAccelHostUrl } = await import('../services/aggregatorIdentity');
+  const { isAccelUrl: isAccelHostUrl, isChoppingBlockUrl, isAidevboardUrl, isStartupsGalleryUrl } =
+    await import('../services/aggregatorIdentity');
+  const isBlockedAggHost = (url: string) =>
+    isHiringCafeUrl(url) ||
+    isAccelHostUrl(url) ||
+    isConsiderBoardUrl(url) ||
+    isChoppingBlockUrl(url) ||
+    isAidevboardUrl(url) ||
+    isStartupsGalleryUrl(url);
   const scrapeTargetUrl =
-    applyUrl && !isHiringCafeUrl(applyUrl) && !isAccelHostUrl(applyUrl)
+    applyUrl && !isBlockedAggHost(applyUrl)
       ? applyUrl
-      : isHiringCafeUrl(jobUrl) || isAccelHostUrl(jobUrl)
+      : isBlockedAggHost(jobUrl)
         ? ''
         : jobUrl;
 
@@ -777,10 +1006,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       method: 'list',
       tier: 0,
       creditsSpent: 0,
-      error:
-        isHiringCafeUrl(jobUrl) || isAccelHostUrl(jobUrl)
-          ? 'aggregator_skip_scrape_do'
-          : 'no_scrape_target',
+      error: isBlockedAggHost(jobUrl) ? 'aggregator_skip_scrape_do' : 'no_scrape_target',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;

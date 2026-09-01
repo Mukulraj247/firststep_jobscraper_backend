@@ -29,6 +29,51 @@ function isAccelUrl(url: string): boolean {
   }
 }
 
+function isSequoiaUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'jobs.sequoiacap.com' || host.endsWith('.jobs.sequoiacap.com');
+  } catch {
+    return false;
+  }
+}
+
+function isCapitalGUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'careers.capitalg.com' || host.endsWith('.careers.capitalg.com');
+  } catch {
+    return false;
+  }
+}
+
+function isChoppingBlockUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'choppingblock.ai' || host.endsWith('.choppingblock.ai');
+  } catch {
+    return false;
+  }
+}
+
+function isAidevboardUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'aidevboard.com' || host.endsWith('.aidevboard.com');
+  } catch {
+    return false;
+  }
+}
+
+function isStartupsGalleryUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'startups.gallery' || host.endsWith('.startups.gallery');
+  } catch {
+    return false;
+  }
+}
+
 function isLinkedInJobsUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -108,15 +153,28 @@ export async function saveConfigToBackend(payload: {
   const startUrl = payload.startUrl || payload.previewUrl || '';
   const hiringCafe = isHiringCafeUrl(startUrl) || isHiringCafeUrl(payload.previewUrl || '');
   const accelJobs = isAccelUrl(startUrl) || isAccelUrl(payload.previewUrl || '');
+  const sequoiaJobs = isSequoiaUrl(startUrl) || isSequoiaUrl(payload.previewUrl || '');
+  const capitalGJobs = isCapitalGUrl(startUrl) || isCapitalGUrl(payload.previewUrl || '');
+  const choppingBlockJobs =
+    isChoppingBlockUrl(startUrl) || isChoppingBlockUrl(payload.previewUrl || '');
+  const aidevboardJobs = isAidevboardUrl(startUrl) || isAidevboardUrl(payload.previewUrl || '');
+  const startupsGalleryJobs =
+    isStartupsGalleryUrl(startUrl) || isStartupsGalleryUrl(payload.previewUrl || '');
   const linkedInJobs =
     isLinkedInJobsUrl(startUrl) || isLinkedInJobsUrl(payload.previewUrl || '');
+  const useUrlKey =
+    hiringCafe ||
+    accelJobs ||
+    sequoiaJobs ||
+    capitalGJobs ||
+    choppingBlockJobs ||
+    aidevboardJobs ||
+    startupsGalleryJobs;
 
   const listExtraction = {
     itemSelector: payload.listSelector,
     fields: buildFieldMap(payload.fields),
-    uniqueKey:
-      getSuggestedUniqueKey(payload.fields) ||
-      (hiringCafe || accelJobs ? 'url' : undefined),
+    uniqueKey: getSuggestedUniqueKey(payload.fields) || (useUrlKey ? 'url' : undefined),
     maxItems:
       typeof payload.maxItems === 'number' && payload.maxItems > 0
         ? payload.maxItems
@@ -157,18 +215,72 @@ export async function saveConfigToBackend(payload: {
       ...(payload.schedule && !payload.elementsOnly ? { schedule: payload.schedule } : {}),
       ...(companyName !== undefined ? { companyName } : {}),
       ...(tags !== undefined ? { tags } : {}),
-      ...(hiringCafe
-        ? { aggregatorProvider: 'hiring_cafe', preferAtsCollection: false, enrichHiringCafeDetails: true }
-        : accelJobs
-          ? {
-              aggregatorProvider: 'accel',
-              preferAtsCollection: false,
-              enrichAccelDetails: true,
-              enrichHiringCafeDetails: false,
-            }
-          : linkedInJobs
-            ? { aggregatorProvider: 'linkedin', preferAtsCollection: false, enrichHiringCafeDetails: false }
-            : {}),
+      ...(() => {
+        if (hiringCafe) {
+          return {
+            aggregatorProvider: 'hiring_cafe',
+            preferAtsCollection: false,
+            enrichHiringCafeDetails: true,
+          };
+        }
+        if (accelJobs) {
+          return {
+            aggregatorProvider: 'accel',
+            preferAtsCollection: false,
+            enrichAccelDetails: true,
+            enrichHiringCafeDetails: false,
+          };
+        }
+        if (sequoiaJobs) {
+          return {
+            aggregatorProvider: 'sequoia',
+            preferAtsCollection: false,
+            enrichSequoiaDetails: true,
+            enrichHiringCafeDetails: false,
+            enrichAccelDetails: false,
+          };
+        }
+        if (capitalGJobs) {
+          return {
+            aggregatorProvider: 'capitalg',
+            preferAtsCollection: false,
+            enrichCapitalGDetails: true,
+            enrichHiringCafeDetails: false,
+            enrichAccelDetails: false,
+          };
+        }
+        if (choppingBlockJobs) {
+          return {
+            aggregatorProvider: 'choppingblock',
+            preferAtsCollection: false,
+            enrichChoppingBlockDetails: true,
+            enrichHiringCafeDetails: false,
+          };
+        }
+        if (aidevboardJobs) {
+          return {
+            aggregatorProvider: 'aidevboard',
+            preferAtsCollection: false,
+            enrichAidevboardDetails: true,
+            enrichHiringCafeDetails: false,
+          };
+        }
+        if (startupsGalleryJobs) {
+          return {
+            aggregatorProvider: 'startups_gallery',
+            preferAtsCollection: false,
+            enrichHiringCafeDetails: false,
+          };
+        }
+        if (linkedInJobs) {
+          return {
+            aggregatorProvider: 'linkedin',
+            preferAtsCollection: false,
+            enrichHiringCafeDetails: false,
+          };
+        }
+        return {};
+      })(),
     },
   };
 

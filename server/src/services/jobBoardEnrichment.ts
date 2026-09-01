@@ -6,9 +6,21 @@ import JobBoardListing, {
 import { makeDescriptionSnippet, sanitizeCompanyName, decodeHtmlEntities, normalizeJobDescription, normalizeLocation, normalizeSalaryRange } from './jobPageParser';
 import { jobUrlKey, normalizeJobUrl } from './jobUrlNormalize';
 import { detectAts } from './atsAdapters';
-import { isHiringCafeUrl, isAccelUrl, isAccelJobPostingUrl } from './aggregatorIdentity';
+import {
+  isHiringCafeUrl,
+  isAccelJobPostingUrl,
+  isConsiderJobPostingUrl,
+  isChoppingBlockJobPostingUrl,
+  isAidevboardJobPostingUrl,
+  isAggregatorHostUrl,
+  isAggregatorJobPostingUrl,
+  usesAggregatorHtmlOnlyEnrichment,
+} from './aggregatorIdentity';
 import { pickHiringCafeJobUrl } from './hiringCafeDetail';
 import { pickAccelJobUrl } from './accelDetail';
+import { pickConsiderJobUrl } from './sequoiaDetail';
+import { pickChoppingBlockJobUrl } from './choppingblockDetail';
+import { pickAidevboardJobUrl } from './aidevboardDetail';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import logger from '../logger';
 
@@ -58,6 +70,10 @@ function asStringList(value: unknown): string[] {
   return value.map((x) => String(x || '').trim()).filter(Boolean);
 }
 
+function isAggregatorPostingUrlValue(url: string): boolean {
+  return isAggregatorJobPostingUrl(url);
+}
+
 export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnapshot {
   const location = normalizeLocation(asText(data.location));
   const rawSalary = asText(data.salaryRange);
@@ -95,9 +111,9 @@ export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnaps
     companyWebsite: asText(data.companyWebsite),
     aggregatorPostingUrl: (() => {
       const explicit = asText(data.aggregatorPostingUrl);
-      if (explicit && (isHiringCafeUrl(explicit) || isAccelJobPostingUrl(explicit))) return explicit;
+      if (explicit && isAggregatorPostingUrlValue(explicit)) return explicit;
       const jobUrl = asText(data.jobUrl);
-      if (jobUrl && (isHiringCafeUrl(jobUrl) || isAccelJobPostingUrl(jobUrl))) return jobUrl;
+      if (jobUrl && isAggregatorPostingUrlValue(jobUrl)) return jobUrl;
       return '';
     })(),
   };
@@ -112,7 +128,7 @@ export function isListRowComplete(
   if (!hasCore) return false;
 
   const source = String(opts?.source || '').trim().toLowerCase();
-  if (source === 'hiring_cafe' || source === 'accel') {
+  if (usesAggregatorHtmlOnlyEnrichment(source)) {
     return true;
   }
   return Boolean(snapshot.location);
@@ -139,7 +155,7 @@ function rowCandidateUrls(data: Record<string, any>): string[] {
 }
 
 function isAggregatorPostingUrl(url: string): boolean {
-  return isHiringCafeUrl(url) || isAccelUrl(url);
+  return isAggregatorHostUrl(url);
 }
 
 /**
@@ -191,7 +207,7 @@ export function resolveBoardEnqueueIdentity(
     return { jobUrl: picked.jobUrl, applyUrl: employerApply, snapshot };
   }
 
-  // Soft gate: complete HC / Accel list rows still reach the board without an employer apply URL.
+  // Soft gate: complete HC / Accel / Chopping Block / AI Dev Board rows without employer apply.
   if (source === 'hiring_cafe' && isListRowComplete(snapshot, { source: 'hiring_cafe' })) {
     const hcPosting = normalizeJobUrl(pickHiringCafeJobUrl(data) || '');
     if (hcPosting && isHiringCafeUrl(hcPosting)) {
@@ -202,6 +218,47 @@ export function resolveBoardEnqueueIdentity(
     const accelPosting = normalizeJobUrl(pickAccelJobUrl(data) || data.aggregatorPostingUrl || '');
     if (accelPosting && isAccelJobPostingUrl(accelPosting)) {
       return { jobUrl: accelPosting, applyUrl: '', snapshot };
+    }
+  }
+  if (source === 'choppingblock' && isListRowComplete(snapshot, { source: 'choppingblock' })) {
+    const cbPosting = normalizeJobUrl(
+      pickChoppingBlockJobUrl(data) || data.aggregatorPostingUrl || ''
+    );
+    if (cbPosting && isChoppingBlockJobPostingUrl(cbPosting)) {
+      return { jobUrl: cbPosting, applyUrl: '', snapshot };
+    }
+  }
+  if (source === 'aidevboard' && isListRowComplete(snapshot, { source: 'aidevboard' })) {
+    const adbPosting = normalizeJobUrl(
+      pickAidevboardJobUrl(data) || data.aggregatorPostingUrl || ''
+    );
+    if (adbPosting && isAidevboardJobPostingUrl(adbPosting)) {
+      return { jobUrl: adbPosting, applyUrl: '', snapshot };
+    }
+  }
+  // Consider (Sequoia / CapitalG): title+company+posting is enough for ATS apply resolve.
+  if (source === 'sequoia' || source === 'capitalg') {
+    const considerPosting = normalizeJobUrl(
+      pickConsiderJobUrl(data) || data.aggregatorPostingUrl || ''
+    );
+    if (
+      considerPosting &&
+      isConsiderJobPostingUrl(considerPosting) &&
+      snapshot.jobTitle &&
+      snapshot.companyName
+    ) {
+      return { jobUrl: considerPosting, applyUrl: '', snapshot };
+    }
+  }
+  // startups.gallery: require employer/ATS URL (already handled above when picked).
+  // Soft-gate only if somehow still on gallery host with title+company+external apply in data.
+  if (source === 'startups_gallery' && snapshot.jobTitle && snapshot.companyName) {
+    const external =
+      normalizeJobUrl(data.applyUrl || data.apply_url || '') ||
+      normalizeJobUrl(picked.applyUrl || '') ||
+      '';
+    if (external && !isAggregatorPostingUrl(external)) {
+      return { jobUrl: external, applyUrl: external, snapshot };
     }
   }
 
@@ -277,12 +334,10 @@ function applySnapshotToDoc(
     companyFoundedYear: snapshot.companyFoundedYear || 0,
     companyWebsite: snapshot.companyWebsite || '',
     aggregatorPostingUrl:
-      (snapshot.aggregatorPostingUrl &&
-      (isHiringCafeUrl(snapshot.aggregatorPostingUrl) ||
-        isAccelJobPostingUrl(snapshot.aggregatorPostingUrl))
+      (snapshot.aggregatorPostingUrl && isAggregatorPostingUrlValue(snapshot.aggregatorPostingUrl)
         ? snapshot.aggregatorPostingUrl
         : '') ||
-      (isHiringCafeUrl(normalizedJob) || isAccelJobPostingUrl(normalizedJob) ? normalizedJob : '') ||
+      (isAggregatorPostingUrlValue(normalizedJob) ? normalizedJob : '') ||
       '',
     contentHash: contentHashFromFields({
       jobTitle: snapshot.jobTitle,

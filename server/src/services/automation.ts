@@ -23,7 +23,18 @@ import {
   isGenericJobTitle,
   isKnownPhenomCareersHost,
 } from './jobPageParser';
-import { isHiringCafeUrl, isAccelUrl, isAccelJobPostingUrl } from './aggregatorIdentity';
+import {
+  isHiringCafeUrl,
+  isAccelUrl,
+  isAccelJobPostingUrl,
+  isConsiderBoardUrl,
+  isConsiderJobPostingUrl,
+  isChoppingBlockUrl,
+  isChoppingBlockJobPostingUrl,
+  isAidevboardUrl,
+  isAidevboardJobPostingUrl,
+  isStartupsGalleryUrl,
+} from './aggregatorIdentity';
 import { isHiringCafeJobPostingUrl } from './hiringCafeDetail';
 import { toPublicRunDto } from './automationConfigView';
 
@@ -663,9 +674,14 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
     // Ford / Carrier / Toyota careers hosts: only keep real job-detail URLs.
     if (isKnownPhenomCareersHost(url) && !isCareersJobDetailUrl(url)) return false;
 
-    // Hiring Cafe / Accel search/index URLs are not job postings.
+    // Aggregator search/index URLs are not job postings.
     if (isHiringCafeUrl(url) && !isHiringCafeJobPostingUrl(url)) return false;
     if (isAccelUrl(url) && !isAccelJobPostingUrl(url)) return false;
+    if (isConsiderBoardUrl(url) && !isConsiderJobPostingUrl(url)) return false;
+    if (isChoppingBlockUrl(url) && !isChoppingBlockJobPostingUrl(url)) return false;
+    if (isAidevboardUrl(url) && !isAidevboardJobPostingUrl(url)) return false;
+    // startups.gallery list pages are not employer postings; keep ATS hrefs only.
+    if (isStartupsGalleryUrl(url)) return false;
   }
 
   return true;

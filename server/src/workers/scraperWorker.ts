@@ -23,6 +23,10 @@ import {
   isLinkedInAggregatorRobot,
   shouldEnrichHiringCafeDetails,
   shouldEnrichAccelDetails,
+  shouldEnrichConsiderDetails,
+  shouldEnrichCapitalGDetails,
+  shouldEnrichChoppingBlockDetails,
+  shouldEnrichAidevboardDetails,
 } from '../services/aggregatorIdentity';
 import {
   beginLinkedInAggregatorRun,
@@ -36,6 +40,9 @@ import {
 import { persistLinkedInAccountSession } from '../services/linkedinLogin';
 import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
 import { enrichAccelListRows } from '../services/accelDetailScrape';
+import { enrichConsiderListRows } from '../services/sequoiaDetailScrape';
+import { enrichChoppingBlockListRows } from '../services/choppingblockDetailScrape';
+import { enrichAidevboardListRows } from '../services/aidevboardDetailScrape';
 import { resolveExecutionTimeoutMs } from '../services/hiringCafeRuntime';
 import {
   evaluateRunDrift,
@@ -780,6 +787,41 @@ async function processConfiguredListExtraction(
           ? extractionConfig.maxItems
           : 40;
       rows = (await enrichAccelListRows(page, rows, {
+        maxJobs: cap,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
+    }
+
+    if (shouldEnrichConsiderDetails(automation) && rows.length > 0) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 40;
+      const label = shouldEnrichCapitalGDetails(automation) ? 'CapitalG' : 'Sequoia';
+      rows = (await enrichConsiderListRows(page, rows, {
+        maxJobs: cap,
+        label,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
+    }
+
+    if (shouldEnrichChoppingBlockDetails(automation) && rows.length > 0) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 40;
+      rows = (await enrichChoppingBlockListRows(page, rows, {
+        maxJobs: cap,
+        onLog: (message) => appendRunLog(run, message, { flush: true }),
+      })) as Record<string, any>[];
+    }
+
+    if (shouldEnrichAidevboardDetails(automation) && rows.length > 0) {
+      const cap =
+        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
+          ? extractionConfig.maxItems
+          : 40;
+      rows = (await enrichAidevboardListRows(page, rows, {
         maxJobs: cap,
         onLog: (message) => appendRunLog(run, message, { flush: true }),
       })) as Record<string, any>[];

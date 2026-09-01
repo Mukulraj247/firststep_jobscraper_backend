@@ -164,4 +164,59 @@ describe('jobBoardEnrichment helpers', () => {
       )
     ).toBeNull();
   });
+
+  it('resolveBoardEnqueueIdentity accepts complete accel rows on posting URL', () => {
+    const posting = 'https://jobs.accel.com/companies/acme/jobs/software-engineer-123';
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: posting,
+        jobTitle: 'Software Engineer',
+        companyName: 'Acme',
+        jobDescription: 'x'.repeat(450),
+      },
+      'accel'
+    );
+    expect(identity?.jobUrl).toBe(posting);
+  });
+
+  it('resolveBoardEnqueueIdentity accepts consider posting for capitalg', () => {
+    const posting =
+      'https://careers.capitalg.com/jobs?weekdayJdUid=abc-123&locations=United+States';
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: posting,
+        jobTitle: 'PM',
+        companyName: 'Portfolio Co',
+        jobDescription: 'short card',
+      },
+      'capitalg'
+    );
+    expect(identity?.jobUrl).toContain('careers.capitalg.com/jobs');
+    expect(identity?.jobUrl).toContain('weekdayJdUid=abc-123');
+  });
+
+  it('resolveBoardEnqueueIdentity requires ATS URL for startups_gallery', () => {
+    expect(
+      resolveBoardEnqueueIdentity(
+        {
+          jobUrl: 'https://startups.gallery/jobs/some-slug',
+          jobTitle: 'Engineer',
+          companyName: 'Acme',
+          jobDescription: 'x'.repeat(450),
+        },
+        'startups_gallery'
+      )
+    ).toBeNull();
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: 'https://boards.greenhouse.io/acme/jobs/123',
+        applyUrl: 'https://boards.greenhouse.io/acme/jobs/123',
+        jobTitle: 'Engineer',
+        companyName: 'Acme',
+        jobDescription: 'x'.repeat(450),
+      },
+      'startups_gallery'
+    );
+    expect(identity?.jobUrl).toBe('https://boards.greenhouse.io/acme/jobs/123');
+  });
 });

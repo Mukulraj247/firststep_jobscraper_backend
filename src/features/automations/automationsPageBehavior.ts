@@ -695,3 +695,30 @@ export function mobileCardDefinitionItems(input: {
   }
   return items;
 }
+
+const AGGREGATOR_PROVIDER_LABELS: Record<string, string> = {
+  hiring_cafe: 'Hiring Cafe',
+  accel: 'Accel / Getro',
+  sequoia: 'Sequoia (Consider)',
+  capitalg: 'CapitalG (Consider)',
+  choppingblock: 'Chopping Block',
+  aidevboard: 'AI Dev Board',
+  startups_gallery: 'Startups Gallery',
+  linkedin: 'LinkedIn',
+};
+
+export function aggregatorProviderLabel(provider: string | undefined | null): string | null {
+  const key = String(provider || '').trim().toLowerCase();
+  if (!key) return null;
+  return AGGREGATOR_PROVIDER_LABELS[key] || key.replace(/_/g, ' ');
+}
+
+export function aggregatorEnrichModeLabel(config: Record<string, unknown>): string | null {
+  if (config.enrichHiringCafeDetails) return 'HTML detail enrich';
+  if (config.enrichAccelDetails) return 'HTML detail enrich';
+  if (config.enrichChoppingBlockDetails) return 'HTML detail enrich';
+  if (config.enrichAidevboardDetails) return 'API/HTML detail enrich';
+  if (config.enrichSequoiaDetails || config.enrichCapitalGDetails) return 'Apply URL → ATS enrich';
+  if (config.aggregatorProvider === 'startups_gallery') return 'List ATS URLs only';
+  return null;
+}

@@ -35,6 +35,8 @@ import {
   configShowsRawListExtractionEditor,
   configStartUrlLocked,
   proxySavedChipLabel,
+  aggregatorProviderLabel,
+  aggregatorEnrichModeLabel,
 } from '../features/automations/automationsPageBehavior';
 import { popReturnNavigateOptions, pushReturnState } from '../features/navigation/inAppReturn';
 
@@ -620,6 +622,16 @@ export const AutomationConfigPage = ({
             />
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} flexWrap="wrap" useFlexGap>
               <Chip size="small" label={`ID: ${id}`} variant="outlined" />
+              {aggregatorProviderLabel(config.aggregatorProvider) ? (
+                <Chip
+                  size="small"
+                  color="primary"
+                  label={aggregatorProviderLabel(config.aggregatorProvider)}
+                />
+              ) : null}
+              {aggregatorEnrichModeLabel(config) ? (
+                <Chip size="small" variant="outlined" label={aggregatorEnrichModeLabel(config)} />
+              ) : null}
               {lastRunTime ? (
                 <Chip size="small" label={`Last run: ${new Date(lastRunTime).toLocaleString()}`} variant="outlined" />
               ) : (

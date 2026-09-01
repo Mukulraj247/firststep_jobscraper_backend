@@ -218,6 +218,21 @@ export const AggregatorsPage = () => {
         if (/^(accel|jobs\.accel)$/i.test(company)) {
           return { ...search, companyName: 'Accel' };
         }
+        if (/^(sequoia|sequoiacap|jobs\.sequoiacap)$/i.test(company)) {
+          return { ...search, companyName: 'Sequoia' };
+        }
+        if (/^(capitalg|capital\s*g|careers\.capitalg)$/i.test(company)) {
+          return { ...search, companyName: 'CapitalG' };
+        }
+        if (/^(chopping\s*block|choppingblock)$/i.test(company)) {
+          return { ...search, companyName: 'Chopping Block' };
+        }
+        if (/^(aidevboard|ai\s*dev\s*board)$/i.test(company)) {
+          return { ...search, companyName: 'AI Dev Board' };
+        }
+        if (/^(startups\.gallery|startups\s*gallery)$/i.test(company)) {
+          return { ...search, companyName: 'Startups Gallery' };
+        }
         return search;
       }),
     [searches]
@@ -399,9 +414,8 @@ export const AggregatorsPage = () => {
         name: trimmedName,
         startUrl: trimmedUrl,
         companyName: 'Aggregator',
-        tags: ['aggregator', 'hiring_cafe'],
+        tags: ['aggregator'],
         config: {
-          aggregatorProvider: 'hiring_cafe',
           preferAtsCollection: false,
           schedule: {
             enabled: true,

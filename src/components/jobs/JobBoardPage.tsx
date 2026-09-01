@@ -34,6 +34,7 @@ import {
   WorkOutline,
 } from '@mui/icons-material';
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
+import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
 import {
   sectionBodyLines,
   buildJobDetailSections,
@@ -120,22 +121,11 @@ const asText = (value: unknown): string => {
     .trim();
 };
 
-/** Prefer employer apply URL; never use Hiring Cafe / Accel as the Apply target. */
+/** Prefer employer apply URL; never use aggregator hosts as the Apply target. */
 const resolveApplyHref = (applyUrl: unknown, jobUrl: unknown): string => {
   const candidates = [asText(applyUrl), asText(jobUrl)].filter(Boolean);
   for (const href of candidates) {
-    try {
-      const host = new URL(href).hostname.toLowerCase().replace(/^www\./, '');
-      if (host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe')) {
-        continue;
-      }
-      if (host === 'jobs.accel.com' || host.endsWith('.jobs.accel.com')) {
-        continue;
-      }
-    } catch {
-      continue;
-    }
-    return href;
+    if (isEmployerApplyHref(href)) return href;
   }
   return '';
 };

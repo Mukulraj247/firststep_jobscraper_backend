@@ -12,6 +12,7 @@ export const DATA_COLUMN_LABELS: Record<string, string> = {
   jobId: 'Job ID',
   jobUrl: 'URL',
   applyUrl: 'Apply URL',
+  aggregatorPostingUrl: 'Aggregator URL',
   job_url: 'URL',
   jobTitle: 'Title',
   job_title: 'Title',
@@ -26,6 +27,7 @@ export const URLISH_COLUMNS = new Set([
   'applicationUrl',
   'application_url',
   'applyUrl',
+  'aggregatorPostingUrl',
   'url',
   'link',
 ]);
@@ -179,4 +181,62 @@ export function extractedDataTableRowHoverSx() {
     '&:hover': { bgcolor: DESKTOP_TABLE_ROW_HOVER_BG },
     '& td': { borderBottom: `1px solid ${DESKTOP_TABLE_ROW_DIVIDER}` },
   };
+}
+
+/** Key columns shown first on Run Details (aggregator / job list rows). */
+export const RUN_DETAIL_KEY_COLUMNS = [
+  'jobTitle',
+  'job_title',
+  'companyName',
+  'company',
+  'location',
+  'jobUrl',
+  'job_url',
+  'applyUrl',
+  'aggregatorPostingUrl',
+  'date',
+  'datePosted',
+  'posted',
+  'salaryRange',
+  'employmentType',
+  'remoteType',
+  'jobCategory',
+  'seniorityLevel',
+  'sectorIndustry',
+  'f500',
+] as const;
+
+const RUN_DETAIL_KEY_SET = new Set<string>(RUN_DETAIL_KEY_COLUMNS);
+
+export function columnHasValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'boolean') return true;
+  if (typeof value === 'number') return true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as object).length > 0;
+  return String(value).length > 0;
+}
+
+/** Build ordered column list from run row payloads. */
+export function buildRunDetailColumns(
+  rows: Array<{ data?: Record<string, unknown> }>,
+  opts?: { keyColumnsOnly?: boolean }
+): string[] {
+  const keySet = new Set<string>();
+  rows.forEach((row) => {
+    Object.keys(row.data || {}).forEach((k) => keySet.add(k));
+  });
+  const keys = Array.from(keySet);
+  const priority = RUN_DETAIL_KEY_COLUMNS.filter((k) => keySet.has(k));
+  const rest = keys
+    .filter((k) => !RUN_DETAIL_KEY_SET.has(k))
+    .sort((a, b) => a.localeCompare(b));
+  let ordered = [...priority, ...rest];
+  if (opts?.keyColumnsOnly) {
+    ordered = ordered.filter((k) => RUN_DETAIL_KEY_SET.has(k));
+  }
+  return ordered.filter((column) =>
+    rows.some((row) => columnHasValue(row.data?.[column]))
+  );
 }

@@ -24,6 +24,21 @@ describe('applyJobBoardListFilters', () => {
   it('filters combined aggregator sources', () => {
     const match = applyJobBoardListFilters({ ownerId: 'u1' }, { source: 'aggregator' });
     const and = match.$and as Record<string, unknown>[];
-    expect(and).toEqual([{ source: { $in: ['hiring_cafe', 'linkedin', 'accel'] } }]);
+    expect(and).toEqual([
+      {
+        source: {
+          $in: [
+            'hiring_cafe',
+            'linkedin',
+            'accel',
+            'sequoia',
+            'capitalg',
+            'choppingblock',
+            'aidevboard',
+            'startups_gallery',
+          ],
+        },
+      },
+    ]);
   });
 });

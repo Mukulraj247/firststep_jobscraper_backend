@@ -19,6 +19,7 @@ import {
   preferJobUrlTitle,
   titleFromJobUrl,
 } from '../services/jobPageParser';
+import { isAggregatorApplyHost } from '../services/aggregatorIdentity';
 
 const router = Router();
 
@@ -149,10 +150,9 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   let applyUrl = rawApply;
   try {
     const host = rawApply ? new URL(rawApply).hostname.toLowerCase().replace(/^www\./, '') : '';
-    const isHc =
-      host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
-    const isAccel = host === 'jobs.accel.com' || host.endsWith('.jobs.accel.com');
-    if (!rawApply || isHc || isAccel) applyUrl = '';
+    if (!rawApply || isAggregatorApplyHost(host)) {
+      applyUrl = '';
+    }
   } catch {
     applyUrl = rawApply;
   }

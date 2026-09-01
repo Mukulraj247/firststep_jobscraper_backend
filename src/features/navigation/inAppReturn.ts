@@ -25,6 +25,7 @@ export function runDetailsBackHref(returnTo: unknown, fallback = '/failures'): s
 export function inAppBackLabel(returnTo: string): string {
   if (returnTo.startsWith('/failures')) return 'Back to Failures';
   if (returnTo.startsWith('/automations')) return 'Back to Automations';
+  if (returnTo.startsWith('/aggregators')) return 'Back to Aggregators';
   if (returnTo.startsWith('/runs')) return 'Back to Runs';
   if (returnTo.startsWith('/run/')) return 'Back to Run';
   if (returnTo.startsWith('/jobs')) return 'Back to Job board';
