@@ -63,7 +63,13 @@ describe('four new aggregators identity', () => {
     expect(
       isAidevboardJobPostingUrl('https://aidevboard.com/job/74bd7349-e7f3-4d98-a3f0-ba2a67cb91ec')
     ).toBe(true);
+    expect(
+      isAidevboardJobPostingUrl(
+        'https://aidevboard.com/job/principal-safety-case-engineer-80fd5767'
+      )
+    ).toBe(true);
     expect(isAidevboardJobPostingUrl('https://aidevboard.com/')).toBe(false);
+    expect(isAidevboardJobPostingUrl('https://aidevboard.com/jobs')).toBe(false);
     const saas: Record<string, unknown> = {};
     applyAggregatorProviderFromUrl('https://aidevboard.com/', saas);
     expect(saas.aggregatorProvider).toBe(AGGREGATOR_PROVIDER_AIDEVBOARD);

@@ -138,12 +138,15 @@ export function isAidevboardUrl(url: string): boolean {
   return host === 'aidevboard.com' || host.endsWith('.aidevboard.com');
 }
 
-/** Detail: /job/{uuid} (not /jobs list or /apply). */
+/** Detail: /job/{slug-or-uuid} (not homepage, /jobs list, or /apply). */
 export function isAidevboardJobPostingUrl(url: string): boolean {
   if (!isAidevboardUrl(url)) return false;
   try {
-    const path = new URL(url).pathname.toLowerCase().replace(/\/+$/, '') || '/';
-    return /^\/job\/[a-f0-9-]{8,}$/i.test(path);
+    const path = new URL(url).pathname.replace(/\/+$/, '') || '/';
+    if (!/^\/job\/[^/?#]+/i.test(path)) return false;
+    const slug = path.replace(/^\/job\//i, '');
+    if (!slug || slug === 'jobs') return false;
+    return true;
   } catch {
     return false;
   }

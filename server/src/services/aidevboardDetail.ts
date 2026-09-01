@@ -23,8 +23,8 @@ export function preferExternalApplyUrl(...candidates: unknown[]): string {
 
 export function aidevboardJobIdFromUrl(url: string): string {
   try {
-    const path = new URL(url).pathname;
-    const m = path.match(/^\/job\/([a-f0-9-]{8,})/i);
+    const path = new URL(url).pathname.replace(/\/+$/, '');
+    const m = path.match(/^\/job\/([^/?#]+)/i);
     return m?.[1] || '';
   } catch {
     return '';
@@ -95,7 +95,7 @@ export function mergeAidevboardDetailIntoRow(
   const existingTitle = String(next.jobTitle || next.title || '').trim();
   const existingCompany = String(next.companyName || next.company || '').trim();
   const existingDesc = String(next.jobDescription || next.description || '').trim();
-  const portalCompany = /^(ai\s*dev\s*board|aidevboard)$/i.test(existingCompany);
+  const portalCompany = /^(ai\s*dev(\s*board)?|aidevboard)$/i.test(existingCompany);
 
   const detailTitle = String(detail.jobTitle || '').trim();
   const detailCompany = sanitizeCompanyName(String(detail.companyName || '').trim());
