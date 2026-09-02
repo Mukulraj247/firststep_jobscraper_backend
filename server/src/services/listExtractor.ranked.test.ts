@@ -142,6 +142,17 @@ describe('listNavigationAttempts', () => {
       { waitUntil: 'commit', timeout: 20_000 },
     ]);
   });
+
+  it('extends Hiring Cafe filtered list navigation budget', () => {
+    expect(
+      listNavigationAttempts(
+        'https://hiringcafe.com/search?q=software&filters=%7B%22searchQuery%22%3A%22mechanical%22%7D'
+      )
+    ).toEqual([
+      { waitUntil: 'domcontentloaded', timeout: 90_000 },
+      { waitUntil: 'commit', timeout: 45_000 },
+    ]);
+  });
 });
 
 describe('mapJsonLdRowsToConfiguredFields', () => {

@@ -25,6 +25,7 @@ import {
 } from './scraping/captchaGate';
 import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
 import { assertSafeOutboundUrl, safeOutboundUrlLogLabel } from '../utils/outboundUrlPolicy';
+import { isHiringCafeUrl } from './aggregatorIdentity';
 import { parseJsonLdJobPostingList } from './jobPageParser';
 import {
   atsBoardRowsToListExtractionRecords,
@@ -145,6 +146,13 @@ export async function installOutboundBrowserContextGuard(
  */
 export const listNavigationAttempts = (url?: string) => {
   try {
+    if (url && isHiringCafeUrl(url)) {
+      // Filtered HC list URLs are heavy SPAs; 20s commit fallback caused navigation_error.
+      return [
+        { waitUntil: 'domcontentloaded' as const, timeout: 90_000 },
+        { waitUntil: 'commit' as const, timeout: 45_000 },
+      ];
+    }
     if (url && new URL(url).hostname.toLowerCase() === 'careers.persistent.com') {
       // This host has documented Chromium HTTP/2 instability. It can take
       // longer to establish a response even with HTTP/2 disabled. Keep 25s

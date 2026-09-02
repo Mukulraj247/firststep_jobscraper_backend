@@ -12,7 +12,7 @@ const NETWORK_RE =
   /net::ERR_FAILED|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_TIMED_OUT|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_ADDRESS_UNREACHABLE|ERR_TIMED_OUT|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up/i;
 
 const BROWSER_CLOSED_RE =
-  /Target page, context or browser has been closed|browser has been closed/i;
+  /Target page, context or browser has been closed|browser has been closed|Page crashed|Target crashed|Target closed/i;
 
 const BLOCK_RE =
   /captcha|cloudflare|challenge|access denied|blocked|forbidden|anti-?bot|verification required|attention required|just a moment|empty\/blocked|empty extraction|soft.?block/i;
@@ -53,8 +53,10 @@ export const isProxyAllowedForAttempt = (opts: {
   attemptsMade: number;
   needsProxy?: boolean;
   retryReason?: ScraperRetryReason | string | null;
+  /** @deprecated HC uses direct-first; kept for explicit opt-in hosts only. */
+  forceProxyFromStart?: boolean;
 }): boolean => {
-  if (opts.needsProxy) return true;
+  if (opts.needsProxy || opts.forceProxyFromStart) return true;
   if (opts.attemptsMade < 1) return false;
   const reason = opts.retryReason;
   return reason === 'captcha' || reason === 'block';

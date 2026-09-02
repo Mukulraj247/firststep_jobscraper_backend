@@ -77,7 +77,7 @@ export const DIRECTORY_PHENOM_BOARD_HOSTS = new Set<string>([
   'jobs.fmcna.com',
   'jobs.hanger.com',
   'jobs.hcsc.com',
-  'jobs.intuit.com',
+  // jobs.intuit.com is Talent Brew (Radancy), not Phenom — see TALENT_BREW org map.
   'jobs.jcp.com',
   'jobs.kindredathome.com',
   'jobs.kroger.com',
@@ -99,7 +99,6 @@ export const DIRECTORY_PHENOM_BOARD_HOSTS = new Set<string>([
   'jobs.td.com',
   'jobs.tenethealth.com',
   'jobs.truist.com',
-  'jobs.walgreens.com',
   'jobs.wowway.com',
   'schwabjobs.com',
   'sneakerjobs.com',

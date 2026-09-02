@@ -43,6 +43,11 @@ describe('classifyProxyEscalation', () => {
   it('does not burn proxy on bare navigation timeouts', () => {
     expect(classifyProxyEscalation('page.goto: Timeout 20000ms exceeded.')).toBe('networkOrOom');
   });
+
+  it('detects Page crashed as network/OOM without proxy spend', () => {
+    expect(classifyProxyEscalation('page.goto: Page crashed')).toBe('networkOrOom');
+    expect(classifyProxyEscalation('page.evaluate: Target crashed')).toBe('networkOrOom');
+  });
 });
 
 describe('retryReasonFromEscalation', () => {
@@ -60,6 +65,16 @@ describe('isProxyAllowedForAttempt', () => {
     ).toBe(false);
     expect(
       isProxyAllowedForAttempt({ attemptsMade: 0, needsProxy: true, retryReason: undefined })
+    ).toBe(true);
+  });
+
+  it('allows proxy from attempt 0 when forceProxyFromStart is explicitly set', () => {
+    expect(
+      isProxyAllowedForAttempt({
+        attemptsMade: 0,
+        needsProxy: false,
+        forceProxyFromStart: true,
+      })
     ).toBe(true);
   });
 

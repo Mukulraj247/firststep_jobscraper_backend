@@ -124,7 +124,7 @@ async function enrichViaBrowser(
 
 /**
  * Enrich list rows from Hiring Cafe Full View pages.
- * Prefer light HTTP HTML (`__NEXT_DATA__`) — browser only when that fails.
+ * Aggregator runs use browser-only detail (HTTP light is Cloudflare-blocked).
  * Never scrapes employer/apply pages for job content.
  */
 export async function enrichHiringCafeListRows(
@@ -133,9 +133,12 @@ export async function enrichHiringCafeListRows(
   opts?: {
     maxJobs?: number;
     onLog?: (message: string) => Promise<void> | void;
+    /** When true (default), skip HTTP __NEXT_DATA__ fetch and use Playwright only. */
+    browserOnly?: boolean;
   }
 ): Promise<Record<string, unknown>[]> {
   const maxJobs = Math.max(1, Math.min(opts?.maxJobs || DEFAULT_MAX_JOBS, 80));
+  const browserOnly = opts?.browserOnly !== false;
   const seen = new Set<string>();
   let enriched = 0;
   let failed = 0;
@@ -152,22 +155,27 @@ export async function enrichHiringCafeListRows(
     }
     seen.add(postingUrl);
     try {
-      // 1) Light path: plain HTTP GET of HC posting HTML (no Chromium / scrape.do)
-      const light = await fetchHiringCafePostingHtml(postingUrl);
-      if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
-        const merged = enrichHiringCafeRowFromHtml(row, light.html, postingUrl);
-        if (merged.applyUrl && !isHiringCafeUrl(String(merged.applyUrl))) applyResolved += 1;
-        out.push(merged);
-        enriched += 1;
-        lightHits += 1;
-      } else {
-        // 2) Fallback: open HC posting in the existing Playwright page
-        const viaBrowser = await enrichViaBrowser(page, row, postingUrl);
-        if (viaBrowser.applyResolved) applyResolved += 1;
-        out.push(viaBrowser.row);
-        enriched += 1;
-        browserHits += 1;
+      let usedBrowser = false;
+      if (!browserOnly) {
+        const light = await fetchHiringCafePostingHtml(postingUrl);
+        if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
+          const merged = enrichHiringCafeRowFromHtml(row, light.html, postingUrl);
+          if (merged.applyUrl && !isHiringCafeUrl(String(merged.applyUrl))) applyResolved += 1;
+          out.push(merged);
+          enriched += 1;
+          lightHits += 1;
+          if (HIRING_CAFE_DETAIL_BETWEEN_MS > 0) {
+            await page.waitForTimeout(HIRING_CAFE_DETAIL_BETWEEN_MS).catch(() => {});
+          }
+          continue;
+        }
       }
+      const viaBrowser = await enrichViaBrowser(page, row, postingUrl);
+      usedBrowser = true;
+      if (viaBrowser.applyResolved) applyResolved += 1;
+      out.push(viaBrowser.row);
+      enriched += 1;
+      if (usedBrowser) browserHits += 1;
     } catch (err: any) {
       failed += 1;
       logger.log(

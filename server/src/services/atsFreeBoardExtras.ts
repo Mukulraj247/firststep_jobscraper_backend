@@ -150,13 +150,15 @@ function limitedPages(opts?: FetchOpts): number {
 export const WORKDAY_SITE_RESOLVE = '__resolve__';
 
 const WORKDAY_SITE_GUESSES = [
+  'careers',
   'External_Career',
   'External',
   'External_Career_Site',
   'External_Careers',
 ];
 
-const WORKDAY_INVALID_SITE = /^(?:search-results|search-jobs|job-search-results|home|careers|careers-home|us|uk|en|fr|de|es)$/i;
+const WORKDAY_INVALID_SITE =
+  /^(?:search-results|search-jobs|job-search-results|home|us|uk|en|fr|de|es)$/i;
 
 function workdayListApiUrl(host: string, tenant: string, site: string): string {
   return `https://${host}/wday/cxs/${encodeURIComponent(tenant)}/${encodeURIComponent(site)}/jobs`;
@@ -196,8 +198,10 @@ export function detectWorkdayBoard(url: string): ExtraBoardDetection | null {
   const parts = parsed.pathname.split('/').filter(Boolean);
   const localeLike =
     /^(?:en|fr|de|es|pt|zh|ja|ko|it|nl|sv|da|fi|pl|tr|us|uk|ca|au|in|mx|br|cn|jp|kr)(?:-[a-z]{2})?$/i;
+  // Keep `careers` / `careers-home` — many tenants use them as the CXS site slug
+  // (e.g. archgroup.wd1.../careers).
   const nonSite =
-    /^(?:wday|cxs|job|jobs|details|search-results|search-jobs|job-search-results|home|careers|careers-home)$/i;
+    /^(?:wday|cxs|job|jobs|details|search-results|search-jobs|job-search-results|home)$/i;
   const filtered = parts.filter((p) => !localeLike.test(p) && !nonSite.test(p));
   const site = filtered[0];
   if (site && /^(job|jobs|details)$/i.test(site)) return null;

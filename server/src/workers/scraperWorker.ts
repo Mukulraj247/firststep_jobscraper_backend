@@ -20,6 +20,7 @@ import {
 } from '../services/linkedinSessionGate';
 import {
   isAggregatorRobot,
+  isHiringCafeUrl,
   isLinkedInAggregatorRobot,
   shouldEnrichHiringCafeDetails,
   shouldEnrichAccelDetails,
@@ -170,6 +171,8 @@ const ANTI_BOT_HOST_PATTERNS = [
   'workday',
   'greenhouse.io',
   'lever.co',
+  'hiringcafe.com',
+  'hiring.cafe',
 ];
 
 const isAntiBotTarget = (url?: string): boolean => {
@@ -488,7 +491,8 @@ async function tryAtsBoardCollection(
     !isJibeCareerHost(startUrl) &&
     !looksLikeWayfairCareersBoard(startUrl) &&
     !looksLikeTalentBrewBoard(startUrl) &&
-    !looksLikeZwayamBoard(startUrl)
+    !looksLikeZwayamBoard(startUrl) &&
+    !looksLikeGreenhouseBoard(startUrl)
   ) {
     await appendRunLog(
       run,
@@ -772,10 +776,25 @@ async function processConfiguredListExtraction(
         typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
           ? extractionConfig.maxItems
           : 80;
-      rows = (await runStartupsGalleryFastHarvest(page, listStartUrl, {
-        maxJobs: cap,
-        onLog: (message) => appendRunLog(run, message, { flush: true }),
-      })) as Record<string, any>[];
+      try {
+        rows = (await runStartupsGalleryFastHarvest(page, listStartUrl, {
+          maxJobs: cap,
+          onLog: (message) => appendRunLog(run, message, { flush: true }),
+        })) as Record<string, any>[];
+      } catch (harvestErr: any) {
+        const msg = String(harvestErr?.message || harvestErr || '');
+        // Framer OOM/crash: do not burn the same dead page on selector fallback —
+        // let Agenda retry with a fresh browser (or rely on HTTP path next attempt).
+        if (/Page crashed|Target crashed|Target closed|browser has been closed/i.test(msg)) {
+          throw harvestErr;
+        }
+        await appendRunLog(
+          run,
+          `startups.gallery: fast harvest error (${msg}) — falling back to configured selectors`,
+          { flush: true }
+        );
+        rows = [];
+      }
       if (rows.length > 0) {
         startupsGalleryFastHarvestDone = true;
         await appendRunLog(
@@ -987,10 +1006,14 @@ async function buildIdentityProfile(
   let failedProxyServers = normalizeFailedProxyServers(opts?.failedProxyServers);
   const needsProxy = !!config?.browserLocation?.needsProxy;
   const retryReason = opts?.retryReason;
+  const targetUrlEarly = String(config?.targetUrl || '');
+  const hiringCafeTarget = isHiringCafeUrl(targetUrlEarly);
+  // HC: direct Playwright first; Decodo only after captcha/block retry (proxy-from-start burned tunnels).
   const proxyAllowed = isProxyAllowedForAttempt({
     attemptsMade,
-    needsProxy,
+    needsProxy: hiringCafeTarget ? false : needsProxy,
     retryReason,
+    forceProxyFromStart: false,
   });
 
   const proxyPool = await resolveProxyPool(String(userId), config);
@@ -1006,6 +1029,13 @@ async function buildIdentityProfile(
   let selectedProxy = attachProxy
     ? selectRotatedProxy(proxyPool, attemptsMade, failedProxyServers)
     : null;
+  // HC captcha retries: always prefer Decodo env proxy over stale per-user pool entries.
+  if (hiringCafeTarget && attachProxy && envFallbackCandidate) {
+    const decodoKey = normalizeProxyServer(envFallbackCandidate.server);
+    if (decodoKey && !failedProxyServers.includes(decodoKey)) {
+      selectedProxy = envFallbackCandidate;
+    }
+  }
   const userAgent = config?.userAgent || selectRotatedUserAgent(attemptsMade, config?.userAgentPool);
   const shouldReuseSession = config?.reuseSession !== false;
   const targetUrl = config?.targetUrl;

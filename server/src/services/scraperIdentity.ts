@@ -101,10 +101,15 @@ export const blockRetryIdentity = (opts: RetryIdentityInput): RetryIdentityPlan 
   const envFallback = usableProxy(opts.envFallbackProxy, failed);
 
   if (sidecarBlocksCamoufox(opts, failed) || opts.lastFailureWasProxyTunnel) {
-    if (!selected && !envFallback) {
+    const sidecarKey = proxyServerKey(opts.sidecarProxyServer);
+    // Prefer a robot residential proxy; else an env proxy that is NOT the dead sidecar.
+    const proxy =
+      selected ||
+      (envFallback && proxyServerKey(envFallback.server) !== sidecarKey ? envFallback : null);
+    if (!proxy) {
       return playwrightDirectAfterTunnel(opts.attemptsMade);
     }
-    // A surviving robot proxy is still usable in Playwright; Camoufox sidecar
+    // A surviving HTTP proxy is still usable in Playwright; Camoufox sidecar
     // would force traffic back through the dead tunnel.
     return {
       browserType: 'playwright',
@@ -112,7 +117,7 @@ export const blockRetryIdentity = (opts: RetryIdentityInput): RetryIdentityPlan 
       useStealth: true,
       identityStrategy: 'retry-playwright-direct-after-tunnel',
       poolIsolationKey: `direct-after-tunnel-${opts.attemptsMade}`,
-      proxy: selected,
+      proxy,
     };
   }
 

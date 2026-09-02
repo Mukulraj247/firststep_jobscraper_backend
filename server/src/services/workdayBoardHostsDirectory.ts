@@ -2,6 +2,7 @@
 export const WORKDAY_TENANT_SITE_BY_TENANT: Record<string, string> = {
   broadcom: 'External_Career',
   nationwide: 'Nationwide',
+  archgroup: 'careers',
 };
 
 export function workdayKnownSiteSlug(tenant: string): string | undefined {
@@ -31,7 +32,7 @@ function workdaySitePathSegments(pathname: string): string[] {
     .filter(Boolean);
   const localeLike =
     /^(?:en|fr|de|es|pt|zh|ja|ko|it|nl|sv|da|fi|pl|tr|us|uk|ca|au|in|mx|br|cn|jp|kr)(?:-[a-z]{2})?$/i;
-  const nonSite = /^(?:wday|cxs|job|jobs|details|search-results|search-jobs|job-search-results|home|careers|careers-home)$/i;
+  const nonSite = /^(?:wday|cxs|job|jobs|details|search-results|search-jobs|job-search-results|home)$/i;
   return parts.filter((segment) => !localeLike.test(segment) && !nonSite.test(segment));
 }
 

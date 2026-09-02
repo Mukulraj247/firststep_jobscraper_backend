@@ -237,4 +237,23 @@ describe('startups.gallery list_ats', () => {
     expect(withCareers.jobUrl).toBe(careersUrl);
     expect(isStartupsGalleryListRowUsable(withCareers)).toBe(true);
   });
+
+  it('harvests employer ATS anchors from Framer SSR HTML without Playwright', async () => {
+    const {
+      harvestStartupsGalleryJobsFromHtml,
+      normalizeStartupsGalleryListUrl,
+    } = await import('./startupsGalleryListScrape');
+    expect(normalizeStartupsGalleryListUrl('https://startups.gallery/jobs?position=software+')).toBe(
+      'https://startups.gallery/jobs?position=software'
+    );
+    const html = `
+      <a class="framer-zpdfqp" href="https://jobs.ashbyhq.com/replit/df7b6d30-9da1-4ace-8121-17c2aa55aa6f" target="_blank">
+        <p>AI Agent Security Architect Replit · Foster City, CA · Posted on Sep 1, 2026</p>
+      </a>
+      <a href="https://startups.gallery/jobs">ignore me</a>
+    `;
+    const rows = harvestStartupsGalleryJobsFromHtml(html, 10, { positionTokens: ['security'] });
+    expect(rows.length).toBe(1);
+    expect(String(rows[0].jobUrl)).toMatch(/ashbyhq\.com\/replit/i);
+  });
 });

@@ -213,6 +213,21 @@ describe('blockRetryIdentity', () => {
     });
   });
 
+  it('after tunnel failure, attaches a surviving env proxy that is not the dead sidecar', () => {
+    const plan = blockRetryIdentity({
+      attemptsMade: 2,
+      selectedProxy: null,
+      envFallbackProxy: { server: 'http://gate.decodo.com:10001' },
+      configBrowserType: 'playwright',
+      failedProxyServers: ['http://31.59.20.176:6754'],
+      sidecarProxyServer: 'http://31.59.20.176:6754',
+      lastFailureWasProxyTunnel: true,
+    });
+    expect(plan?.identityStrategy).toBe('retry-playwright-direct-after-tunnel');
+    expect(plan?.browserType).toBe('playwright');
+    expect(plan?.proxy).toEqual({ server: 'http://gate.decodo.com:10001' });
+  });
+
   it('still skips Camoufox after a tunnel failure even if the sidecar probe previously looked healthy', () => {
     const plan = blockRetryIdentity({
       attemptsMade: 2,

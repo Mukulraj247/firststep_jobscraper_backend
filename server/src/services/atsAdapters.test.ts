@@ -77,6 +77,21 @@ describe('startUrlHasCollectionFilters', () => {
       expect: true,
     },
     {
+      name: 'GitLab about.gitlab.com dept+loc vanity filters',
+      url: 'https://about.gitlab.com/jobs/all-jobs/?loc=Remote,+US&dept=Engineering',
+      expect: true,
+    },
+    {
+      name: 'GitLab dept shorthand alone',
+      url: 'https://about.gitlab.com/jobs/all-jobs/?dept=Engineering',
+      expect: true,
+    },
+    {
+      name: 'GitLab loc shorthand alone',
+      url: 'https://about.gitlab.com/jobs/all-jobs/?loc=Remote,+US',
+      expect: true,
+    },
+    {
       name: 'Workday host only',
       url: 'https://intel.wd1.myworkdayjobs.com/External',
       expect: false,
