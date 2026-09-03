@@ -16,7 +16,7 @@ import {
   isAggregatorJobPostingUrl,
   usesAggregatorHtmlOnlyEnrichment,
 } from './aggregatorIdentity';
-import { pickHiringCafeJobUrl } from './hiringCafeDetail';
+import { pickHiringCafeJobUrl, isHiringCafeJobPostingUrl } from './hiringCafeDetail';
 import { pickAccelJobUrl } from './accelDetail';
 import { pickConsiderJobUrl } from './sequoiaDetail';
 import { pickChoppingBlockJobUrl } from './choppingblockDetail';
@@ -207,13 +207,16 @@ export function resolveBoardEnqueueIdentity(
     return { jobUrl: picked.jobUrl, applyUrl: employerApply, snapshot };
   }
 
-  // Soft gate: complete HC / Accel / Chopping Block / AI Dev Board rows without employer apply.
-  if (source === 'hiring_cafe' && isListRowComplete(snapshot, { source: 'hiring_cafe' })) {
+  // Soft gate: HC /job/{slug} is enough to enqueue even when detail enrich failed
+  // (no apply URL / short JD). Incomplete rows land as status=queued so the enrichment
+  // worker can recover via HTTP→proxy→browser. Complete rows still become readyFromList.
+  if (source === 'hiring_cafe') {
     const hcPosting = normalizeJobUrl(pickHiringCafeJobUrl(data) || '');
-    if (hcPosting && isHiringCafeUrl(hcPosting)) {
+    if (hcPosting && isHiringCafeJobPostingUrl(hcPosting)) {
       return { jobUrl: hcPosting, applyUrl: '', snapshot };
     }
   }
+  // Soft gate: complete Accel / Chopping Block / AI Dev Board rows without employer apply.
   if (source === 'accel' && isListRowComplete(snapshot, { source: 'accel' })) {
     const accelPosting = normalizeJobUrl(pickAccelJobUrl(data) || data.aggregatorPostingUrl || '');
     if (accelPosting && isAccelJobPostingUrl(accelPosting)) {

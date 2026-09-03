@@ -151,18 +151,20 @@ describe('jobBoardEnrichment helpers', () => {
     expect(identity!.applyUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
   });
 
-  it('resolveBoardEnqueueIdentity skips thin hiring_cafe rows without employer apply URL', () => {
-    expect(
-      resolveBoardEnqueueIdentity(
-        {
-          jobUrl: 'https://hiringcafe.com/job/thin-posting-abc123',
-          jobTitle: 'Engineer',
-          companyName: 'Acme',
-          jobDescription: 'short',
-        },
-        'hiring_cafe'
-      )
-    ).toBeNull();
+  it('resolveBoardEnqueueIdentity queues thin hiring_cafe rows on posting URL for enrichment recovery', () => {
+    const posting = 'https://hiringcafe.com/job/thin-posting-abc123';
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: posting,
+        jobTitle: 'Engineer',
+        companyName: 'Acme',
+        jobDescription: 'short',
+      },
+      'hiring_cafe'
+    );
+    expect(identity).not.toBeNull();
+    expect(identity!.jobUrl).toBe(posting);
+    expect(identity!.applyUrl).toBe('');
   });
 
   it('resolveBoardEnqueueIdentity accepts complete accel rows on posting URL', () => {
