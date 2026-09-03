@@ -1,5 +1,5 @@
 import type { Theme } from '@mui/material';
-import type { SystemStyleObject } from '@mui/system';
+import type { ResponsiveStyleValue, SystemStyleObject } from '@mui/system';
 
 /**
  * Ported from the FirstStep marketing/product design system so the ops console
@@ -64,7 +64,7 @@ export const HERO_GLASS_GRADIENT =
 
 /** Shared glass hero shell used on dashboard, automations, and failures pages. */
 export const heroGlassPanelSx = (
-  options: { mb?: number | SystemStyleObject<Theme>['mb']; shadow?: 'soft' | 'lifted' } = {},
+  options: { mb?: ResponsiveStyleValue<number | string>; shadow?: 'soft' | 'lifted' } = {},
 ): SystemStyleObject<Theme> => ({
   position: 'relative',
   overflow: 'hidden',
@@ -260,7 +260,9 @@ export const heroBubbleAccentSx = (
   ...position,
 });
 
-export const hiddenScrollbarSx: SystemStyleObject<Theme> = {
+// `satisfies` rather than `:` so callers spreading this keep the literal keys;
+// annotating it widens to the SystemStyleObject union and hides `scrollbarWidth`.
+export const hiddenScrollbarSx = {
   scrollbarWidth: 'none',
   msOverflowStyle: 'none',
   '&::-webkit-scrollbar': {
@@ -268,7 +270,7 @@ export const hiddenScrollbarSx: SystemStyleObject<Theme> = {
     width: 0,
     height: 0,
   },
-};
+} satisfies SystemStyleObject<Theme>;
 export const cardSx = (accent?: string): SystemStyleObject<Theme> => ({
   position: 'relative',
   overflow: 'hidden',

@@ -280,50 +280,61 @@ export const detectCloudflareChallenge = async (page: Page): Promise<boolean> =>
 
 export const waitForCloudflareToClear = async (
   page: Page,
-  options: { timeoutMs?: number; pollMs?: number } = {}
+  options: {
+    timeoutMs?: number;
+    pollMs?: number;
+    maxAttempts?: number;
+    solveInteractive?: boolean;
+  } = {}
 ): Promise<boolean> => {
-  const timeoutMs = options.timeoutMs ?? 45_000;
-  const pollMs = options.pollMs ?? 2_000;
-  const started = Date.now();
-
-  while (Date.now() - started < timeoutMs) {
-    if (isPageClosed(page)) return false;
-    const challenged = await detectCloudflareChallenge(page);
-    if (!challenged) return true;
-
-    // Give the challenge page room to complete checks and redirect.
-    await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-    if (isPageClosed(page)) return false;
-    await page.waitForTimeout(pollMs).catch(() => undefined);
-  }
-
-  return !(await detectCloudflareChallenge(page));
+  // Interactive Turnstile rarely auto-clears on datacenter IPs — solve (click) then poll.
+  const { solveCloudflareChallenge } = await import('./unblocker.cloudflareSolve');
+  const defaultTimeout =
+    options.solveInteractive === false
+      ? 45_000
+      : parseInt(String(process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || '60000'), 10) || 60_000;
+  return solveCloudflareChallenge(page, {
+    timeoutMs: options.timeoutMs ?? defaultTimeout,
+    pollMs: options.pollMs ?? 2_000,
+    maxAttempts: options.maxAttempts ?? 3,
+    solveInteractive: options.solveInteractive !== false,
+  });
 };
 
 /** Maps automation runtime config (same keys as list-extraction path) to wait options. */
 export function getUnblockOptionsFromRuntimeConfig(config: Record<string, unknown> | null | undefined) {
+  const envTimeout = parseInt(String(process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || ''), 10);
   return {
-    timeoutMs: typeof config?.cloudflareWaitTimeoutMs === 'number' ? config.cloudflareWaitTimeoutMs : 45_000,
+    timeoutMs:
+      typeof config?.cloudflareWaitTimeoutMs === 'number'
+        ? config.cloudflareWaitTimeoutMs
+        : Number.isFinite(envTimeout) && envTimeout > 0
+          ? envTimeout
+          : 60_000,
     pollMs: typeof config?.cloudflarePollIntervalMs === 'number' ? config.cloudflarePollIntervalMs : 2_000,
   };
 }
 
 /**
- * Wait for Cloudflare interstitial to disappear when present (no mouse / delay).
+ * Wait for Cloudflare interstitial to disappear when present.
+ * Interactive/embedded Turnstile: click checkbox (Scrapling-style) then poll.
+ * Non-interactive: wait only.
  * @returns true if no challenge or it cleared; false if still active after timeout.
  */
 export async function waitForCloudflareIfPresent(
   page: Page,
-  options: { timeoutMs?: number; pollMs?: number } = {}
+  options: {
+    timeoutMs?: number;
+    pollMs?: number;
+    maxAttempts?: number;
+    solveInteractive?: boolean;
+  } = {}
 ): Promise<boolean> {
   if (!(await detectCloudflareChallenge(page))) {
     return true;
   }
-  logger.log('info', 'Cloudflare challenge detected; waiting for it to clear...');
-  const cleared = await waitForCloudflareToClear(page, {
-    timeoutMs: options.timeoutMs ?? 45_000,
-    pollMs: options.pollMs ?? 2_000,
-  });
+  logger.log('info', 'Cloudflare challenge detected; solving / waiting for it to clear...');
+  const cleared = await waitForCloudflareToClear(page, options);
   if (!cleared) {
     logger.log('warn', 'Cloudflare challenge may still be active after wait timeout');
   }

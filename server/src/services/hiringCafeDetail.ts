@@ -5,6 +5,7 @@ import {
   parseJobPageHtml,
   parseJsonLdJobPosting,
   sanitizeCompanyName,
+  isGenericJobTitle,
   type ParsedJobFields,
 } from './jobPageParser';
 import {
@@ -273,7 +274,7 @@ export function parseHiringCafeJobPageHtml(
     const slugLoc = locationFromHiringCafeSlug(postingUrl);
     if (slugLoc) merged.location = slugLoc;
   }
-  if (!merged.jobTitle) {
+  if (!merged.jobTitle || isGenericJobTitle(merged.jobTitle) || /^(?:hiring\s*cafe|hiringcafe(?:\.com)?)$/i.test(merged.jobTitle)) {
     merged.jobTitle = titleFromHiringCafeSlug(postingUrl);
   }
   if (!merged.applyUrl) {
@@ -423,21 +424,32 @@ export function mergeHiringCafeDetailIntoRow(
   const existingCompany = String(next.companyName || next.company || '').trim();
   const existingDesc = String(next.jobDescription || next.description || '').trim();
   const portalCompany = /^(hiring\s*cafe|hiringcafe)$/i.test(existingCompany);
+  const tickerLikeCompany =
+    /^(?:nasdaq|nyse|bse|lse|tsx|hkex|epa|fra)\s*:/i.test(existingCompany) ||
+    /^[A-Z]{1,5}:\s*[A-Z0-9. ]+$/i.test(existingCompany);
 
-  const detailTitle = String(detail.jobTitle || '').trim();
+  const rawDetailTitle = String(detail.jobTitle || '').trim();
+  const garbageTitle =
+    /^(?:hiring\s*cafe|hiringcafe(?:\.com)?|just a moment(?:\.\.\.)?|attention required|access denied)$/i.test(
+      rawDetailTitle
+    ) || /^(?:hiring\s*cafe|hiringcafe(?:\.com)?)$/i.test(existingTitle);
+  const detailTitle = garbageTitle ? '' : rawDetailTitle;
   const detailCompany = sanitizeCompanyName(String(detail.companyName || '').trim());
   const detailDesc = String(detail.jobDescription || '').trim();
   const applyUrl = String(detail.applyUrl || '').trim();
 
   next.jobUrl = postingUrl;
   next.url = postingUrl;
-  next.jobTitle = detailTitle || existingTitle || titleFromHiringCafeSlug(postingUrl);
+  next.jobTitle =
+    detailTitle ||
+    (!garbageTitle ? existingTitle : '') ||
+    titleFromHiringCafeSlug(postingUrl);
   next.title = next.jobTitle;
 
-  if (detailCompany && (!existingCompany || portalCompany)) {
+  if (detailCompany && (!existingCompany || portalCompany || tickerLikeCompany)) {
     next.companyName = detailCompany;
     next.company = detailCompany;
-  } else if (portalCompany) {
+  } else if (portalCompany || tickerLikeCompany) {
     next.companyName = detailCompany || existingCompany;
     next.company = next.companyName;
   }

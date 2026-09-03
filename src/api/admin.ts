@@ -59,6 +59,16 @@ export type AdminRunSummary = {
   queueJobId?: string | null;
   trigger?: string;
   rowsExtracted?: number;
+  /** Drift taxonomy set by the run worker: zero_rows | row_drop | null. */
+  anomaly?: string | null;
+  anomalyMeta?: {
+    current: number;
+    baseline: number | null;
+    ratio: number | null;
+    baselineSource: 'last_good_run' | 'previewRows' | 'none';
+    escalated: boolean;
+    threshold: number | null;
+  } | null;
   hasSerializableOutput?: boolean;
   hasBinaryOutput?: boolean;
   screenshotCount?: number;

@@ -1,5 +1,6 @@
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
+import type { DashboardAutomationsResponse } from '../api/automation';
 import {
   automationQueryOptions,
   automationQueryKey,
@@ -11,8 +12,19 @@ import {
   type FailureQuery,
 } from '../features/failures/failureQueries';
 
-const automationResponse = (name: string) => ({
-  automations: [{ id: name, name }],
+const automationResponse = (name: string): DashboardAutomationsResponse => ({
+  automations: [
+    {
+      id: name,
+      name,
+      targetUrl: 'https://example.com/jobs',
+      lastRunTime: null,
+      rowsExtracted: 0,
+      status: 'success',
+      webhookConfigured: false,
+      proxyConfigured: false,
+    },
+  ],
   pagination: { page: 1, limit: 10, total: 1, totalPages: 1 },
   summary: {
     totalAutomations: 1,
@@ -123,7 +135,7 @@ describe('request-race query contracts', () => {
     ]);
   });
 
-  it('failure keys include page, size, query, ID, status, anomaly, reason, and time window', () => {
+  it('failure keys include page, size, query, ID, status, anomaly, reason, time window, custom range, and healed filter', () => {
     const query: FailureQuery = {
       page: 2,
       pageSize: 25,
@@ -135,6 +147,8 @@ describe('request-race query contracts', () => {
       timeWindow: '6h',
     };
 
+    // Positions 8-10 (timeWindow, from, to) are read by shouldKeepFailurePlaceholder —
+    // do not reorder without updating it.
     expect(failureQueryKey(query)).toEqual([
       'failures',
       2,
@@ -145,7 +159,29 @@ describe('request-race query contracts', () => {
       'zero_rows',
       'timeout',
       '6h',
+      '',
+      '',
+      true,
     ]);
+  });
+
+  it('failure keys carry an explicit custom range and excludeHealed=false', () => {
+    const query: FailureQuery = {
+      page: 1,
+      pageSize: 25,
+      q: '',
+      id: '',
+      status: 'failed',
+      anomaly: '',
+      reason: '',
+      timeWindow: '24h',
+      from: '2026-01-01',
+      to: '2026-01-07',
+      excludeHealed: false,
+    };
+
+    const key = failureQueryKey(query);
+    expect(key.slice(9)).toEqual(['2026-01-01', '2026-01-07', false]);
   });
 
   it('passes React Query cancellation signals to both request functions', async () => {

@@ -317,6 +317,17 @@ describe('shouldKeepExtractedJobRow', () => {
     ).toBe(true);
   });
 
+  it('keeps Hiring Cafe /job/{slug} rows even when title is a Cloudflare host token', () => {
+    expect(
+      shouldKeepExtractedJobRow({
+        jobUrl:
+          'https://hiringcafe.com/job/technical-program-manager-silicon-meta-sunnyvale-california-u5x7g4sc0m0pe26y',
+        jobTitle: 'hiringcafe.com',
+        company: 'NASDAQ: META',
+      })
+    ).toBe(true);
+  });
+
   it('drops startups.gallery index URLs but keeps normalized employer hrefs', () => {
     expect(
       shouldKeepExtractedJobRow({

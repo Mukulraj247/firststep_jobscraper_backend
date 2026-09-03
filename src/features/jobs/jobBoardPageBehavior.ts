@@ -5,6 +5,7 @@ export const JOB_BOARD_FILTER_CONTROLS = [
   'search',
   'added',
   'category',
+  'frozenCategory',
   'location',
   'workMode',
   'jobType',
@@ -69,11 +70,39 @@ export type JobBoardFilterState = {
   q: string;
   added: JobBoardAddedPreset;
   category: string;
+  /** Frozen taxonomy multi-select; a job matches when it carries any selected name. */
+  frozenCategories?: string[];
   location: string;
   workMode: string;
   jobType: string;
   source?: string;
 };
+
+/**
+ * Normalize a frozen-category selection: trim, drop blanks/duplicates, and sort by
+ * the facet's (taxonomy) order so chips keep a stable position as the user picks
+ * them and the request/cache key does not change with click order.
+ * Names the facet no longer offers are kept, at the end, so an active filter never
+ * disappears silently.
+ */
+export function orderFrozenCategories(
+  selected: readonly string[],
+  facetOrder: readonly string[] = [],
+): string[] {
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const item of selected) {
+    const name = String(item || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    cleaned.push(name);
+  }
+  const rank = (item: string) => {
+    const index = facetOrder.indexOf(item);
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return cleaned.sort((a, b) => rank(a) - rank(b));
+}
 
 export function addedSinceMs(
   preset: JobBoardAddedPreset,
@@ -88,6 +117,7 @@ export function hasActiveJobBoardFilters(value: JobBoardFilterState): boolean {
     value.q.trim()
     || (value.added && value.added !== 'all')
     || value.category
+    || value.frozenCategories?.length
     || value.location
     || value.workMode
     || value.jobType

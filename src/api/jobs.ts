@@ -35,6 +35,7 @@ export interface JobBoardJob {
     roleType?: string;
     educationRequirement?: string;
     visaSponsorship?: string;
+    frozenCategories?: string[];
     companyEmployeeCount?: number;
     companyFoundedYear?: number;
     companyWebsite?: string;
@@ -45,6 +46,8 @@ export interface JobBoardJob {
 
 export interface JobBoardFilters {
   categories: string[];
+  /** Frozen taxonomy categories that currently have jobs, in taxonomy order. */
+  frozenCategories: string[];
   locations: string[];
 }
 
@@ -64,6 +67,8 @@ export const listJobs = async (params?: {
   limit?: number;
   q?: string;
   category?: string;
+  /** Frozen taxonomy names; a job matches when it carries any of them. */
+  frozenCategories?: string[];
   location?: string;
   workMode?: string;
   jobType?: string;
@@ -79,6 +84,9 @@ export const listJobs = async (params?: {
       limit,
       ...(params?.q ? { q: params.q } : {}),
       ...(params?.category ? { category: params.category } : {}),
+      ...(params?.frozenCategories?.length
+        ? { frozenCategory: params.frozenCategories.join(',') }
+        : {}),
       ...(params?.location ? { location: params.location } : {}),
       ...(params?.workMode ? { workMode: params.workMode } : {}),
       ...(params?.jobType ? { jobType: params.jobType } : {}),
@@ -92,7 +100,11 @@ export const listJobs = async (params?: {
   return {
     jobs: data.jobs || [],
     pagination: data.pagination || { page: 1, limit, total: 0, totalPages: 1 },
-    filters: data.filters || { categories: [], locations: [] },
+    filters: {
+      categories: data.filters?.categories || [],
+      frozenCategories: data.filters?.frozenCategories || [],
+      locations: data.filters?.locations || [],
+    },
   };
 };
 

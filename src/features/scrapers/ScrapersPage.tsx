@@ -50,7 +50,7 @@ export function ScrapersPage() {
 
   useEffect(() => {
     if (!queueSocket) return;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timeout: number | undefined;
     const refresh = () => {
       window.clearTimeout(timeout);
       timeout = window.setTimeout(() => {

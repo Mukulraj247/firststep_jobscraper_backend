@@ -41,6 +41,7 @@ import {
   LLM_DAILY_CALL_BUDGET,
   LLM_DAILY_TOKEN_BUDGET,
 } from '../services/geminiJobExtractor';
+import { classifyJobCategories } from '../services/jobCategoryTagger';
 import logger from '../logger';
 
 export const JOB_ENRICHMENT_CONCURRENCY = parseInt(process.env.JOB_ENRICHMENT_CONCURRENCY || '5', 10);
@@ -469,6 +470,29 @@ async function persistResult(
     if (structured.skills?.length) $set.skills = structured.skills;
   }
 
+  if (opts.status === 'ready' || opts.status === 'partial') {
+    try {
+      const tagResult = await classifyJobCategories({
+        id: doc._id?.toString?.(),
+        title: mergedTitle,
+        description: mergedDesc,
+        contentHash: hash,
+        existingClassification: (doc as any).categoryClassification || null,
+      });
+      if (!tagResult.skipUpdate) {
+        $set.frozenCategories = tagResult.frozenCategories;
+        if (tagResult.categoryClassification) {
+          $set.categoryClassification = tagResult.categoryClassification;
+        }
+      }
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `[jobEnrichment] category tagger failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
+      );
+    }
+  }
+
   await JobBoardListing.updateOne({ _id: doc._id }, { $set });
 }
 
@@ -826,6 +850,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   }
 
   // Hiring Cafe: light HTTP HTML of the HC posting only — never scrape.do / employer pages.
+  // If HTTP is Cloudflare-blocked, fall back to a short stealth browser session (Turnstile solver).
   if (isHiringCafeSource) {
     const list = doc.listSnapshot || {};
     const hcPosting =
@@ -835,6 +860,9 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
 
     const { isHiringCafeJobPostingUrl } = await import('../services/hiringCafeDetail');
     if (hcPosting && isHiringCafeJobPostingUrl(hcPosting)) {
+      let mergedRow: Record<string, unknown> | null = null;
+      let enrichMethod: 'list' | 'browser' = 'list';
+
       try {
         const {
           fetchHiringCafePostingHtml,
@@ -843,65 +871,85 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
         } = await import('../services/hiringCafeHtmlLight');
         const light = await fetchHiringCafePostingHtml(hcPosting);
         if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
-          const mergedRow = enrichHiringCafeRowFromHtml({}, light.html, hcPosting);
-          const fields: ParsedJobFields = {
-            jobTitle: String(mergedRow.jobTitle || ''),
-            companyName: String(mergedRow.companyName || ''),
-            jobDescription: String(mergedRow.jobDescription || ''),
-            location: String(mergedRow.location || ''),
-            salaryRange: String(mergedRow.salaryRange || ''),
-            employmentType: String(mergedRow.employmentType || ''),
-            remoteType: String(mergedRow.remoteType || ''),
-            date: String(mergedRow.date || ''),
-            applyUrl: String(mergedRow.applyUrl || ''),
-            companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
-            jobCategory: String(mergedRow.jobCategory || ''),
-            source: 'html',
-          };
-          const merged = mergeParsedFields(fields, listFields);
-          const status = boardListingStatus(merged, doc.jobUrl);
-          await persistResult(doc, merged, {
-            status,
-            method: 'list',
-            tier: 0,
-            creditsSpent: 0,
-            incrementAttempts: true,
-            structured: {
-              about: String(mergedRow.about || ''),
-              skills: Array.isArray(mergedRow.skills) ? (mergedRow.skills as string[]) : [],
-              responsibilities: Array.isArray(mergedRow.responsibilities)
-                ? (mergedRow.responsibilities as string[])
-                : [],
-              minimumQualifications: Array.isArray(mergedRow.minimumQualifications)
-                ? (mergedRow.minimumQualifications as string[])
-                : [],
-              preferredQualifications: Array.isArray(mergedRow.preferredQualifications)
-                ? (mergedRow.preferredQualifications as string[])
-                : [],
-              benefits: Array.isArray(mergedRow.benefits) ? (mergedRow.benefits as string[]) : [],
-            },
-          });
-          // Persist HC-only extras that persistResult's structured path may omit.
-          await JobBoardListing.updateOne(
-            { _id: doc._id },
-            {
-              $set: {
-                companyWebsite: String(mergedRow.companyWebsite || ''),
-                aggregatorPostingUrl: hcPosting,
-                companyEmployeeCount: Number(mergedRow.companyEmployeeCount || 0) || 0,
-                companyFoundedYear: Number(mergedRow.companyFoundedYear || 0) || 0,
-                'listSnapshot.companyWebsite': String(mergedRow.companyWebsite || ''),
-                'listSnapshot.aggregatorPostingUrl': hcPosting,
-              },
-            }
-          );
-          if (status === 'ready') metrics.ready += 1;
-          else metrics.failed += 1;
-          circuitBreaker.recordSuccess();
-          return;
+          mergedRow = enrichHiringCafeRowFromHtml({}, light.html, hcPosting);
+          enrichMethod = 'list';
         }
       } catch (err: any) {
         logger.log('warn', `Hiring Cafe light enrich failed: ${err?.message || err}`);
+      }
+
+      if (!mergedRow) {
+        try {
+          const { enrichHiringCafePostingStandalone } = await import(
+            '../services/hiringCafeDetailScrape'
+          );
+          mergedRow = await enrichHiringCafePostingStandalone(hcPosting, {
+            ...(list as Record<string, unknown>),
+            jobUrl: hcPosting,
+            aggregatorPostingUrl: hcPosting,
+          });
+          if (mergedRow) enrichMethod = 'browser';
+        } catch (err: any) {
+          logger.log('warn', `Hiring Cafe browser enrich failed: ${err?.message || err}`);
+        }
+      }
+
+      if (mergedRow) {
+        const fields: ParsedJobFields = {
+          jobTitle: String(mergedRow.jobTitle || ''),
+          companyName: String(mergedRow.companyName || ''),
+          jobDescription: String(mergedRow.jobDescription || ''),
+          location: String(mergedRow.location || ''),
+          salaryRange: String(mergedRow.salaryRange || ''),
+          employmentType: String(mergedRow.employmentType || ''),
+          remoteType: String(mergedRow.remoteType || ''),
+          date: String(mergedRow.date || ''),
+          applyUrl: String(mergedRow.applyUrl || ''),
+          companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
+          jobCategory: String(mergedRow.jobCategory || ''),
+          source: 'html',
+        };
+        const merged = mergeParsedFields(fields, listFields);
+        const status = boardListingStatus(merged, doc.jobUrl);
+        await persistResult(doc, merged, {
+          status,
+          method: enrichMethod === 'browser' ? 'browser' : 'list',
+          tier: 0,
+          creditsSpent: 0,
+          incrementAttempts: true,
+          structured: {
+            about: String(mergedRow.about || ''),
+            skills: Array.isArray(mergedRow.skills) ? (mergedRow.skills as string[]) : [],
+            responsibilities: Array.isArray(mergedRow.responsibilities)
+              ? (mergedRow.responsibilities as string[])
+              : [],
+            minimumQualifications: Array.isArray(mergedRow.minimumQualifications)
+              ? (mergedRow.minimumQualifications as string[])
+              : [],
+            preferredQualifications: Array.isArray(mergedRow.preferredQualifications)
+              ? (mergedRow.preferredQualifications as string[])
+              : [],
+            benefits: Array.isArray(mergedRow.benefits) ? (mergedRow.benefits as string[]) : [],
+          },
+        });
+        await JobBoardListing.updateOne(
+          { _id: doc._id },
+          {
+            $set: {
+              companyWebsite: String(mergedRow.companyWebsite || ''),
+              aggregatorPostingUrl: hcPosting,
+              companyEmployeeCount: Number(mergedRow.companyEmployeeCount || 0) || 0,
+              companyFoundedYear: Number(mergedRow.companyFoundedYear || 0) || 0,
+              'listSnapshot.companyWebsite': String(mergedRow.companyWebsite || ''),
+              'listSnapshot.aggregatorPostingUrl': hcPosting,
+              ...(merged.applyUrl ? { applyUrl: String(merged.applyUrl) } : {}),
+            },
+          }
+        );
+        if (status === 'ready') metrics.ready += 1;
+        else metrics.failed += 1;
+        circuitBreaker.recordSuccess();
+        return;
       }
     }
 

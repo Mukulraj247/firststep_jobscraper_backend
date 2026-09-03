@@ -76,7 +76,7 @@ export function shouldShowBackgroundRefreshBar(input: {
 }
 
 export function scraperScheduleState(schedule: RobotListSchedule): ScheduleDisplayState {
-  return scheduleDisplayState({ enabled: schedule.enabled, cron: schedule.cron });
+  return scheduleDisplayState({ enabled: schedule.enabled, cron: schedule.cron ?? undefined });
 }
 
 export function scraperScheduleLabel(schedule: RobotListSchedule): string {

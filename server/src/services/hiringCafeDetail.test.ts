@@ -29,6 +29,18 @@ describe('hiringCafeDetail', () => {
     ).toBe(POSTING);
   });
 
+  it('rejects Cloudflare host titles in favor of the URL slug', () => {
+    const posting =
+      'https://hiringcafe.com/job/technical-program-manager-silicon-meta-sunnyvale-california-u5x7g4sc0m0pe26y';
+    const merged = mergeHiringCafeDetailIntoRow(
+      { company: 'NASDAQ: META', url: posting },
+      { jobTitle: 'hiringcafe.com', applyUrl: '', jobDescription: '' },
+      posting
+    );
+    expect(String(merged.jobTitle)).toMatch(/Technical Program Manager/i);
+    expect(String(merged.jobTitle)).not.toMatch(/hiringcafe\.com/i);
+  });
+
   it('merges detail fields without keeping the portal as employer', () => {
     const merged = mergeHiringCafeDetailIntoRow(
       {

@@ -631,6 +631,10 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
   // Rows with neither URL nor title are unusable downstream.
   if (!url && !title) return false;
 
+  // HC job postings survive weak Cloudflare titles ("hiringcafe.com") — real title
+  // comes from the URL slug or a later detail enrich. Check before cookie-ident drop.
+  if (url && isHiringCafeJobPostingUrl(url)) return true;
+
   // Cookie banner / pagination labels.
   if (title) {
     if (PAGINATION_TITLE_RE.test(title)) return false;
@@ -677,6 +681,7 @@ export const shouldKeepExtractedJobRow = (data: Record<string, any>): boolean =>
     if (isKnownPhenomCareersHost(url) && !isCareersJobDetailUrl(url)) return false;
 
     // Aggregator search/index URLs are not job postings.
+    // Note: HC job posting URLs already returned true at line ~636 (before cookie-ident drop).
     if (isHiringCafeUrl(url) && !isHiringCafeJobPostingUrl(url)) return false;
     if (isAccelUrl(url) && !isAccelJobPostingUrl(url)) return false;
     if (isConsiderBoardUrl(url) && !isConsiderJobPostingUrl(url)) return false;

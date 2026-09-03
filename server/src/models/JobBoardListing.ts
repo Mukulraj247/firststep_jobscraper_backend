@@ -50,6 +50,14 @@ export interface IJobBoardEnrichment {
   llmTokens?: number;
 }
 
+export interface IJobBoardCategoryClassification {
+  method: 'rules' | 'rules+ml';
+  rulesVersion: string;
+  classifierVersion: string;
+  classifiedAt?: Date | null;
+  contentHash: string;
+}
+
 export interface IJobBoardListing extends Document {
   jobUrlKey: string;
   jobUrl: string;
@@ -92,6 +100,9 @@ export interface IJobBoardListing extends Document {
   leaseUntil: Date | null;
   claimedBy: string | null;
   contentHash: string;
+  /** Up to 2 frozen categories from job-tagger sidecar. */
+  frozenCategories: string[];
+  categoryClassification?: IJobBoardCategoryClassification;
   listSnapshot: IJobBoardListSnapshot;
   enrichment: IJobBoardEnrichment;
   /** Origin of the listing, e.g. hiring_cafe for Aggregators. Empty for company scrapers. */
@@ -203,6 +214,14 @@ const JobBoardListingSchema: Schema = new Schema(
     leaseUntil: { type: Date, default: null },
     claimedBy: { type: String, default: null },
     contentHash: { type: String, default: '' },
+    frozenCategories: { type: [String], default: [] },
+    categoryClassification: {
+      method: { type: String, enum: ['rules', 'rules+ml'], default: 'rules' },
+      rulesVersion: { type: String, default: '' },
+      classifierVersion: { type: String, default: '' },
+      classifiedAt: { type: Date, default: null },
+      contentHash: { type: String, default: '' },
+    },
     listSnapshot: { type: ListSnapshotSchema, default: () => ({}) },
     enrichment: { type: EnrichmentSchema, default: () => ({}) },
     source: { type: String, default: '', index: true },
@@ -227,6 +246,12 @@ JobBoardListingSchema.index({ jobUrlKey: 1 }, { unique: true, name: 'job_board_u
 JobBoardListingSchema.index({ ownerId: 1, status: 1, date: -1 }, { name: 'job_board_owner_status_date_idx' });
 JobBoardListingSchema.index({ ownerId: 1, companyName: 1 }, { name: 'job_board_owner_company_idx' });
 JobBoardListingSchema.index({ ownerId: 1, jobCategory: 1 }, { name: 'job_board_owner_category_idx' });
+// Multikey over frozenCategories — serves both the board `$in` filter and the
+// facet unwind. frozenCategories is the only array in the key, so Mongo allows it.
+JobBoardListingSchema.index(
+  { ownerId: 1, status: 1, frozenCategories: 1 },
+  { name: 'job_board_owner_status_frozen_category_idx' }
+);
 JobBoardListingSchema.index({ ownerId: 1, source: 1, date: -1 }, { name: 'job_board_owner_source_date_idx' });
 JobBoardListingSchema.index(
   { status: 1, priority: -1, createdAt: 1 },

@@ -12,17 +12,19 @@ import {
   jobBoardPageRootOverflow,
   jobBoardScrollSx,
   JOB_BOARD_HERO_LAYOUT,
+  orderFrozenCategories,
   resolveJobDisplayInstant,
 } from './jobBoardPageBehavior';
 
 const NOW = Date.parse('2026-08-18T12:00:00.000Z');
 
 describe('job board filters', () => {
-  it('exposes search, added date, category, location, work mode, and job type — not company', () => {
+  it('exposes search, added date, category, frozen category, location, work mode, and job type — not company', () => {
     expect([...JOB_BOARD_FILTER_CONTROLS]).toEqual([
       'search',
       'added',
       'category',
+      'frozenCategory',
       'location',
       'workMode',
       'jobType',
@@ -76,6 +78,47 @@ describe('job board filters', () => {
         jobType: '',
       }),
     ).toBe(true);
+  });
+
+  it('counts a frozen category selection as an active filter', () => {
+    const base = {
+      q: '',
+      added: 'all' as const,
+      category: '',
+      location: '',
+      workMode: '',
+      jobType: '',
+    };
+    expect(hasActiveJobBoardFilters({ ...base, frozenCategories: [] })).toBe(false);
+    expect(hasActiveJobBoardFilters({ ...base, frozenCategories: ['DevOps'] })).toBe(true);
+  });
+});
+
+describe('orderFrozenCategories', () => {
+  const FACET = ['Backend Development', 'Data Engineering', 'DevOps'];
+
+  it('sorts by facet order rather than click order', () => {
+    expect(orderFrozenCategories(['DevOps', 'Backend Development'], FACET)).toEqual([
+      'Backend Development',
+      'DevOps',
+    ]);
+  });
+
+  it('produces the same selection regardless of the order the user clicked', () => {
+    const a = orderFrozenCategories(['DevOps', 'Data Engineering'], FACET);
+    const b = orderFrozenCategories(['Data Engineering', 'DevOps'], FACET);
+    expect(a).toEqual(b);
+  });
+
+  it('keeps names the facet no longer offers at the end instead of dropping them', () => {
+    expect(orderFrozenCategories(['Retired Category', 'DevOps'], FACET)).toEqual([
+      'DevOps',
+      'Retired Category',
+    ]);
+  });
+
+  it('trims, and drops blanks and duplicates', () => {
+    expect(orderFrozenCategories(['  DevOps ', 'DevOps', '', '   '], FACET)).toEqual(['DevOps']);
   });
 
   it('lets the whole job board (header + filters + cards) scroll as one section', () => {

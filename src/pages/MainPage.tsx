@@ -354,8 +354,9 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'auto',
-          ...(content === 'jobs' && jobBoardHidesScrollbar() ? jobBoardScrollSx() : {}),
+          ...(content === 'jobs' && jobBoardHidesScrollbar()
+            ? jobBoardScrollSx()
+            : { overflow: 'auto' }),
         }}
       >
         {DisplayContent()}

@@ -5,6 +5,7 @@ import {
   parseHiringCafeJobPageHtml,
   pickHiringCafeJobUrl,
   preferExternalApplyUrl,
+  titleFromHiringCafeSlug,
 } from './hiringCafeDetail';
 import { isHiringCafeUrl } from './aggregatorIdentity';
 import {
@@ -17,30 +18,42 @@ import {
   HIRING_CAFE_DETAIL_GOTO_MS,
   HIRING_CAFE_DETAIL_RENDER_MS,
 } from './hiringCafeRuntime';
+import { detectCloudflareChallenge, waitForCloudflareIfPresent } from './unblocker';
 import logger from '../logger';
 
 const DEFAULT_MAX_JOBS = 40;
 
+/** Titles we get from Cloudflare / empty shells — never treat as real job titles. */
+function isGarbageHcDetailTitle(title: string): boolean {
+  const t = String(title || '').trim();
+  if (!t) return true;
+  return /^(?:hiring\s*cafe|hiringcafe(?:\.com)?|just a moment(?:\.\.\.)?|attention required|access denied)$/i.test(
+    t
+  );
+}
+
 async function waitForHiringCafeJobContent(page: Page): Promise<void> {
   const renderMs = Math.max(2000, HIRING_CAFE_DETAIL_RENDER_MS);
-  await Promise.race([
-    page.waitForSelector('[data-testid="job-page-apply"]', { timeout: renderMs }).catch(() => {}),
-    page.waitForSelector('h1', { timeout: renderMs }).catch(() => {}),
-    page
-      .waitForFunction(
-        () => {
-          const next = document.getElementById('__NEXT_DATA__');
-          if (next?.textContent && /"apply_url"\s*:\s*"https?:/i.test(next.textContent)) {
-            return true;
+  // Do NOT resolve on bare <h1> — Cloudflare challenge pages also have an h1
+  // ("Just a moment...") which previously caused ~1–2s false "success".
+  await page
+    .waitForFunction(
+      () => {
+        const next = document.getElementById('__NEXT_DATA__');
+        const raw = next?.textContent || '';
+        if (/"apply_url"\s*:\s*"https?:/i.test(raw)) return true;
+        if (/"job_title"\s*:\s*"[^"]{4,}"/i.test(raw) || /"title"\s*:\s*"[^"]{4,}"/i.test(raw)) {
+          // Require an actual job payload, not the challenge shell.
+          if (/just a moment|cf-browser-verification|challenge-platform/i.test(document.title || '')) {
+            return false;
           }
-          const h1 = document.querySelector('h1');
-          return Boolean(h1 && (h1.textContent || '').trim().length > 3);
-        },
-        { timeout: renderMs }
-      )
-      .catch(() => {}),
-    page.waitForLoadState('networkidle', { timeout: Math.min(renderMs, 6000) }).catch(() => {}),
-  ]);
+          return /"props"\s*:\s*\{/.test(raw) && /job/i.test(raw);
+        }
+        return Boolean(document.querySelector('[data-testid="job-page-apply"]'));
+      },
+      { timeout: renderMs }
+    )
+    .catch(() => {});
 }
 
 /** Read apply_url from live page __NEXT_DATA__ (authoritative for Hiring Cafe). */
@@ -99,9 +112,29 @@ async function enrichViaBrowser(
     waitUntil: 'domcontentloaded',
     timeout: HIRING_CAFE_DETAIL_GOTO_MS,
   });
+
+  const cfCleared = await waitForCloudflareIfPresent(page, {
+    timeoutMs: Math.max(
+      60_000,
+      parseInt(String(process.env.CLOUDFLARE_WAIT_TIMEOUT_MS || '60000'), 10) || 60_000
+    ),
+    solveInteractive: true,
+  });
+  if (!cfCleared || (await detectCloudflareChallenge(page))) {
+    throw new Error(`Cloudflare challenge on Hiring Cafe detail ${postingUrl}`);
+  }
+
   await waitForHiringCafeJobContent(page);
 
+  if (await detectCloudflareChallenge(page)) {
+    throw new Error(`Cloudflare challenge still active on Hiring Cafe detail ${postingUrl}`);
+  }
+
   const html = await page.content();
+  if (!isHiringCafeHtmlJobPage(html) && !/"apply_url"\s*:\s*"https?:/i.test(html)) {
+    throw new Error(`Hiring Cafe detail missing job payload for ${postingUrl}`);
+  }
+
   const parsed = parseHiringCafeJobPageHtml(html, postingUrl);
 
   let applyUrl =
@@ -111,6 +144,18 @@ async function enrichViaBrowser(
 
   if (!applyUrl) {
     applyUrl = await resolveApplyUrlByClick(page);
+  }
+
+  // Reject Cloudflare / shell parses that stamp hostname as the title.
+  if (isGarbageHcDetailTitle(String(parsed.jobTitle || ''))) {
+    parsed.jobTitle = titleFromHiringCafeSlug(postingUrl);
+  }
+
+  const descLen = String(parsed.jobDescription || '').trim().length;
+  if (!applyUrl && descLen < 80) {
+    throw new Error(
+      `Hiring Cafe detail enrich incomplete for ${postingUrl} (no apply URL, descLen=${descLen})`
+    );
   }
 
   const merged = mergeHiringCafeDetailIntoRow(row, { ...parsed, applyUrl }, postingUrl);
@@ -204,4 +249,109 @@ export async function enrichHiringCafeListRows(
   if (opts?.onLog) await opts.onLog(message);
   else logger.log('info', message);
   return out;
+}
+
+const HC_ENRICH_BROWSER_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.HIRING_CAFE_ENRICH_BROWSER_CONCURRENCY || '1', 10) || 1
+);
+const HC_ENRICH_BROWSER_SLOT_TIMEOUT_MS = 120_000; // 2 minutes max wait for a slot
+let hcEnrichBrowserActive = 0;
+const hcEnrichBrowserWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
+
+async function acquireHcEnrichBrowserSlot(): Promise<void> {
+  if (hcEnrichBrowserActive < HC_ENRICH_BROWSER_CONCURRENCY) {
+    hcEnrichBrowserActive += 1;
+    return;
+  }
+  // Wait for a slot with timeout to prevent indefinite blocking.
+  await new Promise<void>((resolve, reject) => {
+    const waiter = { resolve, reject };
+    const timeoutId = setTimeout(() => {
+      const idx = hcEnrichBrowserWaiters.indexOf(waiter);
+      if (idx !== -1) hcEnrichBrowserWaiters.splice(idx, 1);
+      reject(new Error('HC enrich browser slot acquisition timed out'));
+    }, HC_ENRICH_BROWSER_SLOT_TIMEOUT_MS);
+
+    hcEnrichBrowserWaiters.push({
+      resolve: () => {
+        clearTimeout(timeoutId);
+        resolve();
+      },
+      reject,
+    });
+  });
+}
+
+function releaseHcEnrichBrowserSlot(): void {
+  const next = hcEnrichBrowserWaiters.shift();
+  if (next) {
+    next.resolve();
+    return;
+  }
+  hcEnrichBrowserActive = Math.max(0, hcEnrichBrowserActive - 1);
+}
+
+/**
+ * Enrichment-worker fallback: launch a short-lived stealth Chromium page for one
+ * HC posting when light HTTP is Cloudflare-blocked. Never navigates to employer sites.
+ * Uses the shared Turnstile solver via waitForCloudflareIfPresent.
+ */
+export async function enrichHiringCafePostingStandalone(
+  postingUrl: string,
+  listRow: Record<string, unknown> = {}
+): Promise<Record<string, unknown> | null> {
+  const { isHiringCafeJobPostingUrl } = await import('./hiringCafeDetail');
+  if (!isHiringCafeJobPostingUrl(postingUrl)) return null;
+
+  await acquireHcEnrichBrowserSlot();
+  const { acquirePooledPage, releasePooledPage } = await import('./browserReusePool');
+  let lease: Awaited<ReturnType<typeof acquirePooledPage>> | null = null;
+  try {
+    lease = await acquirePooledPage({
+      profile: {
+        browserType: 'playwright',
+        headless: true,
+        useStealth: true,
+        poolIsolationKey: 'hiring-cafe-enrich-browser',
+      },
+      maxPagesPerBrowser: HC_ENRICH_BROWSER_CONCURRENCY,
+      blockResources: false,
+    });
+    // SSRF rail: only allow hiringcafe.com / hiring.cafe navigations from this page.
+    await lease.page.route('**/*', async (route) => {
+      const reqUrl = route.request().url();
+      try {
+        const host = new URL(reqUrl).hostname.replace(/^www\./i, '').toLowerCase();
+        if (
+          host === 'hiringcafe.com' ||
+          host === 'hiring.cafe' ||
+          host.endsWith('.hiringcafe.com') ||
+          host.endsWith('.hiring.cafe') ||
+          host === 'cloudflare.com' ||
+          host.endsWith('.cloudflare.com') ||
+          host === 'cloudflareinsights.com' ||
+          host.endsWith('.cloudflareinsights.com')
+        ) {
+          await route.fallback();
+          return;
+        }
+      } catch {
+        /* abort bad URLs */
+      }
+      await route.abort('blockedbyclient');
+    });
+
+    const via = await enrichViaBrowser(lease.page, listRow, postingUrl);
+    return via.row;
+  } catch (err: any) {
+    logger.log(
+      'warn',
+      `enrichHiringCafePostingStandalone failed for ${postingUrl}: ${err?.message || err}`
+    );
+    return null;
+  } finally {
+    await releasePooledPage(lease);
+    releaseHcEnrichBrowserSlot();
+  }
 }

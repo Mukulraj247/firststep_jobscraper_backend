@@ -2965,8 +2965,9 @@ export function looksLikePhenomBoard(url: string): boolean {
   if (host === 'google.com' || host.endsWith('.google.com') || host === 'goo.gle') {
     return false;
   }
-  // Directory allowlist before TalentBrew `/search-jobs` heuristic (Walgreens, etc.).
-  if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) return true;
+  // Directory allowlist before TalentBrew `/search-jobs` heuristic (Walgreens, etc.),
+  // except for Radancy SEO deep paths on hosts the directory mis-tagged (usaajobs.com).
+  if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host) && !looksLikeRadancySeoSearchPath(path)) return true;
   if (looksLikeTalentBrewBoard(url)) return false;
   if (host.includes('phenompeople.com')) return true;
   if (host === 'eightfold.ai' || host.endsWith('.eightfold.ai')) return true;
@@ -2986,6 +2987,16 @@ export function looksLikePhenomBoard(url: string): boolean {
 }
 
 /**
+ * Radancy SEO shells carry filter segments after `search-jobs`, e.g.
+ * `/search-jobs/{Keywords}/{Location}/{OrgId}/{Cat}/{LocType}/{Path}/{lat}/{lon}/{dist}/{type}`.
+ * A bare `/search-jobs` (or `/us/en/search-jobs`) is a Phenom list shell instead, so
+ * only these deep paths are strong enough to outrank the Phenom host directory.
+ */
+function looksLikeRadancySeoSearchPath(path: string): boolean {
+  return /(?:^|\/)(?:[a-z]{2}(?:-[a-z]{2})?\/)?search-jobs\/[^/]+(?:\/[^/]+)+$/i.test(path);
+}
+
+/**
  * Radancy / Talent Brew career shells use `/search-jobs` (often with SEO path
  * segments for keywords/location/orgId). Not Phenom Intuit `/search-jobs`, and
  * not Talent Brew marketing hosts that we remap to Workday CXS (Empower).
@@ -3000,9 +3011,12 @@ export function looksLikeTalentBrewBoard(url: string): boolean {
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
   if (isTalentBrewWorkdayHost(url)) return false;
-  if (PHENOM_SEARCH_JOBS_HOSTS.has(host)) return false;
-  if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) return false;
   if (isJibeCareerHost(url)) return false;
+  // A Radancy SEO deep path is decisive even when the Phenom directory lists the host.
+  if (!looksLikeRadancySeoSearchPath(path)) {
+    if (PHENOM_SEARCH_JOBS_HOSTS.has(host)) return false;
+    if (DIRECTORY_PHENOM_BOARD_HOSTS.has(host)) return false;
+  }
   return /(?:^|\/)(?:[a-z]{2}(?:-[a-z]{2})?\/)?search-jobs(?:\/|$)/i.test(path);
 }
 
@@ -4739,6 +4753,32 @@ export function parseAtsBoardSearchQuery(pageUrl: string): string {
 }
 
 /**
+ * Boards whose list API already received the start-URL keyword (BoA `term=`,
+ * Findly `keyword=`, Talent Brew `Keywords=`, Phenom `keywords`, Wayfair/Workday
+ * search payloads).
+ *
+ * Re-filtering titles after a server-side relevance search drops legitimate hits:
+ * `keywords=data+analytics` requires every word locally, so it would throw away
+ * both "Data Engineer" and "Analytics Engineer" that the provider itself matched.
+ */
+function atsBoardAppliesKeywordServerSide(pageUrl: string): boolean {
+  try {
+    if (new URL(pageUrl).hostname.replace(/^www\./i, '').toLowerCase() === 'careers.bankofamerica.com') {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return (
+    looksLikeFindlyBoard(pageUrl) ||
+    looksLikeWorkdayBoard(pageUrl) ||
+    looksLikeWayfairCareersBoard(pageUrl) ||
+    looksLikeTalentBrewBoard(pageUrl) ||
+    looksLikePhenomBoard(pageUrl)
+  );
+}
+
+/**
  * Keep jobs matching the start-URL search, then cap to ~UI pages
  * (maxPages × pagesize, default 20 per page).
  */
@@ -4829,13 +4869,14 @@ export function applyAtsBoardSearchAndPageLimits(
       searchRaw.replace(/\s+/g, '')
     );
     const titleQuery = queryOrQ || (searchIsBoardMode ? '' : searchRaw);
-    // Findly already applies `keyword=` server-side; title re-filter zeros Travelers
-    // when the API returns loosely matched titles alongside country facets.
+    // Only re-filter titles when nothing upstream already narrowed the result set —
+    // otherwise a server-side keyword search plus a local AND-match zeros the board.
     applyKeywordToTitles = !!(
       normalizeCareerSearchKeywords(titleQuery) &&
       !cityLocations.length &&
       !countries.length &&
-      !parsed.searchParams.get('keyword')
+      !parsed.searchParams.get('keyword') &&
+      !atsBoardAppliesKeywordServerSide(pageUrl)
     );
   } catch {
     /* keep adapter rows */

@@ -597,7 +597,7 @@ describe('task 9 visual contracts mirrored on failures', () => {
     expect(failuresTableScrollSx().flex).toBe('none');
     expect(failuresTableScrollSx().overflowY).toBe('visible');
     expect(failuresTableScrollSx().overflowX).toBe('auto');
-    expect(failuresTableScrollSx().scrollbarWidth).toBeUndefined();
-    expect(failuresTableScrollSx().maxHeight).toBeUndefined();
+    expect(failuresTableScrollSx()).not.toHaveProperty('scrollbarWidth');
+    expect(failuresTableScrollSx()).not.toHaveProperty('maxHeight');
   });
 });

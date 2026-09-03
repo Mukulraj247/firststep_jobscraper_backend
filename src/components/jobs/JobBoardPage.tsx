@@ -34,6 +34,7 @@ import {
   WorkOutline,
 } from '@mui/icons-material';
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
+import { FrozenCategoryBadge, frozenCategoriesFromJob } from './FrozenCategoryBadge';
 import { resolveJobBoardCompany, resolveJobBoardLocation } from '../../utils/jobBoardDisplay';
 import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
 import {
@@ -68,6 +69,7 @@ import {
   jobBoardFilterChipSx,
   jobBoardPageRootOverflow,
   jobBoardScrollSx,
+  orderFrozenCategories,
   resolveJobDisplayInstant,
   type JobBoardAddedPreset,
 } from '../../features/jobs/jobBoardPageBehavior';
@@ -384,6 +386,7 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
   const location = formatCardLocation(locationFull);
   const salary = asText(data.salaryRange);
   const category = asText(data.jobCategory);
+  const frozenCategories = frozenCategoriesFromJob(data as Record<string, unknown>);
   const employment = asText(data.employmentType);
   const remote = asText(data.remoteType);
   const asList = (v: unknown): string[] =>
@@ -570,6 +573,14 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
           </Stack>
         )}
       </Stack>
+
+      {frozenCategories.length > 0 && (
+        <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75} sx={{ minWidth: 0 }}>
+          {frozenCategories.map((cat) => (
+            <FrozenCategoryBadge key={cat} name={cat} />
+          ))}
+        </Stack>
+      )}
 
       {location && (
         <Stack
@@ -790,6 +801,20 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
 };
 
 
+const applyButtonSx = {
+  bgcolor: FIRSTSTEP.teal,
+  color: FIRSTSTEP.navyDeep,
+  fontWeight: 700,
+  textTransform: 'none',
+  px: 2.5,
+  py: 1,
+  borderRadius: 2,
+  boxShadow: `0 4px 14px ${tint(FIRSTSTEP.teal, 0.34)}`,
+  whiteSpace: 'nowrap',
+  '&:hover': { bgcolor: '#5fc4b9' },
+  '&.Mui-disabled': { bgcolor: tint(FIRSTSTEP.teal, 0.35), color: FIRSTSTEP.navyDeep },
+} as const;
+
 const JobDetailModal: React.FC<{
   open: boolean;
   job: JobBoardJob | null;
@@ -824,6 +849,7 @@ const JobDetailModal: React.FC<{
   const employment = asText(data.employmentType);
   const remote = asText(data.remoteType);
   const category = asText(data.jobCategory);
+  const frozenCategories = frozenCategoriesFromJob(data as Record<string, unknown>);
   const industry = asText(data.sectorIndustry);
   const jobId = asText(data.jobId);
   const jobUrl = asText(data.jobUrl);
@@ -901,6 +927,13 @@ const JobDetailModal: React.FC<{
               >
                 {loading ? '…' : title}
               </Typography>
+              {frozenCategories.length > 0 && (
+                <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75}>
+                  {frozenCategories.map((cat) => (
+                    <FrozenCategoryBadge key={cat} name={cat} />
+                  ))}
+                </Stack>
+              )}
               <Typography sx={{ color: TEAL, fontWeight: 650, mb: 1 }}>{company}</Typography>
               <Stack direction="row" flexWrap="wrap" gap={0.75}>
                 {location && <SoftChip label={location} />}
@@ -915,30 +948,30 @@ const JobDetailModal: React.FC<{
           </Stack>
 
           <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ flexShrink: 0 }}>
-            <Button
-              variant="contained"
-              size="medium"
-              disabled={!applyUrl || loading}
-              endIcon={<OpenInNew sx={{ fontSize: 16 }} />}
-              href={applyUrl || undefined}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                bgcolor: FIRSTSTEP.teal,
-                color: FIRSTSTEP.navyDeep,
-                fontWeight: 700,
-                textTransform: 'none',
-                px: 2.5,
-                py: 1,
-                borderRadius: 2,
-                boxShadow: `0 4px 14px ${tint(FIRSTSTEP.teal, 0.34)}`,
-                whiteSpace: 'nowrap',
-                '&:hover': { bgcolor: '#5fc4b9' },
-                '&.Mui-disabled': { bgcolor: tint(FIRSTSTEP.teal, 0.35), color: FIRSTSTEP.navyDeep },
-              }}
-            >
-              {t('jobboard.apply')}
-            </Button>
+            {applyUrl ? (
+              <Button
+                variant="contained"
+                size="medium"
+                disabled={loading}
+                endIcon={<OpenInNew sx={{ fontSize: 16 }} />}
+                href={applyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={applyButtonSx}
+              >
+                {t('jobboard.apply')}
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                size="medium"
+                disabled
+                endIcon={<OpenInNew sx={{ fontSize: 16 }} />}
+                sx={applyButtonSx}
+              >
+                {t('jobboard.apply')}
+              </Button>
+            )}
             <IconButton onClick={onClose} size="small" aria-label="Close" sx={{ color: 'text.secondary' }}>
               <Close fontSize="small" />
             </IconButton>
@@ -1096,6 +1129,60 @@ const JobBoardFacetAutocomplete: React.FC<{
   );
 };
 
+/**
+ * Frozen taxonomy multi-select. Options come from the facet (only categories that
+ * currently have jobs) and selections render as the same colored badges the cards use.
+ */
+const JobBoardFrozenCategoryFilter: React.FC<{
+  value: string[];
+  options: string[];
+  onChange: (next: string[]) => void;
+}> = ({ value, options, onChange }) => {
+  const merged = useMemo(() => {
+    const missing = value.filter((item) => !options.includes(item));
+    return missing.length ? [...missing, ...options] : options;
+  }, [options, value]);
+
+  return (
+    <Autocomplete
+      multiple
+      disableCloseOnSelect
+      size="small"
+      options={merged}
+      value={value}
+      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], options))}
+      getOptionLabel={(option) => option}
+      isOptionEqualToValue={(a, b) => a === b}
+      autoHighlight
+      clearOnEscape
+      ListboxProps={{ sx: jobBoardFacetListboxSx() }}
+      renderOption={(props, option) => (
+        <li {...props} key={option} title={option}>
+          <FrozenCategoryBadge name={option} />
+        </li>
+      )}
+      renderTags={(selected, getTagProps) =>
+        selected.map((option, index) => {
+          const { key, onDelete } = getTagProps({ index });
+          return (
+            <Box key={key} sx={{ display: 'inline-flex', m: 0.25 }}>
+              <FrozenCategoryBadge name={option} onDelete={onDelete} />
+            </Box>
+          );
+        })
+      }
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="Job category"
+          placeholder={value.length ? '' : 'Any category'}
+        />
+      )}
+      sx={{ minWidth: 0, flex: '1 1 260px', maxWidth: '100%', ...heroGlassFormControlSx() }}
+    />
+  );
+};
+
 const JobBoardChipFilter: React.FC<{
   caption: string;
   value: string;
@@ -1132,13 +1219,18 @@ export const JobBoardPage: React.FC = () => {
   const isDark = theme.palette.mode === 'dark';
 
   const [jobs, setJobs] = useState<JobBoardJob[]>([]);
-  const [filters, setFilters] = useState<JobBoardFilters>({ categories: [], locations: [] });
+  const [filters, setFilters] = useState<JobBoardFilters>({
+    categories: [],
+    frozenCategories: [],
+    locations: [],
+  });
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 });
   const [page, setPage] = useState(1);
   const [q, setQ] = useState('');
   const [qDraft, setQDraft] = useState('');
   const [added, setAdded] = useState<JobBoardAddedPreset>('all');
   const [category, setCategory] = useState('');
+  const [frozenCategories, setFrozenCategories] = useState<string[]>([]);
   const [location, setLocation] = useState('');
   const [workMode, setWorkMode] = useState('');
   const [jobType, setJobType] = useState('');
@@ -1159,6 +1251,7 @@ export const JobBoardPage: React.FC = () => {
         limit: PAGE_SIZE,
         q: q || undefined,
         category: category || undefined,
+        frozenCategories: frozenCategories.length ? frozenCategories : undefined,
         location: location || undefined,
         workMode: workMode || undefined,
         jobType: jobType || undefined,
@@ -1169,6 +1262,7 @@ export const JobBoardPage: React.FC = () => {
       setPagination(res.pagination);
       setFilters({
         categories: res.filters?.categories || [],
+        frozenCategories: res.filters?.frozenCategories || [],
         locations: res.filters?.locations || [],
       });
     } catch {
@@ -1177,7 +1271,7 @@ export const JobBoardPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, q, category, location, workMode, jobType, added, source, t]);
+  }, [page, q, category, frozenCategories, location, workMode, jobType, added, source, t]);
 
   useEffect(() => {
     void loadJobs();
@@ -1238,6 +1332,7 @@ export const JobBoardPage: React.FC = () => {
     setQ('');
     setAdded('all');
     setCategory('');
+    setFrozenCategories([]);
     setLocation('');
     setWorkMode('');
     setJobType('');
@@ -1249,6 +1344,7 @@ export const JobBoardPage: React.FC = () => {
     q,
     added,
     category,
+    frozenCategories,
     location,
     workMode,
     jobType,
@@ -1357,6 +1453,17 @@ export const JobBoardPage: React.FC = () => {
                 setPage(1);
               }}
             />
+
+            {filters.frozenCategories.length ? (
+              <JobBoardFrozenCategoryFilter
+                value={frozenCategories}
+                options={filters.frozenCategories}
+                onChange={(next) => {
+                  setFrozenCategories(next);
+                  setPage(1);
+                }}
+              />
+            ) : null}
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} useFlexGap flexWrap="wrap">
               <JobBoardFacetAutocomplete

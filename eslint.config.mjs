@@ -131,5 +131,25 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.node },
     },
+  },
+  {
+    // Node-side diagnostics scripts and child-process entrypoints kept as CommonJS.
+    files: ['server/src/**/*.js', 'server/src/**/*.cjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'commonjs',
+      globals: { ...globals.node },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
+    files: ['src/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.browser },
+    },
   }
 );

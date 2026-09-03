@@ -138,3 +138,13 @@ PROXY_POOL=
 # MAX_PARSE_BYTES=1572864              # Cap HTML buffered/parsed (~1.5 MB)
 # UV_THREADPOOL_SIZE=8                 # Set on the enrichment process for gzip concurrency
 
+# -----------------------------------------------------------------------------
+# Job category tagger sidecar (Python FastAPI — ./job-tagger inside this repo)
+# PM2: scoutx-job-tagger · Called by scoutx-enrichment after ready/partial enrich
+# -----------------------------------------------------------------------------
+# JOB_TAGGER_URL=http://127.0.0.1:8000
+# JOB_TAGGER_TIMEOUT_MS=3000
+# JOB_TAGGER_USE_ML=true
+# JOB_TAGGER_MAX_BADGES=2
+# JOB_TAGGER_ENABLED=true
+

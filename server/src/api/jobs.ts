@@ -6,6 +6,10 @@ import logger from '../logger';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import { applyJobBoardListFilters, addedSinceFromPreset } from '../services/jobBoardQuery';
 import {
+  FROZEN_JOB_CATEGORIES,
+  normalizeFrozenCategoryFilter,
+} from '../../../src/shared/frozenJobCategories';
+import {
   decodeHtmlEntities,
   pickBestDescription,
   sanitizeCompanyName,
@@ -30,6 +34,7 @@ type FacetCacheEntry = {
   expiresAt: number;
   companies: string[];
   categories: string[];
+  frozenCategories: string[];
   locations: string[];
 };
 
@@ -225,6 +230,9 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
   const aggregatorPostingUrl = String(
     row.aggregatorPostingUrl || list.aggregatorPostingUrl || ''
   ).trim();
+  const frozenCategories = Array.isArray(row.frozenCategories)
+    ? row.frozenCategories.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : [];
 
   return {
     id: row._id?.toString?.() || String(row.id),
@@ -266,25 +274,32 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
       ...(companyFoundedYear > 0 ? { companyFoundedYear } : {}),
       ...(companyWebsite ? { companyWebsite } : {}),
       ...(aggregatorPostingUrl ? { aggregatorPostingUrl } : {}),
+      ...(frozenCategories.length ? { frozenCategories } : {}),
     },
   };
 }
 
 async function getFacets(
   ownerId: string,
-): Promise<{ companies: string[]; categories: string[]; locations: string[] }> {
+): Promise<{
+  companies: string[];
+  categories: string[];
+  frozenCategories: string[];
+  locations: string[];
+}> {
   const cached = facetCache.get(ownerId);
   if (cached && cached.expiresAt > Date.now()) {
     return {
       companies: cached.companies,
       categories: cached.categories,
+      frozenCategories: cached.frozenCategories || [],
       locations: cached.locations || [],
     };
   }
 
   const match = boardMatch(ownerId);
 
-  const [companyFacets, categoryFacets, locationFacets] = await Promise.all([
+  const [companyFacets, categoryFacets, frozenCategoryFacets, locationFacets] = await Promise.all([
     JobBoardListing.aggregate([
       { $match: match },
       {
@@ -321,6 +336,16 @@ async function getFacets(
       { $sort: { count: -1 } },
       { $limit: 40 },
     ]),
+    // Frozen taxonomy facet: only offer categories that actually have jobs.
+    JobBoardListing.aggregate([
+      { $match: { ...match, frozenCategories: { $nin: [null, []] } } },
+      { $project: { frozenCategories: 1 } },
+      { $unwind: '$frozenCategories' },
+      { $group: { _id: '$frozenCategories', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: FROZEN_JOB_CATEGORIES.length },
+    ]),
     JobBoardListing.aggregate([
       { $match: match },
       {
@@ -351,6 +376,11 @@ async function getFacets(
   const categories = categoryFacets
     .map((f: any) => decodeHtmlEntities(String(f._id || '')))
     .filter(Boolean);
+  // Taxonomy order (not count order) so the filter list stays put between reloads.
+  const presentFrozen = new Set(
+    frozenCategoryFacets.map((f: any) => String(f._id || '').trim()).filter(Boolean)
+  );
+  const frozenCategories = FROZEN_JOB_CATEGORIES.filter((name) => presentFrozen.has(name));
   const locations = locationFacets
     .map((f: any) => normalizeLocation(decodeHtmlEntities(String(f._id || ''))))
     .filter(Boolean);
@@ -359,9 +389,10 @@ async function getFacets(
     expiresAt: Date.now() + FACET_TTL_MS,
     companies,
     categories,
+    frozenCategories,
     locations: uniqueLocations,
   });
-  return { companies, categories, locations: uniqueLocations };
+  return { companies, categories, frozenCategories, locations: uniqueLocations };
 }
 
 async function getCachedCount(cacheKey: string, match: Record<string, any>): Promise<number> {
@@ -380,6 +411,7 @@ router.get('/jobs', async (req: any, res: any) => {
     const q = String(req.query.q || '').trim();
     const company = String(req.query.company || '').trim();
     const category = String(req.query.category || '').trim();
+    const frozenCategories = normalizeFrozenCategoryFilter(req.query.frozenCategory);
     const location = String(req.query.location || '').trim();
     const workMode = String(req.query.workMode || '').trim();
     const jobType = String(req.query.jobType || '').trim();
@@ -408,6 +440,11 @@ router.get('/jobs', async (req: any, res: any) => {
           ],
         },
       ];
+    }
+    // Frozen categories are a controlled taxonomy stored exactly as tagged, so an
+    // indexed `$in` (match any selected category) is enough — no regex needed.
+    if (frozenCategories.length) {
+      match.$and = [...(match.$and || []), { frozenCategories: { $in: frozenCategories } }];
     }
 
     if (q) {
@@ -442,6 +479,7 @@ router.get('/jobs', async (req: any, res: any) => {
       ownerId,
       company,
       category,
+      frozenCategories,
       q,
       runId,
       location,
@@ -449,7 +487,7 @@ router.get('/jobs', async (req: any, res: any) => {
       jobType,
       added,
       source: req.query.source != null ? String(req.query.source).trim() : '',
-      v: 11,
+      v: 12,
     });
     const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {
@@ -461,6 +499,7 @@ router.get('/jobs', async (req: any, res: any) => {
       jobDescription: 1,
       descriptionSnippet: 1,
       jobCategory: 1,
+      frozenCategories: 1,
       location: 1,
       salaryRange: 1,
       employmentType: 1,
@@ -523,6 +562,7 @@ router.get('/jobs', async (req: any, res: any) => {
         .filter(Boolean),
       filters: {
         categories: facets.categories,
+        frozenCategories: facets.frozenCategories,
         locations: facets.locations,
       },
     });
@@ -546,7 +586,7 @@ router.get('/jobs/:id', async (req: any, res: any) => {
       status: { $in: ['ready', 'partial'] },
     })
       .select(
-        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
       )
       .lean();
 
