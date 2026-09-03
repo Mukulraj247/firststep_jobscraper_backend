@@ -111,6 +111,12 @@ module.exports = {
         NODE_ENV: 'production',
         UV_THREADPOOL_SIZE: '8',
         JOB_TAGGER_URL: 'http://127.0.0.1:8000',
+        // Enrichment is ATS + HTTP only — never Chromium (fights scraper slots on 2–3GB).
+        HIRING_CAFE_ENRICH_BROWSER_ENABLED: 'false',
+        LOW_MEMORY_MODE: 'true',
+        // Prefer free ATS; scrape.do off unless SCRAPE_DO_TOKEN is in .env
+        JOB_ENRICHMENT_BATCH: '8',
+        JOB_ENRICHMENT_CONCURRENCY: '4',
       },
     },
     {

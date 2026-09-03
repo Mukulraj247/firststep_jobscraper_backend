@@ -121,18 +121,20 @@ DEFAULT_PROXY_URL=
 PROXY_POOL=
 
 # -----------------------------------------------------------------------------
-# Job board enrichment (detail-page scrape.do / ATS → maxun_job_board)
+# Job board enrichment (detail-page ATS / light HTTP → maxun_job_board)
 # Run as a separate PM2 process: npm run worker:enrichment
-# Never launches Chromium — keep this off the API event loop.
+# Never launches Chromium on the droplet (CHROMIUM_MAX_SLOTS is for scraper/aggregators).
+# Hiring Cafe: HTTP direct→proxy only here; browser CF solve runs in scoutx-aggregators.
 # -----------------------------------------------------------------------------
-# SCRAPE_DO_TOKEN=your_scrape_do_token
+# SCRAPE_DO_TOKEN=your_scrape_do_token  # Leave unset to stay on free ATS/HTTP paths
 # SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause enrichment when daily credits hit this
 # SCRAPE_DO_GEO=northamerica           # Used only on tier-3 (super+render) requests
 # SCRAPE_PROFILE_REPROBE_DAYS=30       # Re-try cheaper tiers after this many days
-# JOB_ENRICHMENT_CONCURRENCY=5         # In-flight enrichments per process
-# JOB_ENRICHMENT_BATCH=20              # Docs claimed per pass
+# JOB_ENRICHMENT_CONCURRENCY=4         # In-flight enrichments per process
+# JOB_ENRICHMENT_BATCH=8               # Docs claimed per pass
 # JOB_ENRICHMENT_RATE_PER_MIN=12       # Token-bucket pace (~4k/day average is ~2.8/min)
 # JOB_ENRICHMENT_MAX_ATTEMPTS=4
+# HIRING_CAFE_ENRICH_BROWSER_ENABLED=false  # Keep false on 2–3GB droplets
 # JOB_BOARD_STALE_DAYS=14              # Skip re-fetch when board row is fresher than this
 # JOB_BOARD_MIN_DESC_CHARS=400         # List rows this complete become ready with 0 credits
 # MAX_PARSE_BYTES=1572864              # Cap HTML buffered/parsed (~1.5 MB)

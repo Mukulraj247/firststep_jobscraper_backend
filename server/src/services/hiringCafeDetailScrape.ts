@@ -208,12 +208,16 @@ export async function enrichHiringCafeListRows(
   opts?: {
     maxJobs?: number;
     onLog?: (message: string) => Promise<void> | void;
-    /** When true (default), skip HTTP __NEXT_DATA__ fetch and use Playwright only. */
+    /**
+     * When true, skip HTTP and use Playwright only.
+     * Default false: try cheap HTTP (direct→proxy) first, then browser on this page.
+     * Aggregator already holds a Chromium slot — that is the right place for Turnstile.
+     */
     browserOnly?: boolean;
   }
 ): Promise<Record<string, unknown>[]> {
   const maxJobs = Math.max(1, Math.min(opts?.maxJobs || DEFAULT_MAX_JOBS, 80));
-  const browserOnly = opts?.browserOnly !== false;
+  const browserOnly = opts?.browserOnly === true;
   const seen = new Set<string>();
   let enriched = 0;
   let failed = 0;
@@ -285,7 +289,25 @@ const HC_ENRICH_BROWSER_CONCURRENCY = Math.max(
   1,
   parseInt(process.env.HIRING_CAFE_ENRICH_BROWSER_CONCURRENCY || '1', 10) || 1
 );
-const HC_ENRICH_BROWSER_SLOT_TIMEOUT_MS = 120_000; // 2 minutes max wait for a slot
+/**
+ * Enrichment worker must NOT launch Chromium on the 2–3GB droplet — it fights
+ * scoutx-scraper / scoutx-aggregators for CHROMIUM_MAX_SLOTS=2 and times out.
+ * Browser HC detail belongs in the aggregator process only.
+ * Opt-in: HIRING_CAFE_ENRICH_BROWSER_ENABLED=true
+ */
+function isHcEnrichBrowserEnabled(): boolean {
+  const raw = String(process.env.HIRING_CAFE_ENRICH_BROWSER_ENABLED || '').trim().toLowerCase();
+  if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+  if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+  // Default off when scrape.do is disabled or low-memory (production droplet topology).
+  if (process.env.LOW_MEMORY_MODE === 'true') return false;
+  if (!String(process.env.SCRAPE_DO_TOKEN || '').trim()) return false;
+  return false;
+}
+const HC_ENRICH_BROWSER_SLOT_TIMEOUT_MS = Math.max(
+  5_000,
+  parseInt(process.env.HIRING_CAFE_ENRICH_BROWSER_SLOT_TIMEOUT_MS || '15000', 10) || 15_000
+);
 let hcEnrichBrowserActive = 0;
 const hcEnrichBrowserWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 
@@ -387,11 +409,9 @@ async function tryBrowserEnrich(
 }
 
 /**
- * Enrichment-worker fallback: launch a short-lived stealth Chromium page for one
- * HC posting when light HTTP is Cloudflare-blocked. Never navigates to employer sites.
- * 
- * Tiered approach: direct browser first, then proxy on Cloudflare block.
- * Uses the shared Turnstile solver via waitForCloudflareIfPresent.
+ * Enrichment-worker path for one HC posting.
+ * Default: HTTP only (direct → Decodo). No Chromium — enrichment is ATS/HTTP on the droplet.
+ * Optional browser when HIRING_CAFE_ENRICH_BROWSER_ENABLED=true (not for 2–3GB prod).
  */
 export async function enrichHiringCafePostingStandalone(
   postingUrl: string,
@@ -399,6 +419,24 @@ export async function enrichHiringCafePostingStandalone(
 ): Promise<Record<string, unknown> | null> {
   const { isHiringCafeJobPostingUrl } = await import('./hiringCafeDetail');
   if (!isHiringCafeJobPostingUrl(postingUrl)) return null;
+
+  // Prefer cheap HTTP (already tiered direct→proxy inside fetchHiringCafePostingHtml).
+  try {
+    const light = await fetchHiringCafePostingHtml(postingUrl);
+    if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
+      return enrichHiringCafeRowFromHtml(listRow, light.html, postingUrl);
+    }
+  } catch (err: any) {
+    logger.log('warn', `HC standalone HTTP enrich failed: ${err?.message || err}`);
+  }
+
+  if (!isHcEnrichBrowserEnabled()) {
+    logger.log(
+      'info',
+      `HC standalone skip browser (HTTP-only enrichment mode) for ${postingUrl}`
+    );
+    return null;
+  }
 
   await acquireHcEnrichBrowserSlot();
   try {

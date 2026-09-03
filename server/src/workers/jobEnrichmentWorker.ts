@@ -866,8 +866,9 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  // Hiring Cafe: light HTTP HTML of the HC posting only — never scrape.do / employer pages.
-  // If HTTP is Cloudflare-blocked, fall back to a short stealth browser session (Turnstile solver).
+  // Hiring Cafe: HTTP-only in enrichment (direct→proxy). Never Chromium here —
+  // scoutx-enrichment shares CHROMIUM_MAX_SLOTS with scrapers and will hang.
+  // Real CF clears belong in scoutx-aggregators detail scrape.
   if (isHiringCafeSource) {
     const list = doc.listSnapshot || {};
     const hcPosting =
@@ -881,34 +882,21 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       let enrichMethod: 'list' | 'browser' = 'list';
 
       try {
-        const {
-          fetchHiringCafePostingHtml,
-          enrichHiringCafeRowFromHtml,
-          isHiringCafeHtmlJobPage,
-        } = await import('../services/hiringCafeHtmlLight');
-        const light = await fetchHiringCafePostingHtml(hcPosting);
-        if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
-          mergedRow = enrichHiringCafeRowFromHtml({}, light.html, hcPosting);
-          enrichMethod = 'list';
+        const { enrichHiringCafePostingStandalone } = await import(
+          '../services/hiringCafeDetailScrape'
+        );
+        mergedRow = await enrichHiringCafePostingStandalone(hcPosting, {
+          ...(list as Record<string, unknown>),
+          jobUrl: hcPosting,
+          aggregatorPostingUrl: hcPosting,
+        });
+        if (mergedRow) {
+          enrichMethod = String(mergedRow._enrichMethod || '').includes('browser')
+            ? 'browser'
+            : 'list';
         }
       } catch (err: any) {
-        logger.log('warn', `Hiring Cafe light enrich failed: ${err?.message || err}`);
-      }
-
-      if (!mergedRow) {
-        try {
-          const { enrichHiringCafePostingStandalone } = await import(
-            '../services/hiringCafeDetailScrape'
-          );
-          mergedRow = await enrichHiringCafePostingStandalone(hcPosting, {
-            ...(list as Record<string, unknown>),
-            jobUrl: hcPosting,
-            aggregatorPostingUrl: hcPosting,
-          });
-          if (mergedRow) enrichMethod = 'browser';
-        } catch (err: any) {
-          logger.log('warn', `Hiring Cafe browser enrich failed: ${err?.message || err}`);
-        }
+        logger.log('warn', `Hiring Cafe enrich failed: ${err?.message || err}`);
       }
 
       if (mergedRow) {
@@ -970,17 +958,16 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       }
     }
 
-    // HTTP + browser both failed — keep queued with backoff so we retry (CF is flaky).
-    // Permanent partial was leaving ~100s of HC jobs invisible on the Job Board.
+    // HTTP failed (CF). Requeue with backoff — do not burn Chromium from enrichment.
     const attempts = Number(doc.enrichment?.attempts || 0) + 1;
     if (attempts < JOB_ENRICHMENT_MAX_ATTEMPTS) {
-      const backoffMs = Math.min(30 * 60_000, 60_000 * Math.pow(2, Math.max(0, attempts - 1)));
+      const backoffMs = Math.min(60 * 60_000, 5 * 60_000 * Math.pow(2, Math.max(0, attempts - 1)));
       await persistResult(doc, listFields, {
         status: 'queued',
         method: 'none',
         tier: 0,
         creditsSpent: 0,
-        error: 'hiring_cafe_cf_retry',
+        error: 'hiring_cafe_http_cf_retry',
         nextAttemptAt: new Date(Date.now() + backoffMs),
         incrementAttempts: true,
       });
