@@ -143,7 +143,8 @@ PROXY_POOL=
 # PM2: scoutx-job-tagger · Called by scoutx-enrichment after ready/partial enrich
 # -----------------------------------------------------------------------------
 # JOB_TAGGER_URL=http://127.0.0.1:8000
-# JOB_TAGGER_TIMEOUT_MS=3000
+# JOB_TAGGER_TIMEOUT_MS=15000          # classify-one (enrichment); 3s is too tight with ML
+# JOB_TAGGER_BATCH_TIMEOUT_MS=120000   # classify-batch (backfill); optional override
 # JOB_TAGGER_USE_ML=true
 # JOB_TAGGER_MAX_BADGES=2
 # JOB_TAGGER_ENABLED=true

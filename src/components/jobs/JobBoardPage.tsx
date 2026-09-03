@@ -35,6 +35,7 @@ import {
 } from '@mui/icons-material';
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
 import { FrozenCategoryBadge, frozenCategoriesFromJob } from './FrozenCategoryBadge';
+import { FROZEN_JOB_CATEGORIES } from '../../shared/frozenJobCategories';
 import { resolveJobBoardCompany, resolveJobBoardLocation } from '../../utils/jobBoardDisplay';
 import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
 import {
@@ -1130,27 +1131,32 @@ const JobBoardFacetAutocomplete: React.FC<{
 };
 
 /**
- * Frozen taxonomy multi-select. Options come from the facet (only categories that
- * currently have jobs) and selections render as the same colored badges the cards use.
+ * Specialty filter = job-tagger taxonomy (internal name: frozenCategories).
+ * Always shown. Options: categories that currently have jobs first, then the rest.
  */
-const JobBoardFrozenCategoryFilter: React.FC<{
+const JobBoardSpecialtyFilter: React.FC<{
   value: string[];
-  options: string[];
+  /** Categories present on at least one board job (from API facet). */
+  facetOptions: string[];
   onChange: (next: string[]) => void;
-}> = ({ value, options, onChange }) => {
-  const merged = useMemo(() => {
-    const missing = value.filter((item) => !options.includes(item));
-    return missing.length ? [...missing, ...options] : options;
-  }, [options, value]);
+}> = ({ value, facetOptions, onChange }) => {
+  const options = useMemo(() => {
+    const present = new Set(facetOptions);
+    const withJobs = FROZEN_JOB_CATEGORIES.filter((name) => present.has(name));
+    const withoutJobs = FROZEN_JOB_CATEGORIES.filter((name) => !present.has(name));
+    const ordered = [...withJobs, ...withoutJobs];
+    const missing = value.filter((item) => !ordered.includes(item as (typeof FROZEN_JOB_CATEGORIES)[number]));
+    return missing.length ? [...missing, ...ordered] : ordered;
+  }, [facetOptions, value]);
 
   return (
     <Autocomplete
       multiple
       disableCloseOnSelect
       size="small"
-      options={merged}
+      options={options}
       value={value}
-      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], options))}
+      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], facetOptions))}
       getOptionLabel={(option) => option}
       isOptionEqualToValue={(a, b) => a === b}
       autoHighlight
@@ -1174,8 +1180,8 @@ const JobBoardFrozenCategoryFilter: React.FC<{
       renderInput={(params) => (
         <TextField
           {...params}
-          label="Job category"
-          placeholder={value.length ? '' : 'Any category'}
+          label="Specialty"
+          placeholder={value.length ? '' : 'e.g. Data Engineering'}
         />
       )}
       sx={{ minWidth: 0, flex: '1 1 260px', maxWidth: '100%', ...heroGlassFormControlSx() }}
@@ -1454,21 +1460,18 @@ export const JobBoardPage: React.FC = () => {
               }}
             />
 
-            {filters.frozenCategories.length ? (
-              <JobBoardFrozenCategoryFilter
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} useFlexGap flexWrap="wrap">
+              <JobBoardSpecialtyFilter
                 value={frozenCategories}
-                options={filters.frozenCategories}
+                facetOptions={filters.frozenCategories}
                 onChange={(next) => {
                   setFrozenCategories(next);
                   setPage(1);
                 }}
               />
-            ) : null}
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} useFlexGap flexWrap="wrap">
               <JobBoardFacetAutocomplete
-                label="Category"
-                placeholder="Search category"
+                label="Employer category"
+                placeholder="ATS / source category"
                 value={category}
                 options={filters.categories}
                 onChange={(next) => {

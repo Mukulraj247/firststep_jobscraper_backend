@@ -9,6 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -179,17 +180,29 @@ def normalize_text(text: str) -> str:
     return canonicalize(text)
 
 
+@lru_cache(maxsize=8192)
+def _canonical_term(term: str) -> str:
+    return canonicalize(term)
+
+
+@lru_cache(maxsize=8192)
+def _single_token_pattern(term_canon: str) -> re.Pattern[str]:
+    return re.compile(r"(?<!\w)" + re.escape(term_canon) + r"(?!\w)")
+
+
 def term_matches(text: str, term: str) -> bool:
-    """Match canonicalized term in canonicalized text with word boundaries."""
-    text_canon = canonicalize(text) if text != canonicalize(text) else text
-    term_canon = canonicalize(term)
-    if not term_canon:
+    """
+    Match term against already-canonicalized text (title_norm / full_norm).
+
+    Do NOT re-canonicalize `text` here — that was O(terms × desc) and caused
+    60s classify-batch timeouts on the droplet.
+    """
+    term_canon = _canonical_term(term or "")
+    if not term_canon or not text:
         return False
     if " " in term_canon or "." in term_canon:
-        return term_canon in text_canon
-    pattern = r"(?<!\w)" + re.escape(term_canon) + r"(?!\w)"
-    return bool(re.search(pattern, text_canon))
-
+        return term_canon in text
+    return _single_token_pattern(term_canon).search(text) is not None
 
 # ---------------------------------------------------------------------------
 # Rule engine
@@ -399,6 +412,9 @@ def _apply_exclusions(
     return final
 
 
+_MAX_DESCRIPTION_CHARS = 2500
+
+
 def classify_job(
     title: str,
     description: str,
@@ -412,11 +428,15 @@ def classify_job(
     Classify a job posting into category badges using deterministic rules.
 
     Default: exhaustive — returns all rule-qualified categories.
-    Set max_categories + refine_with_tfidf=True for UI capping (see classify_job_for_ui).
+    Set max_categories to score-cap (TF-IDF only when refine_with_tfidf=True).
     """
     rules = rules or CATEGORY_RULES
     title_norm = canonicalize(title or "")
-    desc_norm = canonicalize(description or "")
+    # Truncate before canonicalize — huge ATS HTML is the main latency source.
+    raw_desc = description or ""
+    if len(raw_desc) > _MAX_DESCRIPTION_CHARS:
+        raw_desc = raw_desc[:_MAX_DESCRIPTION_CHARS]
+    desc_norm = canonicalize(raw_desc)
     full_norm = f"{title_norm} {desc_norm}".strip()
 
     raw_scores: dict[str, CategoryScore] = {}
@@ -457,12 +477,9 @@ def classify_job(
         "refined": False,
     }
 
-    if (
-        max_categories is not None
-        and refine_with_tfidf
-        and len(result["categories"]) > max_categories
-    ):
-        if sklearn_available():
+    # Cap when requested. TF-IDF is optional (slow); default is score-ordered trim.
+    if max_categories is not None and len(result["categories"]) > max_categories:
+        if refine_with_tfidf and sklearn_available():
             index = get_tfidf_index(rules)
             result = refine_categories(
                 result,
@@ -472,7 +489,6 @@ def classify_job(
                 min_similarity=min_tfidf_similarity,
             )
         else:
-            # Python 3.14+ often lacks sklearn wheels; cap by rule score instead
             result = cap_by_score(result, max_categories)
 
     return result
@@ -486,17 +502,14 @@ def classify_job_for_ui(
     min_tfidf_similarity: float = 0.08,
     rules: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Exhaustive rule classify, then TF-IDF rank/cap for display."""
-    exhaustive = classify_job(title, description, rules=rules)
-    if len(exhaustive["categories"]) <= max_badges:
-        return exhaustive
+    """Rule classify then score-cap to max_badges (fast production path; no TF-IDF)."""
+    del min_tfidf_similarity  # kept for API compatibility; TF-IDF unused in UI path
     return classify_job(
         title,
         description,
         rules=rules,
         max_categories=max_badges,
-        refine_with_tfidf=True,
-        min_tfidf_similarity=min_tfidf_similarity,
+        refine_with_tfidf=False,
     )
 
 

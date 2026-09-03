@@ -1,19 +1,38 @@
 /**
- * Backfill frozenCategories on ready job board listings via job-tagger sidecar.
+ * Backfill frozenCategories via job-tagger (fast sequential classify-one).
  *
- *   npx tsx server/src/scripts/backfillFrozenCategories.ts
- *   npx tsx server/src/scripts/backfillFrozenCategories.ts --limit 500
- *   npx tsx server/src/scripts/backfillFrozenCategories.ts --only-untagged
+ * Recommended on droplet (stop scrapers first if CPU is pegged):
+ *
+ *   pm2 stop scoutx-scraper scoutx-aggregators
+ *   JOB_TAGGER_USE_ML=false JOB_TAGGER_COOLDOWN=false \
+ *     npx ts-node --project server/tsconfig.json \
+ *     server/src/scripts/backfillFrozenCategories.ts --limit 200 --only-untagged
+ *   pm2 start scoutx-scraper scoutx-aggregators
+ *
+ * Options:
+ *   --limit N
+ *   --only-untagged
+ *   --batch N          Mongo flush size (default 25)
  */
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 import mongoose from 'mongoose';
 import JobBoardListing from '../models/JobBoardListing';
-import { classifyJobCategoriesBatch } from '../services/jobCategoryTagger';
+import { classifyJobCategoriesParallel } from '../services/jobCategoryTagger';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-const BATCH = 25;
+// Backfill must not trip enrichment-style cooldowns.
+if (!process.env.JOB_TAGGER_COOLDOWN) {
+  process.env.JOB_TAGGER_COOLDOWN = 'false';
+}
+if (!process.env.JOB_TAGGER_USE_ML) {
+  // Caller can still override; default fast rules-only for this script.
+  process.env.JOB_TAGGER_USE_ML = 'false';
+}
+
+const DEFAULT_BATCH = 25;
+const MAX_DESC = 2500;
 
 function argValue(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
@@ -21,17 +40,16 @@ function argValue(flag: string): string | undefined {
   return process.argv[idx + 1];
 }
 
-interface PendingItem {
-  docId: string;
-  title: string;
-  description: string;
-  contentHash: string;
-  existing: { contentHash?: string; rulesVersion?: string } | null;
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  const n = parseInt(raw || '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 async function main() {
-  const parsedLimit = parseInt(argValue('--limit') || '1000', 10);
-  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1000;
+  const limit = parsePositiveInt(argValue('--limit'), 1000);
+  // Always 1 — uvicorn is single-worker; parallel just causes timeouts.
+  const concurrency = 1;
+  const batchSize = parsePositiveInt(argValue('--batch'), DEFAULT_BATCH);
   const onlyUntagged = process.argv.includes('--only-untagged');
 
   const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DB_URL;
@@ -50,9 +68,12 @@ async function main() {
     filter.$or = [{ frozenCategories: { $size: 0 } }, { frozenCategories: { $exists: false } }];
   }
 
+  console.log(
+    `backfill start limit=${limit} concurrency=${concurrency} batch=${batchSize} onlyUntagged=${onlyUntagged} useMl=${process.env.JOB_TAGGER_USE_ML}`
+  );
+
   const cursor = JobBoardListing.find(filter)
-    // Only the fields the tagger needs — descriptions are large.
-    .select('jobTitle jobDescription contentHash categoryClassification')
+    .select('jobTitle jobDescription contentHash categoryClassification frozenCategories')
     .sort({ updatedAt: -1 })
     .limit(limit)
     .lean()
@@ -61,27 +82,39 @@ async function main() {
   let scanned = 0;
   let updated = 0;
   let skipped = 0;
-  let batch: PendingItem[] = [];
+  let failed = 0;
+  let batch: Array<{
+    docId: string;
+    title: string;
+    description: string;
+    contentHash: string;
+    existing: { contentHash?: string; rulesVersion?: string } | null;
+  }> = [];
+
+  const started = Date.now();
 
   const flush = async () => {
     if (batch.length === 0) return;
-    const results = await classifyJobCategoriesBatch(
+    const t0 = Date.now();
+    const results = await classifyJobCategoriesParallel(
       batch.map((b) => ({
         id: b.docId,
         title: b.title,
         description: b.description,
         contentHash: b.contentHash,
         existingClassification: b.existing,
-      }))
+      })),
+      concurrency
     );
 
     const ops: any[] = [];
     for (let i = 0; i < batch.length; i++) {
       const item = batch[i];
       const result = results[i];
-      // skipUpdate covers up-to-date rows and sidecar failures — never clobber.
       if (!result || result.skipUpdate) {
-        skipped += 1;
+        // Distinguish transport fail vs already-classified: empty meta = fail/skip.
+        if (!result?.categoryClassification) failed += 1;
+        else skipped += 1;
         continue;
       }
       ops.push({
@@ -103,26 +136,35 @@ async function main() {
       await JobBoardListing.bulkWrite(ops, { ordered: false });
       updated += ops.length;
     }
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const rate = scanned > 0 ? (scanned / ((Date.now() - started) / 1000)).toFixed(1) : '0';
+    console.log(
+      `progress scanned=${scanned} updated=${updated} failed=${failed} batch=${elapsed}s rate=${rate}/s`
+    );
     batch = [];
   };
 
   for await (const doc of cursor) {
     scanned += 1;
+    const desc = String((doc as any).jobDescription || '');
     batch.push({
       docId: String((doc as any)._id),
       title: String((doc as any).jobTitle || ''),
-      description: String((doc as any).jobDescription || ''),
+      description: desc.length > MAX_DESC ? desc.slice(0, MAX_DESC) : desc,
       contentHash: String((doc as any).contentHash || ''),
       existing: (doc as any).categoryClassification || null,
     });
-    if (batch.length >= BATCH) {
+    if (batch.length >= batchSize) {
       await flush();
-      console.log(`progress scanned=${scanned} updated=${updated} skipped=${skipped}`);
     }
   }
 
   await flush();
-  console.log(`done scanned=${scanned} updated=${updated} skipped=${skipped}`);
+  const totalSec = ((Date.now() - started) / 1000).toFixed(1);
+  console.log(
+    `done scanned=${scanned} updated=${updated} failed=${failed} skipped=${skipped} total=${totalSec}s`
+  );
   await mongoose.disconnect();
 }
 

@@ -1,9 +1,11 @@
 /**
  * HTTP client for the job-tagger sidecar (Python FastAPI on JOB_TAGGER_URL).
  *
- * Fail-open contract: when the sidecar is disabled, unreachable, or errors, the
- * result carries `skipUpdate: true` so callers leave stored categories intact.
- * Only a real classifier response may overwrite `frozenCategories`.
+ * Fast path:
+ *   - truncate description
+ *   - ui_mode + max_badges=2 (score-cap, no TF-IDF)
+ *   - single-flight queue so concurrent callers do not pile up on 1 uvicorn worker
+ *   - one retry on abort; cooldown only after repeated failures (not one timeout)
  */
 import logger from '../logger';
 
@@ -18,7 +20,6 @@ export interface CategoryClassificationMeta {
 export interface JobCategoryTaggerResult {
   frozenCategories: string[];
   categoryClassification: CategoryClassificationMeta | null;
-  /** When true, caller must not overwrite stored classification fields. */
   skipUpdate?: boolean;
 }
 
@@ -34,13 +35,13 @@ export interface ClassifyJobInput {
 }
 
 const DEFAULT_URL = 'http://127.0.0.1:8000';
-const DEFAULT_TIMEOUT_MS = 3000;
-const BATCH_MIN_TIMEOUT_MS = 8000;
+const DEFAULT_TIMEOUT_MS = 12_000;
 const RULES_VERSION_TTL_MS = 5 * 60 * 1000;
-/** After a transport failure, stop calling the sidecar for this long. */
-const FAILURE_COOLDOWN_MS = 30 * 1000;
+/** Only engage after several consecutive transport failures. */
+const FAILURE_COOLDOWN_MS = 10_000;
+const FAILURES_BEFORE_COOLDOWN = 8;
+const MAX_DESCRIPTION_CHARS = 2_500;
 
-/** Never write categories; never clobber what is already stored. */
 const NO_UPDATE: JobCategoryTaggerResult = {
   frozenCategories: [],
   categoryClassification: null,
@@ -71,23 +72,56 @@ function isTaggerEnabled(): boolean {
   return raw !== '0' && raw !== 'false' && raw !== 'no';
 }
 
+function cooldownEnabled(): boolean {
+  const raw = (process.env.JOB_TAGGER_COOLDOWN || 'true').trim().toLowerCase();
+  return raw !== '0' && raw !== 'false' && raw !== 'no';
+}
+
+function truncateDescription(description: string): string {
+  const raw = String(description || '');
+  return raw.length > MAX_DESCRIPTION_CHARS ? raw.slice(0, MAX_DESCRIPTION_CHARS) : raw;
+}
+
+function classifyOptions() {
+  return {
+    ui_mode: true,
+    max_badges: maxBadges(),
+    refine_with_tfidf: false,
+    use_ml: useMl(),
+  };
+}
+
 let cachedRulesVersion: string | null = null;
 let cachedRulesVersionAt = 0;
 let cooldownUntil = 0;
+let consecutiveFailures = 0;
 
-function inCooldown(): boolean {
-  return Date.now() < cooldownUntil;
+/** Serialize outbound classify calls — 1 uvicorn worker cannot take a stampede. */
+let classifyChain: Promise<unknown> = Promise.resolve();
+
+function withClassifyLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = classifyChain.then(fn, fn);
+  classifyChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
-/**
- * Sidecar is unreachable. Skip calls briefly so enrichment does not pay the
- * timeout on every job while the process is restarting.
- */
+function inCooldown(): boolean {
+  return cooldownEnabled() && Date.now() < cooldownUntil;
+}
+
 function noteTransportFailure(): void {
-  cooldownUntil = Date.now() + FAILURE_COOLDOWN_MS;
+  consecutiveFailures += 1;
+  if (cooldownEnabled() && consecutiveFailures >= FAILURES_BEFORE_COOLDOWN) {
+    cooldownUntil = Date.now() + FAILURE_COOLDOWN_MS;
+    consecutiveFailures = 0;
+  }
 }
 
 function noteTransportSuccess(): void {
+  consecutiveFailures = 0;
   cooldownUntil = 0;
 }
 
@@ -112,7 +146,6 @@ async function fetchRulesVersion(): Promise<string | null> {
   }
 }
 
-/** True when stored classification already matches this content and rules version. */
 function alreadyClassified(input: ClassifyJobInput, rulesVersion: string | null): boolean {
   if (!rulesVersion || !input.contentHash) return false;
   const existing = input.existingClassification;
@@ -147,21 +180,13 @@ function toResult(
   };
 }
 
-export async function classifyJobCategories(
-  input: ClassifyJobInput
+async function classifyOnce(
+  input: ClassifyJobInput,
+  title: string,
+  rulesVersion: string | null
 ): Promise<JobCategoryTaggerResult> {
-  if (!isTaggerEnabled() || inCooldown()) return NO_UPDATE;
-
-  // The sidecar rejects blank titles (min_length=1) — do not spend a request.
-  const title = String(input.title || '').trim();
-  if (!title) return NO_UPDATE;
-
-  const rulesVersion = await fetchRulesVersion();
-  if (alreadyClassified(input, rulesVersion)) return NO_UPDATE;
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), taggerTimeoutMs());
-
   try {
     const res = await fetch(`${taggerBaseUrl()}/api/classify-one`, {
       method: 'POST',
@@ -170,98 +195,89 @@ export async function classifyJobCategories(
       body: JSON.stringify({
         id: input.id,
         title,
-        description: String(input.description || ''),
-        ui_mode: true,
-        max_badges: maxBadges(),
-        use_ml: useMl(),
+        description: truncateDescription(input.description),
+        ...classifyOptions(),
       }),
     });
 
     if (!res.ok) {
-      logger.log('warn', `[jobCategoryTagger] classify-one HTTP ${res.status} (keeping stored categories)`);
+      logger.log('warn', `[jobCategoryTagger] classify-one HTTP ${res.status}`);
+      noteTransportFailure();
       return NO_UPDATE;
     }
 
     noteTransportSuccess();
     return toResult((await res.json()) as TaggerResponseBody, input.contentHash, rulesVersion);
-  } catch (err: any) {
-    noteTransportFailure();
-    logger.log(
-      'warn',
-      `[jobCategoryTagger] classify-one failed (fail-open, ${FAILURE_COOLDOWN_MS}ms cooldown): ${err?.message || err}`
-    );
-    return NO_UPDATE;
   } finally {
     clearTimeout(timer);
   }
 }
 
+export async function classifyJobCategories(
+  input: ClassifyJobInput
+): Promise<JobCategoryTaggerResult> {
+  if (!isTaggerEnabled() || inCooldown()) return NO_UPDATE;
+
+  const title = String(input.title || '').trim();
+  if (!title) return NO_UPDATE;
+
+  const rulesVersion = await fetchRulesVersion();
+  if (alreadyClassified(input, rulesVersion)) return NO_UPDATE;
+
+  return withClassifyLock(async () => {
+    try {
+      return await classifyOnce(input, title, rulesVersion);
+    } catch (err: any) {
+      // One retry after a short pause — covers brief CPU spikes / uvicorn queue.
+      try {
+        await new Promise((r) => setTimeout(r, 150));
+        return await classifyOnce(input, title, rulesVersion);
+      } catch (err2: any) {
+        noteTransportFailure();
+        logger.log(
+          'warn',
+          `[jobCategoryTagger] classify-one failed after retry: ${err2?.message || err2}`
+        );
+        return NO_UPDATE;
+      }
+    }
+  });
+}
+
+/**
+ * Classify many jobs. Concurrency > 1 is serialized by withClassifyLock
+ * (safe for 1 uvicorn worker). Prefer concurrency=1 for backfill clarity.
+ */
+export async function classifyJobCategoriesParallel(
+  jobs: ClassifyJobInput[],
+  concurrency = 1
+): Promise<JobCategoryTaggerResult[]> {
+  if (!isTaggerEnabled() || jobs.length === 0) {
+    return jobs.map(() => ({ ...NO_UPDATE }));
+  }
+
+  const results: JobCategoryTaggerResult[] = new Array(jobs.length);
+  let next = 0;
+  const n = Math.min(Math.max(1, concurrency), jobs.length);
+
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= jobs.length) return;
+      results[i] = await classifyJobCategories(jobs[i]);
+    }
+  };
+
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return results;
+}
+
 export async function classifyJobCategoriesBatch(
   jobs: ClassifyJobInput[]
 ): Promise<JobCategoryTaggerResult[]> {
-  const noUpdateAll = () => jobs.map(() => ({ ...NO_UPDATE }));
-  if (!isTaggerEnabled() || inCooldown() || jobs.length === 0) return noUpdateAll();
-
-  const rulesVersion = await fetchRulesVersion();
-
-  // Only send jobs that need work: non-blank title and stale/absent classification.
-  const results: JobCategoryTaggerResult[] = jobs.map(() => ({ ...NO_UPDATE }));
-  const pending: Array<{ index: number; job: ClassifyJobInput; title: string }> = [];
-  jobs.forEach((job, index) => {
-    const title = String(job.title || '').trim();
-    if (!title) return;
-    if (alreadyClassified(job, rulesVersion)) return;
-    pending.push({ index, job, title });
-  });
-
-  if (pending.length === 0) return results;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(taggerTimeoutMs(), BATCH_MIN_TIMEOUT_MS));
-
-  try {
-    const res = await fetch(`${taggerBaseUrl()}/api/classify-batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        jobs: pending.map(({ job, title }) => ({
-          id: job.id,
-          title,
-          description: String(job.description || ''),
-        })),
-        ui_mode: true,
-        max_badges: maxBadges(),
-        use_ml: useMl(),
-      }),
-    });
-
-    if (!res.ok) {
-      logger.log('warn', `[jobCategoryTagger] classify-batch HTTP ${res.status} (keeping stored categories)`);
-      return results;
-    }
-
-    const body = (await res.json()) as TaggerResponseBody[];
-    if (!Array.isArray(body)) {
-      logger.log('warn', '[jobCategoryTagger] classify-batch returned a non-array payload');
-      return results;
-    }
-
-    noteTransportSuccess();
-    pending.forEach(({ index, job }, position) => {
-      const row = body[position];
-      if (!row) return;
-      results[index] = toResult(row, job.contentHash, rulesVersion);
-    });
-    return results;
-  } catch (err: any) {
-    noteTransportFailure();
-    logger.log(
-      'warn',
-      `[jobCategoryTagger] classify-batch failed (fail-open, ${FAILURE_COOLDOWN_MS}ms cooldown): ${err?.message || err}`
-    );
-    return results;
-  } finally {
-    clearTimeout(timer);
-  }
+  const concurrency = parseInt(process.env.JOB_TAGGER_CONCURRENCY || '1', 10);
+  return classifyJobCategoriesParallel(
+    jobs,
+    Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 1
+  );
 }
