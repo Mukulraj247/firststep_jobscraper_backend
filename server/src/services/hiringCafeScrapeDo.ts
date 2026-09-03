@@ -50,9 +50,10 @@ export async function fetchHiringCafePostingViaScrapeDo(
   }
 
   const maxTier = opts.maxTier ?? 2;
+  const startTier = maxTier === 1 ? 1 : 2;
   const result = await scrapeUrlHtml(url, {
     token: opts.token,
-    startTier: 2,
+    startTier,
     maxTier,
     useLearnedTier: false,
     shouldEscalate: (status, html) => {

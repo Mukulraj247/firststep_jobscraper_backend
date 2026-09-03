@@ -1,7 +1,7 @@
 import Robot from '../models/Robot';
 import type { AutomationRuntimeConfig } from './automation';
 
-export type HiringCafeScrapeDoTier = 2 | 3;
+export type HiringCafeScrapeDoTier = 1 | 2 | 3;
 
 export type HiringCafeScrapeDoOptions = {
   enabled: boolean;
@@ -18,7 +18,9 @@ function envHcScrapeDoEnabled(): boolean {
 
 function normalizeMaxTier(value: unknown): HiringCafeScrapeDoTier {
   const n = Number(value);
-  return n === 3 ? 3 : 2;
+  if (n === 1) return 1;
+  if (n === 3) return 3;
+  return 2;
 }
 
 /** Resolve Scrape.do settings from automation saasConfig (robot credentials + enable flag). */

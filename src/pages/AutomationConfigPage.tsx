@@ -467,8 +467,12 @@ export const AutomationConfigPage = ({
       ? { clearScrapeDo: true as const }
       : {
           scrapeDoEnabled: !!config.hiringCafeEnrichment?.scrapeDoEnabled,
-          scrapeDoMaxTier:
-            Number(config.hiringCafeEnrichment?.scrapeDoMaxTier) === 3 ? 3 : 2,
+          scrapeDoMaxTier: (() => {
+            const n = Number(config.hiringCafeEnrichment?.scrapeDoMaxTier);
+            if (n === 1) return 1;
+            if (n === 3) return 3;
+            return 2;
+          })(),
           ...(omitBlank(config.hiringCafeEnrichment?.scrapeDoToken)
             ? { scrapeDoToken: config.hiringCafeEnrichment.scrapeDoToken }
             : {}),
@@ -1282,9 +1286,10 @@ export const AutomationConfigPage = ({
               }
             >
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                Used only for Hiring Cafe job posting pages when direct HTTP and proxy fail
-                (Cloudflare). Does not scrape employer career sites. Tier 2 uses JS render (~5
-                credits/request); tier 3 uses super render (~25 credits).
+                Used only for Hiring Cafe job posting pages. Does not scrape employer career
+                sites. Tier 1 is HTML only (~1 credit, good for a cheap test). Tier 2 uses JS
+                render (~5 credits, recommended for Cloudflare). Tier 3 is super render (~25
+                credits).
               </Typography>
               <FormControlLabel
                 control={
@@ -1349,14 +1354,19 @@ export const AutomationConfigPage = ({
                 <Select
                   labelId="hc-scrape-do-tier-label"
                   label="Max Scrape.do tier"
-                  value={Number(config.hiringCafeEnrichment?.scrapeDoMaxTier) === 3 ? 3 : 2}
-                  onChange={(event) =>
+                  value={(() => {
+                    const n = Number(config.hiringCafeEnrichment?.scrapeDoMaxTier);
+                    return n === 1 || n === 3 ? n : 2;
+                  })()}
+                  onChange={(event) => {
+                    const n = Number(event.target.value);
                     updateNested(
                       ['hiringCafeEnrichment', 'scrapeDoMaxTier'],
-                      Number(event.target.value) === 3 ? 3 : 2
-                    )
-                  }
+                      n === 1 || n === 3 ? n : 2
+                    );
+                  }}
                 >
+                  <MenuItem value={1}>Tier 1 — HTML only (test, ~1 credit)</MenuItem>
                   <MenuItem value={2}>Tier 2 — JS render (recommended)</MenuItem>
                   <MenuItem value={3}>Tier 3 — super render (hard Cloudflare)</MenuItem>
                 </Select>

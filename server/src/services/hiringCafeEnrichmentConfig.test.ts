@@ -26,6 +26,13 @@ describe('hiringCafeEnrichmentConfig', () => {
     expect(opts).toEqual({ enabled: true, token: 'robot-token', maxTier: 3 });
   });
 
+  it('accepts maxTier 1 for cheap HTML tests', () => {
+    const opts = resolveHiringCafeScrapeDoFromConfig({
+      hiringCafeEnrichment: { scrapeDoEnabled: true, scrapeDoToken: 't', scrapeDoMaxTier: 1 },
+    });
+    expect(opts?.maxTier).toBe(1);
+  });
+
   it('falls back to env token when robot enabled but token blank', () => {
     process.env.SCRAPE_DO_TOKEN = 'env-token';
     const opts = resolveHiringCafeScrapeDoFromConfig({

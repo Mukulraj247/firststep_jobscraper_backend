@@ -64,4 +64,27 @@ describe('hiringCafeScrapeDo', () => {
       expect.objectContaining({ token: 't', startTier: 2, maxTier: 2, useLearnedTier: false })
     );
   });
+
+  it('starts at tier 1 when maxTier is 1', async () => {
+    scrapeUrlHtmlMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      html: NEXT_DATA_HTML,
+      tier: 1,
+      creditsSpent: 1,
+      expired: false,
+      rateLimited: false,
+    });
+
+    await fetchHiringCafePostingViaScrapeDo(POSTING, {
+      enabled: true,
+      token: 't',
+      maxTier: 1,
+    });
+
+    expect(scrapeUrlHtmlMock).toHaveBeenCalledWith(
+      POSTING,
+      expect.objectContaining({ startTier: 1, maxTier: 1 })
+    );
+  });
 });

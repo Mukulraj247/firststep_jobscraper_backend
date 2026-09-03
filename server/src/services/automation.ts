@@ -90,7 +90,7 @@ export interface AutomationRuntimeConfig {
   hiringCafeEnrichment?: {
     scrapeDoEnabled?: boolean;
     scrapeDoToken?: string;
-    scrapeDoMaxTier?: 2 | 3;
+    scrapeDoMaxTier?: 1 | 2 | 3;
     /** Set true on save to wipe stored Scrape.do token. */
     clearScrapeDo?: boolean;
   };

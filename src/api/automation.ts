@@ -30,7 +30,7 @@ export interface PublicAutomationConfig {
   enrichHiringCafeDetails?: boolean;
   hiringCafeEnrichment?: {
     scrapeDoEnabled?: boolean;
-    scrapeDoMaxTier?: 2 | 3;
+    scrapeDoMaxTier?: 1 | 2 | 3;
   };
   destinationType?: AutomationDestinationType;
 }

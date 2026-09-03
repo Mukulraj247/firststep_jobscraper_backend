@@ -128,7 +128,7 @@ PROXY_POOL=
 # Per-aggregator token: Automations → Configure → Third-party scraper (Scrape.do).
 # Optional droplet-wide fallback when enabled on robot but token field left blank:
 # HIRING_CAFE_SCRAPE_DO_ENABLED=false
-# HIRING_CAFE_SCRAPE_DO_MAX_TIER=2
+# HIRING_CAFE_SCRAPE_DO_MAX_TIER=2   # 1=HTML test, 2=JS render, 3=super
 # SCRAPE_DO_TOKEN=your_scrape_do_token  # Career sites + HC enrichment when blank on robot
 # SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause enrichment when daily credits hit this
 # SCRAPE_DO_GEO=northamerica           # Used only on tier-3 (super+render) requests
