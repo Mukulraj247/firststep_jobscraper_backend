@@ -86,6 +86,14 @@ export interface AutomationRuntimeConfig {
     needsProxy?: boolean;
     needsProxyAt?: string;
   };
+  /** Hiring Cafe only — Scrape.do for posting detail when HTTP/proxy fail. */
+  hiringCafeEnrichment?: {
+    scrapeDoEnabled?: boolean;
+    scrapeDoToken?: string;
+    scrapeDoMaxTier?: 2 | 3;
+    /** Set true on save to wipe stored Scrape.do token. */
+    clearScrapeDo?: boolean;
+  };
   userAgent?: string;
   userAgentPool?: string[];
   headless?: boolean;

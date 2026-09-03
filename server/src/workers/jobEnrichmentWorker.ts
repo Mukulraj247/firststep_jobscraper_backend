@@ -42,6 +42,7 @@ import {
   LLM_DAILY_TOKEN_BUDGET,
 } from '../services/geminiJobExtractor';
 import { classifyJobCategories } from '../services/jobCategoryTagger';
+import { resolveHiringCafeScrapeDoForListing } from '../services/hiringCafeEnrichmentConfig';
 import logger from '../logger';
 
 export const JOB_ENRICHMENT_CONCURRENCY = parseInt(process.env.JOB_ENRICHMENT_CONCURRENCY || '5', 10);
@@ -879,21 +880,41 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     const { isHiringCafeJobPostingUrl } = await import('../services/hiringCafeDetail');
     if (hcPosting && isHiringCafeJobPostingUrl(hcPosting)) {
       let mergedRow: Record<string, unknown> | null = null;
-      let enrichMethod: 'list' | 'browser' = 'list';
+      let enrichMethod: 'list' | 'browser' | 'scrape.do' = 'list';
+      let hcCredits = 0;
+      let hcTier = 0;
+
+      const hcScrapeDo = await resolveHiringCafeScrapeDoForListing(doc);
+      let scrapeDoOpts: { scrapeDo: typeof hcScrapeDo } | undefined;
+      if (hcScrapeDo?.enabled) {
+        const spentToday = await getCreditsSpentToday();
+        if (spentToday >= SCRAPE_DO_DAILY_CREDIT_BUDGET) {
+          logger.log('warn', 'Hiring Cafe Scrape.do skipped — daily credit budget exhausted');
+        } else {
+          scrapeDoOpts = { scrapeDo: hcScrapeDo };
+        }
+      }
 
       try {
         const { enrichHiringCafePostingStandalone } = await import(
           '../services/hiringCafeDetailScrape'
         );
-        mergedRow = await enrichHiringCafePostingStandalone(hcPosting, {
-          ...(list as Record<string, unknown>),
-          jobUrl: hcPosting,
-          aggregatorPostingUrl: hcPosting,
-        });
+        mergedRow = await enrichHiringCafePostingStandalone(
+          hcPosting,
+          {
+            ...(list as Record<string, unknown>),
+            jobUrl: hcPosting,
+            aggregatorPostingUrl: hcPosting,
+          },
+          scrapeDoOpts
+        );
         if (mergedRow) {
-          enrichMethod = String(mergedRow._enrichMethod || '').includes('browser')
-            ? 'browser'
-            : 'list';
+          const methodTag = String(mergedRow._enrichMethod || '');
+          if (methodTag === 'scrape_do') enrichMethod = 'scrape.do';
+          else if (methodTag.includes('browser')) enrichMethod = 'browser';
+          hcCredits = Number(mergedRow._scrapeDoCredits || 0);
+          hcTier = Number(mergedRow._scrapeDoTier || 0);
+          if (hcCredits > 0) await addCreditsSpent(hcCredits);
         }
       } catch (err: any) {
         logger.log('warn', `Hiring Cafe enrich failed: ${err?.message || err}`);
@@ -918,9 +939,9 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
         const status = boardListingStatus(merged, doc.jobUrl);
         await persistResult(doc, merged, {
           status,
-          method: enrichMethod === 'browser' ? 'browser' : 'list',
-          tier: 0,
-          creditsSpent: 0,
+          method: enrichMethod,
+          tier: hcTier,
+          creditsSpent: hcCredits,
           incrementAttempts: true,
           structured: {
             about: String(mergedRow.about || ''),

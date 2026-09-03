@@ -41,6 +41,7 @@ import {
 } from '../services/linkedinAggregatorRun';
 import { persistLinkedInAccountSession } from '../services/linkedinLogin';
 import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
+import { resolveHiringCafeScrapeDoFromConfig } from '../services/hiringCafeEnrichmentConfig';
 import { enrichAccelListRows } from '../services/accelDetailScrape';
 import { enrichConsiderListRows } from '../services/sequoiaDetailScrape';
 import { enrichChoppingBlockListRows } from '../services/choppingblockDetailScrape';
@@ -830,9 +831,11 @@ async function processConfiguredListExtraction(
         typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
           ? extractionConfig.maxItems
           : 40;
+      const hcScrapeDo = resolveHiringCafeScrapeDoFromConfig(getAutomationConfig(automation));
       rows = (await enrichHiringCafeListRows(page, rows, {
         maxJobs: cap,
         onLog: (message) => appendRunLog(run, message, { flush: true }),
+        scrapeDo: hcScrapeDo,
       })) as Record<string, any>[];
     }
 

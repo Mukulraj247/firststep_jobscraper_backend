@@ -15,6 +15,8 @@ import {
   parseHiringCafeJobPageHtml,
 } from './hiringCafeDetail';
 import { preferExternalApplyUrl } from './hiringCafeNormalize';
+import { fetchHiringCafePostingViaScrapeDo } from './hiringCafeScrapeDo';
+import type { HiringCafeScrapeDoOptions } from './hiringCafeEnrichmentConfig';
 import logger from '../logger';
 
 /** Build proxy URL from env vars (Decodo / Camoufox). Returns null if not configured. */
@@ -76,10 +78,16 @@ export type LightHtmlDetectResult =
 export type FetchHiringCafeHtmlResult = {
   ok: boolean;
   html: string;
-  method: 'http' | 'none';
+  method: 'http' | 'scrape.do' | 'none';
   light: boolean;
   status?: number;
   error?: string;
+  creditsSpent?: number;
+  tier?: number;
+};
+
+export type FetchHiringCafePostingOpts = {
+  scrapeDo?: HiringCafeScrapeDoOptions | null;
 };
 
 const UA =
@@ -204,7 +212,8 @@ async function fetchHtmlOnce(
  * Rejects employer / apply hosts so we never leave HC for detail content.
  */
 export async function fetchHiringCafePostingHtml(
-  postingUrl: string
+  postingUrl: string,
+  opts?: FetchHiringCafePostingOpts
 ): Promise<FetchHiringCafeHtmlResult> {
   const url = String(postingUrl || '').trim();
   if (!url || !isHiringCafeUrl(url) || !isHiringCafeJobPostingUrl(url)) {
@@ -233,15 +242,39 @@ export async function fetchHiringCafePostingHtml(
       logger.log('info', `Hiring Cafe HTTP proxy success: ${url}`);
       return proxyResult;
     }
-    // Proxy also failed
     logger.log('warn', `Hiring Cafe HTTP proxy also failed: ${url} - ${proxyResult.error}`);
-    return proxyResult;
   }
 
   // No proxy available or direct failed for non-CF reason
   if (directResult.cfBlocked) {
     logger.log('warn', `Hiring Cafe HTTP Cloudflare blocked (no proxy configured): ${url}`);
   }
+
+  const scrapeDo = opts?.scrapeDo;
+  if (scrapeDo?.enabled && scrapeDo.token) {
+    logger.log('info', `Hiring Cafe HTTP failed, trying Scrape.do: ${url}`);
+    const sd = await fetchHiringCafePostingViaScrapeDo(url, scrapeDo);
+    if (sd.ok) {
+      return {
+        ok: true,
+        html: sd.html,
+        method: 'scrape.do',
+        light: sd.light,
+        creditsSpent: sd.creditsSpent,
+        tier: sd.tier,
+      };
+    }
+    return {
+      ok: false,
+      html: '',
+      method: 'scrape.do',
+      light: false,
+      error: sd.error || 'scrape_do_failed',
+      creditsSpent: sd.creditsSpent,
+      tier: sd.tier,
+    };
+  }
+
   return directResult;
 }
 
@@ -260,5 +293,17 @@ export function enrichHiringCafeRowFromHtml(
   );
   merged.aggregatorPostingUrl = postingUrl;
   merged._enrichMethod = 'http_html';
+  return merged;
+}
+
+/** Parse HC HTML into a list-row merge; sets `_enrichMethod` from fetch method when provided. */
+export function enrichHiringCafeRowFromHtmlWithMethod(
+  listRow: Record<string, unknown>,
+  html: string,
+  postingUrl: string,
+  enrichMethod: 'http_html' | 'scrape_do'
+): Record<string, unknown> {
+  const merged = enrichHiringCafeRowFromHtml(listRow, html, postingUrl);
+  merged._enrichMethod = enrichMethod;
   return merged;
 }

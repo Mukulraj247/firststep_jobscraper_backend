@@ -1,11 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import axios from 'axios';
-import {
-  isHiringCafeHtmlJobPage,
-  detectLightHtmlJobPage,
-  fetchHiringCafePostingHtml,
-  enrichHiringCafeRowFromHtml,
-} from './hiringCafeHtmlLight';
 
 vi.mock('axios', () => ({
   default: {
@@ -13,7 +7,20 @@ vi.mock('axios', () => ({
   },
 }));
 
+vi.mock('./hiringCafeScrapeDo', () => ({
+  fetchHiringCafePostingViaScrapeDo: vi.fn(),
+}));
+
+import {
+  isHiringCafeHtmlJobPage,
+  detectLightHtmlJobPage,
+  fetchHiringCafePostingHtml,
+  enrichHiringCafeRowFromHtml,
+} from './hiringCafeHtmlLight';
+import { fetchHiringCafePostingViaScrapeDo } from './hiringCafeScrapeDo';
+
 const axiosGet = axios.get as unknown as ReturnType<typeof vi.fn>;
+const scrapeDoMock = fetchHiringCafePostingViaScrapeDo as unknown as ReturnType<typeof vi.fn>;
 
 const POSTING =
   'https://hiringcafe.com/job/software-engineer-teacher-experience-codeai-seattle-washington-q02dz2ndx7k31eq2';
@@ -100,6 +107,7 @@ describe('hiringCafeHtmlLight', () => {
 describe('fetchHiringCafePostingHtml', () => {
   beforeEach(() => {
     axiosGet.mockReset();
+    scrapeDoMock.mockReset();
   });
 
   it('GETs the Hiring Cafe posting URL and returns HTML when Content-Type is text/html', async () => {
@@ -127,5 +135,31 @@ describe('fetchHiringCafePostingHtml', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/hiring.?cafe/i);
     expect(axiosGet).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Scrape.do when HTTP fails and robot opts are set', async () => {
+    scrapeDoMock.mockResolvedValue({
+      ok: true,
+      html: NEXT_DATA_HTML,
+      method: 'scrape.do',
+      light: true,
+      tier: 2,
+      creditsSpent: 5,
+    });
+
+    axiosGet.mockResolvedValueOnce({
+      status: 403,
+      data: '<html>Just a moment...</html>',
+      headers: { 'content-type': 'text/html' },
+    });
+
+    const result = await fetchHiringCafePostingHtml(POSTING, {
+      scrapeDo: { enabled: true, token: 'tok', maxTier: 2 },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.method).toBe('scrape.do');
+    expect(result.creditsSpent).toBe(5);
+    expect(scrapeDoMock).toHaveBeenCalled();
   });
 });

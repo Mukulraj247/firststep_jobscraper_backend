@@ -85,6 +85,13 @@ export const toPublicAutomationConfig = (input: unknown): AnyRecord => {
       config.browserLocation?.proxyPassword ||
       (Array.isArray(config.browserLocation?.proxyPool) && config.browserLocation.proxyPool.length)
     ),
+    scrapeDoConfigured: !!config.hiringCafeEnrichment?.scrapeDoToken,
+    hiringCafeEnrichment: isRecord(config.hiringCafeEnrichment)
+      ? defined({
+          scrapeDoEnabled: config.hiringCafeEnrichment.scrapeDoEnabled,
+          scrapeDoMaxTier: config.hiringCafeEnrichment.scrapeDoMaxTier,
+        })
+      : undefined,
     destinationType: getPublicDestinationType(config),
   });
 };
@@ -138,6 +145,12 @@ export const mergeMaskedAutomationConfig = (
     delete incoming.browserLocation.clearProxy;
   }
 
+  const clearScrapeDo =
+    isRecord(incoming.hiringCafeEnrichment) && incoming.hiringCafeEnrichment.clearScrapeDo === true;
+  if (clearScrapeDo && isRecord(incoming.hiringCafeEnrichment)) {
+    delete incoming.hiringCafeEnrichment.clearScrapeDo;
+  }
+
   deleteBlank(incoming, 'webhookUrl');
   if (isRecord(incoming.destinations?.webhook)) deleteBlank(incoming.destinations.webhook, 'url');
   if (isRecord(incoming.destinations?.airtable)) deleteBlank(incoming.destinations.airtable, 'apiKey');
@@ -159,6 +172,15 @@ export const mergeMaskedAutomationConfig = (
   if (isRecord(incoming.browserLocation) && Object.keys(incoming.browserLocation).length === 0) {
     delete incoming.browserLocation;
   }
+  if (isRecord(incoming.hiringCafeEnrichment) && !clearScrapeDo) {
+    deleteBlank(incoming.hiringCafeEnrichment, 'scrapeDoToken');
+  }
+  if (
+    isRecord(incoming.hiringCafeEnrichment) &&
+    Object.keys(incoming.hiringCafeEnrichment).length === 0
+  ) {
+    delete incoming.hiringCafeEnrichment;
+  }
 
   const merged = mergeRecords(current, incoming);
   if (clearProxy) {
@@ -177,6 +199,19 @@ export const mergeMaskedAutomationConfig = (
       delete merged.browserLocation[key];
     }
     // Keep an empty object so callers that spread prev+incoming overwrite stored secrets.
+  }
+  if (clearScrapeDo) {
+    if (!isRecord(merged.hiringCafeEnrichment)) {
+      merged.hiringCafeEnrichment = {};
+    }
+    delete merged.hiringCafeEnrichment.scrapeDoToken;
+    delete merged.hiringCafeEnrichment.clearScrapeDo;
+    if (
+      !merged.hiringCafeEnrichment.scrapeDoEnabled &&
+      merged.hiringCafeEnrichment.scrapeDoMaxTier == null
+    ) {
+      delete merged.hiringCafeEnrichment;
+    }
   }
   return merged;
 };
@@ -219,6 +254,7 @@ const collectSecretValues = (robot?: any, run?: AnyRecord): string[] => {
     // they are identifiers, not credentials, and short usernames over-redact logs.
     values.push(
       config.browserLocation?.proxyPassword,
+      config.hiringCafeEnrichment?.scrapeDoToken,
       config.webhookUrl,
       config.destinations?.webhook?.url,
       config.destinations?.airtable?.apiKey,

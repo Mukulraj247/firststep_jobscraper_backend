@@ -10,9 +10,12 @@ import {
 import { isHiringCafeUrl } from './aggregatorIdentity';
 import {
   enrichHiringCafeRowFromHtml,
+  enrichHiringCafeRowFromHtmlWithMethod,
   fetchHiringCafePostingHtml,
   isHiringCafeHtmlJobPage,
+  type FetchHiringCafePostingOpts,
 } from './hiringCafeHtmlLight';
+import type { HiringCafeScrapeDoOptions } from './hiringCafeEnrichmentConfig';
 import {
   HIRING_CAFE_DETAIL_BETWEEN_MS,
   HIRING_CAFE_DETAIL_GOTO_MS,
@@ -214,6 +217,7 @@ export async function enrichHiringCafeListRows(
      * Aggregator already holds a Chromium slot — that is the right place for Turnstile.
      */
     browserOnly?: boolean;
+    scrapeDo?: HiringCafeScrapeDoOptions | null;
   }
 ): Promise<Record<string, unknown>[]> {
   const maxJobs = Math.max(1, Math.min(opts?.maxJobs || DEFAULT_MAX_JOBS, 80));
@@ -223,7 +227,9 @@ export async function enrichHiringCafeListRows(
   let failed = 0;
   let applyResolved = 0;
   let lightHits = 0;
+  let scrapeDoHits = 0;
   let browserHits = 0;
+  const fetchOpts: FetchHiringCafePostingOpts = { scrapeDo: opts?.scrapeDo ?? null };
   const out: Record<string, unknown>[] = [];
 
   for (const row of rows) {
@@ -236,13 +242,24 @@ export async function enrichHiringCafeListRows(
     try {
       let usedBrowser = false;
       if (!browserOnly) {
-        const light = await fetchHiringCafePostingHtml(postingUrl);
+        const light = await fetchHiringCafePostingHtml(postingUrl, fetchOpts);
         if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
-          const merged = enrichHiringCafeRowFromHtml(row, light.html, postingUrl);
+          const enrichMethod = light.method === 'scrape.do' ? 'scrape_do' : 'http_html';
+          const merged = enrichHiringCafeRowFromHtmlWithMethod(
+            row,
+            light.html,
+            postingUrl,
+            enrichMethod
+          );
+          if (light.method === 'scrape.do') {
+            merged._scrapeDoCredits = light.creditsSpent ?? 0;
+            merged._scrapeDoTier = light.tier ?? 2;
+          }
           if (merged.applyUrl && !isHiringCafeUrl(String(merged.applyUrl))) applyResolved += 1;
           out.push(merged);
           enriched += 1;
-          lightHits += 1;
+          if (light.method === 'scrape.do') scrapeDoHits += 1;
+          else lightHits += 1;
           if (HIRING_CAFE_DETAIL_BETWEEN_MS > 0) {
             await page.waitForTimeout(HIRING_CAFE_DETAIL_BETWEEN_MS).catch(() => {});
           }
@@ -278,7 +295,7 @@ export async function enrichHiringCafeListRows(
   }
 
   const message =
-    `Hiring Cafe detail scrape: ${enriched} enriched (${lightHits} http-html, ${browserHits} browser), ` +
+    `Hiring Cafe detail scrape: ${enriched} enriched (${lightHits} http-html, ${scrapeDoHits} scrape.do, ${browserHits} browser), ` +
     `${applyResolved} employer apply URLs, ${failed} failed`;
   if (opts?.onLog) await opts.onLog(message);
   else logger.log('info', message);
@@ -415,16 +432,27 @@ async function tryBrowserEnrich(
  */
 export async function enrichHiringCafePostingStandalone(
   postingUrl: string,
-  listRow: Record<string, unknown> = {}
+  listRow: Record<string, unknown> = {},
+  opts?: FetchHiringCafePostingOpts
 ): Promise<Record<string, unknown> | null> {
   const { isHiringCafeJobPostingUrl } = await import('./hiringCafeDetail');
   if (!isHiringCafeJobPostingUrl(postingUrl)) return null;
 
-  // Prefer cheap HTTP (already tiered direct→proxy inside fetchHiringCafePostingHtml).
   try {
-    const light = await fetchHiringCafePostingHtml(postingUrl);
+    const light = await fetchHiringCafePostingHtml(postingUrl, opts);
     if (light.ok && light.html && isHiringCafeHtmlJobPage(light.html)) {
-      return enrichHiringCafeRowFromHtml(listRow, light.html, postingUrl);
+      const enrichMethod = light.method === 'scrape.do' ? 'scrape_do' : 'http_html';
+      const merged = enrichHiringCafeRowFromHtmlWithMethod(
+        listRow,
+        light.html,
+        postingUrl,
+        enrichMethod
+      );
+      if (light.method === 'scrape.do') {
+        merged._scrapeDoCredits = light.creditsSpent ?? 0;
+        merged._scrapeDoTier = light.tier ?? 2;
+      }
+      return merged;
     }
   } catch (err: any) {
     logger.log('warn', `HC standalone HTTP enrich failed: ${err?.message || err}`);

@@ -79,7 +79,9 @@ const GEO = process.env.SCRAPE_DO_GEO || 'northamerica';
 const REPROBE_DAYS = parseInt(process.env.SCRAPE_PROFILE_REPROBE_DAYS || '30', 10);
 const MIN_HTML_BYTES = 1500;
 
-function token(): string {
+function resolveToken(override?: string): string {
+  const fromOverride = String(override || '').trim();
+  if (fromOverride) return fromOverride;
   return (process.env.SCRAPE_DO_TOKEN || '').trim();
 }
 
@@ -166,13 +168,17 @@ export async function recordScrapeFailure(host: string, triedTier: ScrapeTier[])
   );
 }
 
-async function fetchTier(url: string, tier: ScrapeTier): Promise<{
+async function fetchTier(
+  url: string,
+  tier: ScrapeTier,
+  tokenOverride?: string
+): Promise<{
   status: number;
   html: string;
   credits: number;
   headers: Record<string, any>;
 }> {
-  const t = token();
+  const t = resolveToken(tokenOverride);
   if (!t) {
     throw new Error('SCRAPE_DO_TOKEN is not configured');
   }
@@ -313,6 +319,146 @@ export async function scrapeJobPage(url: string, opts: ScrapeJobPageOpts = {}): 
     status: 0,
     html: '',
     fields: parseJobPageHtml(''),
+    tier: tried[tried.length - 1] || 1,
+    creditsSpent: totalCredits,
+    expired: false,
+    rateLimited: false,
+    error: lastError || 'scrape_failed',
+  };
+}
+
+export interface ScrapeUrlHtmlOpts {
+  token?: string;
+  startTier?: ScrapeTier;
+  maxTier?: ScrapeTier;
+  useLearnedTier?: boolean;
+  /** Custom escalation when default job-page heuristics do not apply (e.g. HC __NEXT_DATA__). */
+  shouldEscalate?: (status: number, html: string) => boolean;
+}
+
+export interface ScrapeUrlHtmlResult {
+  ok: boolean;
+  status: number;
+  html: string;
+  tier: ScrapeTier;
+  creditsSpent: number;
+  rateLimited: boolean;
+  expired: boolean;
+  error?: string;
+}
+
+/**
+ * Fetch raw HTML via scrape.do with tier escalation. Does not parse job fields.
+ * Used by Hiring Cafe and other specialized parsers.
+ */
+export async function scrapeUrlHtml(
+  url: string,
+  opts: ScrapeUrlHtmlOpts = {}
+): Promise<ScrapeUrlHtmlResult> {
+  const host = jobUrlHost(url) || '';
+  const maxTier = (opts.maxTier ?? 3) as ScrapeTier;
+  let learned: ScrapeTier = opts.startTier ?? 1;
+  if (opts.useLearnedTier !== false && !opts.startTier) {
+    try {
+      learned = await getLearnedTier(host);
+    } catch {
+      learned = 1;
+    }
+  }
+  const startTier = scrapeTiersToTry(learned, {
+    startTier: opts.startTier ?? learned,
+    maxTier,
+    useLearnedTier: opts.useLearnedTier,
+  });
+
+  let totalCredits = 0;
+  let lastError = '';
+  const tried: ScrapeTier[] = [];
+
+  for (const tier of startTier) {
+    tried.push(tier);
+    try {
+      const { status, html, credits } = await fetchTier(url, tier, opts.token);
+      totalCredits += credits;
+
+      if (status === 429) {
+        return {
+          ok: false,
+          status,
+          html: '',
+          tier,
+          creditsSpent: totalCredits,
+          expired: false,
+          rateLimited: true,
+          error: 'rate_limited',
+        };
+      }
+
+      if (status === 404 || status === 410) {
+        return {
+          ok: false,
+          status,
+          html: '',
+          tier,
+          creditsSpent: totalCredits,
+          expired: true,
+          rateLimited: false,
+          error: `target_${status}`,
+        };
+      }
+
+      if (status === 401) {
+        return {
+          ok: false,
+          status,
+          html: '',
+          tier,
+          creditsSpent: totalCredits,
+          expired: false,
+          rateLimited: false,
+          error: 'scrape_do_unauthorized_or_no_credits',
+        };
+      }
+
+      const escalateFn =
+        opts.shouldEscalate ||
+        ((s: number, h: string) => shouldEscalate(s, h, parseJobPageHtml(h, url)));
+      const escalate = escalateFn(status, html) && tier < maxTier;
+
+      if (!escalate && status >= 200 && status < 400 && Buffer.byteLength(html || '', 'utf8') >= MIN_HTML_BYTES) {
+        if (opts.useLearnedTier !== false) {
+          await recordScrapeSuccess(host, tier, credits || expectedCredits(tier));
+        }
+        return {
+          ok: true,
+          status,
+          html,
+          tier,
+          creditsSpent: totalCredits,
+          expired: false,
+          rateLimited: false,
+        };
+      }
+
+      if (!escalate) {
+        lastError = `tier_${tier}_status_${status}`;
+        break;
+      }
+      lastError = `escalate_from_tier_${tier}_status_${status}`;
+    } catch (err: any) {
+      lastError = err?.message || String(err);
+      logger.log('warn', `scrape.do tier ${tier} failed for host=${host}: ${lastError}`);
+      if (tier >= maxTier) break;
+    }
+  }
+
+  if (opts.useLearnedTier !== false && maxTier >= 3) {
+    await recordScrapeFailure(host, tried);
+  }
+  return {
+    ok: false,
+    status: 0,
+    html: '',
     tier: tried[tried.length - 1] || 1,
     creditsSpent: totalCredits,
     expired: false,

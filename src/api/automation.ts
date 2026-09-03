@@ -25,6 +25,11 @@ export interface PublicAutomationConfig {
   rowContext?: RowContextFields;
   webhookConfigured: boolean;
   proxyConfigured: boolean;
+  scrapeDoConfigured?: boolean;
+  hiringCafeEnrichment?: {
+    scrapeDoEnabled?: boolean;
+    scrapeDoMaxTier?: 2 | 3;
+  };
   destinationType?: AutomationDestinationType;
 }
 
@@ -50,6 +55,7 @@ export interface AutomationSummary {
   latestFailureReasonSource?: string | null;
   webhookConfigured: boolean;
   proxyConfigured: boolean;
+  scrapeDoConfigured?: boolean;
   destinationType?: AutomationDestinationType;
   config?: PublicAutomationConfig;
   schedule?: {

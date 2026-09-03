@@ -124,9 +124,12 @@ PROXY_POOL=
 # Job board enrichment (detail-page ATS / light HTTP → maxun_job_board)
 # Run as a separate PM2 process: npm run worker:enrichment
 # Never launches Chromium on the droplet (CHROMIUM_MAX_SLOTS is for scraper/aggregators).
-# Hiring Cafe: HTTP direct→proxy only here; browser CF solve runs in scoutx-aggregators.
-# -----------------------------------------------------------------------------
-# SCRAPE_DO_TOKEN=your_scrape_do_token  # Leave unset to stay on free ATS/HTTP paths
+# Hiring Cafe: HTTP direct→proxy→Scrape.do (Configure on HC aggregators) before browser in aggregators.
+# Per-aggregator token: Automations → Configure → Third-party scraper (Scrape.do).
+# Optional droplet-wide fallback when enabled on robot but token field left blank:
+# HIRING_CAFE_SCRAPE_DO_ENABLED=false
+# HIRING_CAFE_SCRAPE_DO_MAX_TIER=2
+# SCRAPE_DO_TOKEN=your_scrape_do_token  # Career sites + optional HC fallback when blank on robot
 # SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause enrichment when daily credits hit this
 # SCRAPE_DO_GEO=northamerica           # Used only on tier-3 (super+render) requests
 # SCRAPE_PROFILE_REPROBE_DAYS=30       # Re-try cheaper tiers after this many days

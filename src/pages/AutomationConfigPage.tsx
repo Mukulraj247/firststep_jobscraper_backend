@@ -7,10 +7,13 @@ import {
   Box,
   Button,
   Chip,
+  FormControl,
   FormControlLabel,
+  InputLabel,
   Link,
   MenuItem,
   Paper,
+  Select,
   Stack,
   Switch,
   TextField,
@@ -160,6 +163,8 @@ export const AutomationConfigPage = ({
   const [webhookConfigured, setWebhookConfigured] = useState(false);
   const [proxyConfigured, setProxyConfigured] = useState(false);
   const [clearProxy, setClearProxy] = useState(false);
+  const [scrapeDoConfigured, setScrapeDoConfigured] = useState(false);
+  const [clearScrapeDo, setClearScrapeDo] = useState(false);
   const [airtableConfigured, setAirtableConfigured] = useState(false);
   const [databaseConfigured, setDatabaseConfigured] = useState(false);
   const [cookiesConfigured, setCookiesConfigured] = useState(false);
@@ -259,7 +264,9 @@ export const AutomationConfigPage = ({
         const saas = automation.config || {};
         setWebhookConfigured(!!(automation.webhookConfigured || saas.webhookConfigured));
         setProxyConfigured(!!(automation.proxyConfigured || saas.proxyConfigured));
+        setScrapeDoConfigured(!!(automation.scrapeDoConfigured || saas.scrapeDoConfigured));
         setClearProxy(false);
+        setClearScrapeDo(false);
         setAirtableConfigured(!!saas.destinations?.airtable?.enabled);
         setDatabaseConfigured(!!saas.destinations?.database?.enabled);
         setCookiesConfigured(false);
@@ -296,6 +303,12 @@ export const AutomationConfigPage = ({
           browserLocation: {
             ...current.browserLocation,
             ...(saas.browserLocation || {}),
+          },
+          hiringCafeEnrichment: {
+            scrapeDoEnabled: false,
+            scrapeDoMaxTier: 2,
+            scrapeDoToken: '',
+            ...(saas.hiringCafeEnrichment || {}),
           },
           dataCleanup: {
             ...current.dataCleanup,
@@ -448,6 +461,17 @@ export const AutomationConfigPage = ({
             : {}),
         };
 
+    const hiringCafeEnrichmentPayload = clearScrapeDo
+      ? { clearScrapeDo: true as const }
+      : {
+          scrapeDoEnabled: !!config.hiringCafeEnrichment?.scrapeDoEnabled,
+          scrapeDoMaxTier:
+            Number(config.hiringCafeEnrichment?.scrapeDoMaxTier) === 3 ? 3 : 2,
+          ...(omitBlank(config.hiringCafeEnrichment?.scrapeDoToken)
+            ? { scrapeDoToken: config.hiringCafeEnrichment.scrapeDoToken }
+            : {}),
+        };
+
     const webhook =
       config.destinations?.webhook?.url || webhookUrl || '';
 
@@ -485,6 +509,9 @@ export const AutomationConfigPage = ({
       databaseTargetColumns: parsedTargets.list,
       ...(Object.keys(browserLocationPayload).length || clearProxy
         ? { browserLocation: browserLocationPayload }
+        : {}),
+      ...(config.aggregatorProvider === 'hiring_cafe'
+        ? { hiringCafeEnrichment: hiringCafeEnrichmentPayload }
         : {}),
       dataCleanup: config.dataCleanup || {},
       userAgent: config.userAgent || '',
@@ -530,6 +557,12 @@ export const AutomationConfigPage = ({
         omitBlank(config.browserLocation?.proxyPassword)
       ) {
         setProxyConfigured(true);
+      }
+      if (clearScrapeDo) {
+        setScrapeDoConfigured(false);
+        setClearScrapeDo(false);
+      } else if (omitBlank(config.hiringCafeEnrichment?.scrapeDoToken)) {
+        setScrapeDoConfigured(true);
       }
       notify('success', 'Automation configuration saved');
       await onSaved?.();
@@ -1236,6 +1269,98 @@ export const AutomationConfigPage = ({
               }}
             />
           </SectionPaper>
+
+          {config.aggregatorProvider === 'hiring_cafe' ? (
+            <SectionPaper
+              title="Third-party scraper (Scrape.do)"
+              action={
+                scrapeDoConfigured ? (
+                  <Chip size="small" color="success" label="Scrape.do configured" />
+                ) : undefined
+              }
+            >
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Used only for Hiring Cafe job posting pages when direct HTTP and proxy fail
+                (Cloudflare). Does not scrape employer career sites. Tier 2 uses JS render (~5
+                credits/request); tier 3 uses super render (~25 credits).
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={!!config.hiringCafeEnrichment?.scrapeDoEnabled}
+                    onChange={(event) =>
+                      updateNested(['hiringCafeEnrichment', 'scrapeDoEnabled'], event.target.checked)
+                    }
+                  />
+                }
+                label="Enable Scrape.do for Hiring Cafe job enrichment"
+              />
+              {scrapeDoConfigured && !clearScrapeDo ? (
+                <Alert
+                  severity="success"
+                  sx={{ mb: 1 }}
+                  action={
+                    <Button
+                      color="inherit"
+                      size="small"
+                      onClick={() => {
+                        setClearScrapeDo(true);
+                        setScrapeDoConfigured(false);
+                        updateNested(['hiringCafeEnrichment'], {
+                          scrapeDoToken: '',
+                          scrapeDoEnabled: !!config.hiringCafeEnrichment?.scrapeDoEnabled,
+                          scrapeDoMaxTier: config.hiringCafeEnrichment?.scrapeDoMaxTier ?? 2,
+                        });
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  }
+                >
+                  Scrape.do API token is stored for this aggregator. Leave the field blank after
+                  refresh to keep it — click Remove, then Save, to delete.
+                </Alert>
+              ) : null}
+              {clearScrapeDo ? (
+                <Alert severity="warning" sx={{ mb: 1 }}>
+                  Saved Scrape.do token will be deleted when you click Save.
+                </Alert>
+              ) : null}
+              <TextField
+                label="Scrape.do API token"
+                type="password"
+                fullWidth
+                autoComplete="new-password"
+                value={config.hiringCafeEnrichment?.scrapeDoToken || ''}
+                placeholder={
+                  scrapeDoConfigured && !clearScrapeDo
+                    ? 'Leave blank to keep saved token'
+                    : 'Paste token from scrape.do dashboard'
+                }
+                onChange={(event) => {
+                  if (clearScrapeDo) setClearScrapeDo(false);
+                  updateNested(['hiringCafeEnrichment', 'scrapeDoToken'], event.target.value);
+                }}
+              />
+              <FormControl fullWidth sx={{ mt: 2 }}>
+                <InputLabel id="hc-scrape-do-tier-label">Max Scrape.do tier</InputLabel>
+                <Select
+                  labelId="hc-scrape-do-tier-label"
+                  label="Max Scrape.do tier"
+                  value={Number(config.hiringCafeEnrichment?.scrapeDoMaxTier) === 3 ? 3 : 2}
+                  onChange={(event) =>
+                    updateNested(
+                      ['hiringCafeEnrichment', 'scrapeDoMaxTier'],
+                      Number(event.target.value) === 3 ? 3 : 2
+                    )
+                  }
+                >
+                  <MenuItem value={2}>Tier 2 — JS render (recommended)</MenuItem>
+                  <MenuItem value={3}>Tier 3 — super render (hard Cloudflare)</MenuItem>
+                </Select>
+              </FormControl>
+            </SectionPaper>
+          ) : null}
 
           <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
             <AccordionSummary expandIcon={<ExpandMore />}>
