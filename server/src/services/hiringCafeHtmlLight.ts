@@ -51,10 +51,10 @@ function getHiringCafeProxyUrl(): string | null {
   return null;
 }
 
-let cachedProxyAgent: HttpsProxyAgent<string> | null = null;
+let cachedProxyAgent: HttpsProxyAgent | null = null;
 let cachedProxyUrl: string | null = null;
 
-function getProxyAgent(): HttpsProxyAgent<string> | undefined {
+function getProxyAgent(): HttpsProxyAgent | undefined {
   const proxyUrl = getHiringCafeProxyUrl();
   if (!proxyUrl) return undefined;
 
