@@ -356,13 +356,28 @@ function applySnapshotToDoc(
 }
 
 function keepExistingEnrichment(prev: any): boolean {
+  if (!prev) return false;
   const method = String(prev?.enrichment?.method || '');
-  return Boolean(
-    prev &&
-      (prev.status === 'ready' || prev.status === 'partial') &&
-      method &&
-      method !== 'none' &&
-      method !== 'list'
+  // Ready listings with any real method (incl. list) — do not re-count as jobs added.
+  if (prev.status === 'ready' && method && method !== 'none') return true;
+  return false;
+}
+
+/** Thin / failed HC stubs should be re-queued for enrichment recovery. */
+function shouldRequeueIncomplete(prev: any): boolean {
+  if (!prev) return false;
+  const status = String(prev.status || '');
+  if (status === 'queued' || status === 'enriching') return false;
+  if (status !== 'partial' && status !== 'failed') return false;
+  const err = String(prev?.enrichment?.lastError || '');
+  const method = String(prev?.enrichment?.method || '');
+  return (
+    /hiring_cafe_html_only/i.test(err) ||
+    /cloudflare/i.test(err) ||
+    /scrape_failed/i.test(err) ||
+    err === '' ||
+    method === 'list' ||
+    method === 'none'
   );
 }
 
@@ -453,8 +468,9 @@ export async function enqueueJobBoardEnrichments(opts: {
 
     const acceptList = isListRowComplete(item.snapshot, { source: listingSource });
 
-    // Duplicate URL already on the board: never re-queue scrape.do.
-    if (prev && !acceptList) {
+    // Duplicate URL already on the board: never re-queue scrape.do — unless it is a
+    // recoverable HC/partial failure that should be tried again by enrichment.
+    if (prev && !acceptList && !shouldRequeueIncomplete(prev)) {
       stats.skippedDedup += 1;
       ops.push(
         touchSeen(
@@ -474,9 +490,16 @@ export async function enqueueJobBoardEnrichments(opts: {
     }
 
     const fields = applySnapshotToDoc(item.snapshot, item.jobUrl, item.jobId, item.applyUrl);
+    const isNew = !prev;
 
     if (acceptList) {
-      stats.readyFromList += 1;
+      // Only count brand-new board docs as "jobs added" — retouching an existing
+      // ready/list row must not inflate the dashboard Jobs Added metric.
+      if (isNew) {
+        stats.readyFromList += 1;
+      } else {
+        stats.skippedDedup += 1;
+      }
       stats.skippedComplete += 1;
       ops.push({
         updateOne: {
@@ -515,7 +538,12 @@ export async function enqueueJobBoardEnrichments(opts: {
       continue;
     }
 
-    stats.queued += 1;
+    if (isNew) {
+      stats.queued += 1;
+    } else {
+      // Existing incomplete stub — refresh snapshot but do not double-count as added.
+      stats.skippedDedup += 1;
+    }
     ops.push({
       updateOne: {
         filter: { jobUrlKey: key },
@@ -533,7 +561,7 @@ export async function enqueueJobBoardEnrichments(opts: {
             lastSeenAt: nowDate,
             listSnapshot: item.snapshot,
             ...(listingSource ? { source: listingSource } : {}),
-            priority: 0,
+            priority: listingSource === 'hiring_cafe' ? 10 : 0,
             leaseUntil: null,
             claimedBy: null,
             // Full object only — do not also set enrichment.* dotted paths (Mongo conflict).

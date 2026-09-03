@@ -251,30 +251,47 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
   const now = new Date();
   const leaseUntil = new Date(Date.now() + LEASE_MS);
 
-  for (let i = 0; i < limit; i++) {
-    const doc = await JobBoardListing.findOneAndUpdate(
-      {
-        status: 'queued',
-        $or: [
-          { 'enrichment.nextAttemptAt': null },
-          { 'enrichment.nextAttemptAt': { $lte: now } },
-          { 'enrichment.nextAttemptAt': { $exists: false } },
-        ],
+  // Prefer Hiring Cafe / aggregator stubs first — they are thin list rows that only
+  // become visible on the Job Board after enrichment, and they were starving behind
+  // large career-site queues.
+  const claimFilters: Array<Record<string, unknown>> = [
+    { source: 'hiring_cafe' },
+    {
+      source: {
+        $in: ['accel', 'sequoia', 'capitalg', 'choppingblock', 'aidevboard', 'startups_gallery'],
       },
-      {
-        $set: {
-          status: 'enriching',
-          leaseUntil,
-          claimedBy: WORKER_ID,
+    },
+    {}, // anything else queued
+  ];
+
+  for (const extra of claimFilters) {
+    while (claimed.length < limit) {
+      const doc = await JobBoardListing.findOneAndUpdate(
+        {
+          status: 'queued',
+          ...extra,
+          $or: [
+            { 'enrichment.nextAttemptAt': null },
+            { 'enrichment.nextAttemptAt': { $lte: now } },
+            { 'enrichment.nextAttemptAt': { $exists: false } },
+          ],
         },
-      },
-      {
-        sort: { priority: -1, createdAt: 1 },
-        returnDocument: 'after',
-      }
-    );
-    if (!doc) break;
-    claimed.push(doc);
+        {
+          $set: {
+            status: 'enriching',
+            leaseUntil,
+            claimedBy: WORKER_ID,
+          },
+        },
+        {
+          sort: { priority: -1, createdAt: 1 },
+          returnDocument: 'after',
+        }
+      );
+      if (!doc) break;
+      claimed.push(doc);
+    }
+    if (claimed.length >= limit) break;
   }
   return claimed;
 }
@@ -951,6 +968,25 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
         circuitBreaker.recordSuccess();
         return;
       }
+    }
+
+    // HTTP + browser both failed — keep queued with backoff so we retry (CF is flaky).
+    // Permanent partial was leaving ~100s of HC jobs invisible on the Job Board.
+    const attempts = Number(doc.enrichment?.attempts || 0) + 1;
+    if (attempts < JOB_ENRICHMENT_MAX_ATTEMPTS) {
+      const backoffMs = Math.min(30 * 60_000, 60_000 * Math.pow(2, Math.max(0, attempts - 1)));
+      await persistResult(doc, listFields, {
+        status: 'queued',
+        method: 'none',
+        tier: 0,
+        creditsSpent: 0,
+        error: 'hiring_cafe_cf_retry',
+        nextAttemptAt: new Date(Date.now() + backoffMs),
+        incrementAttempts: true,
+      });
+      metrics.failed += 1;
+      circuitBreaker.recordSuccess();
+      return;
     }
 
     const status = boardListingStatus(listFields, doc.jobUrl);
