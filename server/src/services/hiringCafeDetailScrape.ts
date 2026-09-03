@@ -23,6 +23,36 @@ import logger from '../logger';
 
 const DEFAULT_MAX_JOBS = 40;
 
+/** Build browser proxy profile from env vars (Decodo / Camoufox). Returns null if not configured. */
+function getHiringCafeBrowserProxy(): { server: string; username?: string; password?: string } | null {
+  const enabled = /^(true|1|yes|on)$/i.test(String(process.env.SCRAPER_PROXY_ENABLED || '').trim());
+  if (!enabled) return null;
+
+  const server = String(process.env.CAMOUFOX_PROXY_SERVER || '').trim();
+  const username = String(process.env.CAMOUFOX_PROXY_USERNAME || '').trim();
+  const password = String(process.env.CAMOUFOX_PROXY_PASSWORD || '').trim();
+
+  if (server) {
+    const hasProtocol = /^https?:\/\//i.test(server);
+    const normalizedServer = hasProtocol ? server : `http://${server}`;
+    logger.log('info', `Hiring Cafe browser using proxy: ${normalizedServer}`);
+    return {
+      server: normalizedServer,
+      username: username || undefined,
+      password: password || undefined,
+    };
+  }
+
+  const defaultProxy = String(process.env.DEFAULT_PROXY_URL || '').trim();
+  if (defaultProxy) {
+    const hasProtocol = /^https?:\/\//i.test(defaultProxy);
+    const normalizedServer = hasProtocol ? defaultProxy : `http://${defaultProxy}`;
+    return { server: normalizedServer };
+  }
+
+  return null;
+}
+
 /** Titles we get from Cloudflare / empty shells — never treat as real job titles. */
 function isGarbageHcDetailTitle(title: string): boolean {
   const t = String(title || '').trim();
@@ -292,9 +322,75 @@ function releaseHcEnrichBrowserSlot(): void {
   hcEnrichBrowserActive = Math.max(0, hcEnrichBrowserActive - 1);
 }
 
+/** Setup SSRF route blocking for HC browser page. */
+async function setupHcSsrfRoute(page: Page): Promise<void> {
+  await page.route('**/*', async (route) => {
+    const reqUrl = route.request().url();
+    try {
+      const host = new URL(reqUrl).hostname.replace(/^www\./i, '').toLowerCase();
+      if (
+        host === 'hiringcafe.com' ||
+        host === 'hiring.cafe' ||
+        host.endsWith('.hiringcafe.com') ||
+        host.endsWith('.hiring.cafe') ||
+        host === 'cloudflare.com' ||
+        host.endsWith('.cloudflare.com') ||
+        host === 'cloudflareinsights.com' ||
+        host.endsWith('.cloudflareinsights.com')
+      ) {
+        await route.fallback();
+        return;
+      }
+    } catch {
+      /* abort bad URLs */
+    }
+    await route.abort('blockedbyclient');
+  });
+}
+
+/** Single browser attempt (direct or proxied). Returns null on failure. */
+async function tryBrowserEnrich(
+  postingUrl: string,
+  listRow: Record<string, unknown>,
+  useProxy: boolean
+): Promise<Record<string, unknown> | null> {
+  const { acquirePooledPage, releasePooledPage } = await import('./browserReusePool');
+  const proxyProfile = useProxy ? getHiringCafeBrowserProxy() : null;
+  let lease: Awaited<ReturnType<typeof acquirePooledPage>> | null = null;
+
+  try {
+    lease = await acquirePooledPage({
+      profile: {
+        browserType: 'playwright',
+        headless: true,
+        useStealth: true,
+        poolIsolationKey: `hiring-cafe-enrich-browser${useProxy ? '-proxied' : '-direct'}`,
+        proxy: proxyProfile,
+      },
+      maxPagesPerBrowser: HC_ENRICH_BROWSER_CONCURRENCY,
+      blockResources: false,
+    });
+    await setupHcSsrfRoute(lease.page);
+    const via = await enrichViaBrowser(lease.page, listRow, postingUrl);
+    return via.row;
+  } catch (err: any) {
+    const isCfBlock =
+      /cloudflare/i.test(err?.message || '') || /challenge/i.test(err?.message || '');
+    logger.log(
+      'warn',
+      `HC browser enrich ${useProxy ? 'proxied' : 'direct'} failed: ${postingUrl} - ${err?.message || err}${isCfBlock ? ' (CF block)' : ''}`
+    );
+    return null;
+  } finally {
+    await releasePooledPage(lease);
+  }
+}
+
 /**
  * Enrichment-worker fallback: launch a short-lived stealth Chromium page for one
  * HC posting when light HTTP is Cloudflare-blocked. Never navigates to employer sites.
+ * 
+ * Tiered approach: direct browser first, then proxy on Cloudflare block.
  * Uses the shared Turnstile solver via waitForCloudflareIfPresent.
  */
 export async function enrichHiringCafePostingStandalone(
@@ -305,53 +401,28 @@ export async function enrichHiringCafePostingStandalone(
   if (!isHiringCafeJobPostingUrl(postingUrl)) return null;
 
   await acquireHcEnrichBrowserSlot();
-  const { acquirePooledPage, releasePooledPage } = await import('./browserReusePool');
-  let lease: Awaited<ReturnType<typeof acquirePooledPage>> | null = null;
   try {
-    lease = await acquirePooledPage({
-      profile: {
-        browserType: 'playwright',
-        headless: true,
-        useStealth: true,
-        poolIsolationKey: 'hiring-cafe-enrich-browser',
-      },
-      maxPagesPerBrowser: HC_ENRICH_BROWSER_CONCURRENCY,
-      blockResources: false,
-    });
-    // SSRF rail: only allow hiringcafe.com / hiring.cafe navigations from this page.
-    await lease.page.route('**/*', async (route) => {
-      const reqUrl = route.request().url();
-      try {
-        const host = new URL(reqUrl).hostname.replace(/^www\./i, '').toLowerCase();
-        if (
-          host === 'hiringcafe.com' ||
-          host === 'hiring.cafe' ||
-          host.endsWith('.hiringcafe.com') ||
-          host.endsWith('.hiring.cafe') ||
-          host === 'cloudflare.com' ||
-          host.endsWith('.cloudflare.com') ||
-          host === 'cloudflareinsights.com' ||
-          host.endsWith('.cloudflareinsights.com')
-        ) {
-          await route.fallback();
-          return;
-        }
-      } catch {
-        /* abort bad URLs */
-      }
-      await route.abort('blockedbyclient');
-    });
+    // Tier 1: Try direct (no proxy)
+    const directResult = await tryBrowserEnrich(postingUrl, listRow, false);
+    if (directResult) {
+      logger.log('info', `HC browser enrich direct success: ${postingUrl}`);
+      return directResult;
+    }
 
-    const via = await enrichViaBrowser(lease.page, listRow, postingUrl);
-    return via.row;
-  } catch (err: any) {
-    logger.log(
-      'warn',
-      `enrichHiringCafePostingStandalone failed for ${postingUrl}: ${err?.message || err}`
-    );
+    // Tier 2: Try with proxy if available
+    const proxyAvailable = !!getHiringCafeBrowserProxy();
+    if (proxyAvailable) {
+      logger.log('info', `HC browser enrich direct failed, retrying with proxy: ${postingUrl}`);
+      const proxyResult = await tryBrowserEnrich(postingUrl, listRow, true);
+      if (proxyResult) {
+        logger.log('info', `HC browser enrich proxy success: ${postingUrl}`);
+        return proxyResult;
+      }
+      logger.log('warn', `HC browser enrich proxy also failed: ${postingUrl}`);
+    }
+
     return null;
   } finally {
-    await releasePooledPage(lease);
     releaseHcEnrichBrowserSlot();
   }
 }

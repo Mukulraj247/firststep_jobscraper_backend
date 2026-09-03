@@ -575,6 +575,44 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         )}
       </Stack>
 
+      {/* Company first — specialty / meta chips sit below so the employer is the primary signal. */}
+      <Stack direction="row" spacing={1} alignItems="center" mb={0.85} sx={{ minWidth: 0 }}>
+        <CompanyAvatar name={company} logoUrl={logo} size={36} />
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography sx={{ fontWeight: 700, fontSize: '0.82rem', color: TEAL }} noWrap>
+            {company}
+          </Typography>
+          {aboutLine && companyMetaParts.length > 0 && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                fontSize: '0.68rem',
+                lineHeight: 1.35,
+              }}
+              title={aboutLine}
+            >
+              {aboutLine}
+            </Typography>
+          )}
+          {companySubtitle && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', fontSize: '0.68rem', lineHeight: 1.35 }}
+              noWrap
+              title={companySubtitle}
+            >
+              {aboutLine && companyMetaParts.length > 0 ? companyMetaParts.join(' · ') : companySubtitle}
+            </Typography>
+          )}
+        </Box>
+      </Stack>
+
       {frozenCategories.length > 0 && (
         <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75} sx={{ minWidth: 0 }}>
           {frozenCategories.map((cat) => (
@@ -618,43 +656,6 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         {educationShort && <SoftChip label={educationShort} />}
         {visaSponsorship === 'yes' && <SoftChip label="Visa sponsorship" tone="accent" />}
         {asText(data.enrichmentMethod) === 'llm' && <SoftChip label="AI-parsed" tone="accent" />}
-      </Stack>
-
-      <Stack direction="row" spacing={1} alignItems="center" mb={1.1} sx={{ minWidth: 0 }}>
-        <CompanyAvatar name={company} logoUrl={logo} size={36} />
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: '0.82rem', color: TEAL }} noWrap>
-            {company}
-          </Typography>
-          {aboutLine && companyMetaParts.length > 0 && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                fontSize: '0.68rem',
-                lineHeight: 1.35,
-              }}
-              title={aboutLine}
-            >
-              {aboutLine}
-            </Typography>
-          )}
-          {companySubtitle && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', fontSize: '0.68rem', lineHeight: 1.35 }}
-              noWrap
-              title={companySubtitle}
-            >
-              {aboutLine && companyMetaParts.length > 0 ? companyMetaParts.join(' · ') : companySubtitle}
-            </Typography>
-          )}
-        </Box>
       </Stack>
 
       <Stack spacing={0.85} sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
@@ -928,6 +929,7 @@ const JobDetailModal: React.FC<{
               >
                 {loading ? '…' : title}
               </Typography>
+              <Typography sx={{ color: TEAL, fontWeight: 650, mb: 0.75 }}>{company}</Typography>
               {frozenCategories.length > 0 && (
                 <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75}>
                   {frozenCategories.map((cat) => (
@@ -935,7 +937,6 @@ const JobDetailModal: React.FC<{
                   ))}
                 </Stack>
               )}
-              <Typography sx={{ color: TEAL, fontWeight: 650, mb: 1 }}>{company}</Typography>
               <Stack direction="row" flexWrap="wrap" gap={0.75}>
                 {location && <SoftChip label={location} />}
                 {category && <SoftChip label={category} tone="teal" />}
