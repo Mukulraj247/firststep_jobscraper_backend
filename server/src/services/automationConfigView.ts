@@ -78,6 +78,8 @@ export const toPublicAutomationConfig = (input: unknown): AnyRecord => {
     columnOverrides: config.columnOverrides,
     databaseTargetColumns: config.databaseTargetColumns,
     rowContext: config.rowContext,
+    aggregatorProvider: config.aggregatorProvider,
+    enrichHiringCafeDetails: config.enrichHiringCafeDetails,
     webhookConfigured: !!(config.webhookUrl || config.destinations?.webhook?.url),
     proxyConfigured: !!(
       config.browserLocation?.proxyServer ||

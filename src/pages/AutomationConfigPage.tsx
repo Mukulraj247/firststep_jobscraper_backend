@@ -40,6 +40,7 @@ import {
   proxySavedChipLabel,
   aggregatorProviderLabel,
   aggregatorEnrichModeLabel,
+  isHiringCafeAutomation,
 } from '../features/automations/automationsPageBehavior';
 import { popReturnNavigateOptions, pushReturnState } from '../features/navigation/inAppReturn';
 
@@ -298,6 +299,7 @@ export const AutomationConfigPage = ({
         setConfig((current) => ({
           ...current,
           ...saas,
+          aggregatorProvider: automation.aggregatorProvider || saas.aggregatorProvider,
           destinations: mergedDestinations,
           schedule: automation.schedule || saas.schedule || current.schedule,
           browserLocation: {
@@ -510,7 +512,7 @@ export const AutomationConfigPage = ({
       ...(Object.keys(browserLocationPayload).length || clearProxy
         ? { browserLocation: browserLocationPayload }
         : {}),
-      ...(config.aggregatorProvider === 'hiring_cafe'
+      ...(isHiringCafeAutomation(config, startUrl)
         ? { hiringCafeEnrichment: hiringCafeEnrichmentPayload }
         : {}),
       dataCleanup: config.dataCleanup || {},
@@ -1270,7 +1272,7 @@ export const AutomationConfigPage = ({
             />
           </SectionPaper>
 
-          {config.aggregatorProvider === 'hiring_cafe' ? (
+          {isHiringCafeAutomation(config, startUrl) ? (
             <SectionPaper
               title="Third-party scraper (Scrape.do)"
               action={

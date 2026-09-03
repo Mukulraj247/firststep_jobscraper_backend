@@ -26,6 +26,8 @@ export interface PublicAutomationConfig {
   webhookConfigured: boolean;
   proxyConfigured: boolean;
   scrapeDoConfigured?: boolean;
+  aggregatorProvider?: string;
+  enrichHiringCafeDetails?: boolean;
   hiringCafeEnrichment?: {
     scrapeDoEnabled?: boolean;
     scrapeDoMaxTier?: 2 | 3;

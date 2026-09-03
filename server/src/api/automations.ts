@@ -545,6 +545,8 @@ const mapAutomation = (
   rowsExtracted: number = 0
 ) => {
   const config = toPublicAutomationConfig(getAutomationConfig(robot));
+  const aggregatorProvider =
+    String(robot.recording_meta?.saasConfig?.aggregatorProvider || '').trim() || undefined;
   const eff = resolveEffectiveScheduleState(robot);
   const hasInterval = !!(eff.cron || eff.every);
   const scheduleTimestamps = readRobotScheduleTimestamps(robot, eff);
@@ -583,7 +585,11 @@ const mapAutomation = (
     proxyConfigured: config.proxyConfigured,
     scrapeDoConfigured: config.scrapeDoConfigured,
     destinationType: config.destinationType,
-    config,
+    aggregatorProvider,
+    config: {
+      ...config,
+      ...(aggregatorProvider ? { aggregatorProvider } : {}),
+    },
     schedule,
   };
 };

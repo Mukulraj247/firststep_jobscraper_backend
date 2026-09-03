@@ -722,3 +722,23 @@ export function aggregatorEnrichModeLabel(config: Record<string, unknown>): stri
   if (config.aggregatorProvider === 'startups_gallery') return 'List ATS URLs only';
   return null;
 }
+
+/** True when Configure should show Hiring Cafe–only settings (Scrape.do, etc.). */
+export function isHiringCafeAutomation(
+  config: Record<string, unknown> | undefined | null,
+  targetUrl?: string | null
+): boolean {
+  const provider = String(config?.aggregatorProvider || '').trim().toLowerCase();
+  if (provider === 'hiring_cafe') return true;
+  const url = String(targetUrl || config?.targetUrl || '').trim().toLowerCase();
+  if (!url) return false;
+  try {
+    const host = new URL(url.startsWith('http') ? url : `https://${url}`).hostname.replace(
+      /^www\./,
+      ''
+    );
+    return host === 'hiring.cafe' || host === 'hiringcafe.com' || host.endsWith('.hiring.cafe');
+  } catch {
+    return /hiring\.?cafe/i.test(url);
+  }
+}
