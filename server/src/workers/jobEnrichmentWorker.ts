@@ -294,6 +294,41 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
     }
     if (claimed.length >= limit) break;
   }
+
+  // Safety net: board-visible jobs that never got Specialty tags (readyFromList
+  // before tagger wiring, or tagger was down). Tag-only — no scrape.do spend.
+  // Once categoryClassification.classifiedAt exists we do not reclaim (even if
+  // the tagger returned zero matching specialties).
+  while (claimed.length < limit) {
+    const doc = await JobBoardListing.findOneAndUpdate(
+      {
+        status: { $in: ['ready', 'partial'] },
+        'categoryClassification.classifiedAt': { $exists: false },
+        jobTitle: { $exists: true, $nin: [null, ''] },
+        jobDescription: { $exists: true, $nin: [null, ''] },
+        $or: [
+          { 'enrichment.nextAttemptAt': null },
+          { 'enrichment.nextAttemptAt': { $lte: now } },
+          { 'enrichment.nextAttemptAt': { $exists: false } },
+        ],
+      },
+      {
+        $set: {
+          status: 'enriching',
+          leaseUntil,
+          claimedBy: WORKER_ID,
+          'enrichment.lastError': 'retag_frozen_categories',
+        },
+      },
+      {
+        sort: { updatedAt: -1 },
+        returnDocument: 'after',
+      }
+    );
+    if (!doc) break;
+    claimed.push(doc);
+  }
+
   return claimed;
 }
 
@@ -502,6 +537,9 @@ async function persistResult(
         if (tagResult.categoryClassification) {
           $set.categoryClassification = tagResult.categoryClassification;
         }
+      } else if (!(doc as any).categoryClassification?.classifiedAt) {
+        // Tagger down / cooldown — retry later instead of tight-loop reclaiming.
+        $set['enrichment.nextAttemptAt'] = new Date(Date.now() + 2 * 60_000);
       }
     } catch (err: any) {
       logger.log(
@@ -522,6 +560,59 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   const isConsiderAtsSource = usesConsiderApplyThenAtsEnrichment(sourceKey);
   // HC / Accel / Chopping Block / AI Dev Board stay on aggregator payload only.
   const isAggregatorHtmlSource = usesAggregatorHtmlOnlyEnrichment(sourceKey);
+
+  // Tag-only reclaim: board already has content, just missing Specialty badges.
+  const retagOnly = String(doc.enrichment?.lastError || '') === 'retag_frozen_categories';
+  if (retagOnly) {
+    const existing: ParsedJobFields = {
+      jobTitle: String(doc.jobTitle || listFields.jobTitle || ''),
+      companyName: String(doc.companyName || listFields.companyName || ''),
+      jobDescription: String(doc.jobDescription || listFields.jobDescription || ''),
+      location: String(doc.location || listFields.location || ''),
+      salaryRange: String(doc.salaryRange || listFields.salaryRange || ''),
+      employmentType: String(doc.employmentType || listFields.employmentType || ''),
+      remoteType: String(doc.remoteType || listFields.remoteType || ''),
+      date: doc.date ? new Date(doc.date).toISOString() : listFields.date,
+      applyUrl: String(doc.applyUrl || doc.jobUrl || ''),
+      companyLogoUrl: String((doc as any).companyLogoUrl || ''),
+      jobCategory: String(doc.jobCategory || listFields.jobCategory || ''),
+      source: 'none',
+    };
+    const status = boardListingStatus(existing, doc.jobUrl);
+    const method = (doc.enrichment?.method || 'list') as
+      | 'ats'
+      | 'scrape.do'
+      | 'browser'
+      | 'llm'
+      | 'list'
+      | 'none';
+    await persistResult(doc, existing, {
+      status: status === 'ready' ? 'ready' : 'partial',
+      method: method === 'none' ? 'list' : method,
+      tier: Number(doc.enrichment?.tier || 0),
+      creditsSpent: 0,
+      error: '',
+      incrementAttempts: false,
+      structured: {
+        about: String((doc as any).about || ''),
+        skills: Array.isArray((doc as any).skills) ? ((doc as any).skills as string[]) : [],
+        responsibilities: Array.isArray((doc as any).responsibilities)
+          ? ((doc as any).responsibilities as string[])
+          : [],
+        minimumQualifications: Array.isArray((doc as any).minimumQualifications)
+          ? ((doc as any).minimumQualifications as string[])
+          : [],
+        preferredQualifications: Array.isArray((doc as any).preferredQualifications)
+          ? ((doc as any).preferredQualifications as string[])
+          : [],
+        benefits: Array.isArray((doc as any).benefits) ? ((doc as any).benefits as string[]) : [],
+      },
+    });
+    if (status === 'ready') metrics.ready += 1;
+    else metrics.failed += 1;
+    circuitBreaker.recordSuccess();
+    return;
+  }
 
   // Consider (Sequoia / CapitalG): if employer apply missing, light-fetch posting to resolve it.
   if (isConsiderAtsSource) {
@@ -867,9 +958,8 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  // Hiring Cafe: HTTP-only in enrichment (direct→proxy). Never Chromium here —
-  // scoutx-enrichment shares CHROMIUM_MAX_SLOTS with scrapers and will hang.
-  // Real CF clears belong in scoutx-aggregators detail scrape.
+  // Hiring Cafe: aggregator only collects /job/{slug} URLs. Detail is Scrape.do
+  // in this worker (no Chromium) so career scrapers can use Chromium slots.
   if (isHiringCafeSource) {
     const list = doc.listSnapshot || {};
     const hcPosting =

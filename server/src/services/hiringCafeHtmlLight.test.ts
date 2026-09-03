@@ -137,7 +137,7 @@ describe('fetchHiringCafePostingHtml', () => {
     expect(axiosGet).not.toHaveBeenCalled();
   });
 
-  it('falls back to Scrape.do when HTTP fails and robot opts are set', async () => {
+  it('uses Scrape.do immediately when robot opts are set (skips HTTP/proxy)', async () => {
     scrapeDoMock.mockResolvedValue({
       ok: true,
       html: NEXT_DATA_HTML,
@@ -145,12 +145,6 @@ describe('fetchHiringCafePostingHtml', () => {
       light: true,
       tier: 2,
       creditsSpent: 5,
-    });
-
-    axiosGet.mockResolvedValueOnce({
-      status: 403,
-      data: '<html>Just a moment...</html>',
-      headers: { 'content-type': 'text/html' },
     });
 
     const result = await fetchHiringCafePostingHtml(POSTING, {
@@ -161,5 +155,6 @@ describe('fetchHiringCafePostingHtml', () => {
     expect(result.method).toBe('scrape.do');
     expect(result.creditsSpent).toBe(5);
     expect(scrapeDoMock).toHaveBeenCalled();
+    expect(axiosGet).not.toHaveBeenCalled();
   });
 });

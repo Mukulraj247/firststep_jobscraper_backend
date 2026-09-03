@@ -124,12 +124,12 @@ PROXY_POOL=
 # Job board enrichment (detail-page ATS / light HTTP → maxun_job_board)
 # Run as a separate PM2 process: npm run worker:enrichment
 # Never launches Chromium on the droplet (CHROMIUM_MAX_SLOTS is for scraper/aggregators).
-# Hiring Cafe: HTTP direct→proxy→Scrape.do (Configure on HC aggregators) before browser in aggregators.
+# Hiring Cafe: aggregator = list HTML only (Chromium short). Detail = Scrape.do in enrichment.
 # Per-aggregator token: Automations → Configure → Third-party scraper (Scrape.do).
 # Optional droplet-wide fallback when enabled on robot but token field left blank:
 # HIRING_CAFE_SCRAPE_DO_ENABLED=false
 # HIRING_CAFE_SCRAPE_DO_MAX_TIER=2
-# SCRAPE_DO_TOKEN=your_scrape_do_token  # Career sites + optional HC fallback when blank on robot
+# SCRAPE_DO_TOKEN=your_scrape_do_token  # Career sites + HC enrichment when blank on robot
 # SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause enrichment when daily credits hit this
 # SCRAPE_DO_GEO=northamerica           # Used only on tier-3 (super+render) requests
 # SCRAPE_PROFILE_REPROBE_DAYS=30       # Re-try cheaper tiers after this many days
@@ -137,7 +137,7 @@ PROXY_POOL=
 # JOB_ENRICHMENT_BATCH=8               # Docs claimed per pass
 # JOB_ENRICHMENT_RATE_PER_MIN=12       # Token-bucket pace (~4k/day average is ~2.8/min)
 # JOB_ENRICHMENT_MAX_ATTEMPTS=4
-# HIRING_CAFE_ENRICH_BROWSER_ENABLED=false  # Keep false on 2–3GB droplets
+# HIRING_CAFE_ENRICH_BROWSER_ENABLED=false  # Keep false — HC details use Scrape.do, not Chromium
 # JOB_BOARD_STALE_DAYS=14              # Skip re-fetch when board row is fresher than this
 # JOB_BOARD_MIN_DESC_CHARS=400         # List rows this complete become ready with 0 credits
 # MAX_PARSE_BYTES=1572864              # Cap HTML buffered/parsed (~1.5 MB)

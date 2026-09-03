@@ -359,6 +359,24 @@ export function pickHiringCafeJobUrl(row: Record<string, unknown>): string | nul
 }
 
 /**
+ * Stamp HC /job/{slug} onto list rows so enrichment can Scrape.do later.
+ * Does not fetch pages — aggregator Chromium stays on the search list only.
+ */
+export function stampHiringCafeListPostingUrls(
+  rows: Record<string, unknown>[]
+): { stamped: number } {
+  let stamped = 0;
+  for (const row of rows) {
+    const postingUrl = pickHiringCafeJobUrl(row);
+    if (!postingUrl) continue;
+    row.aggregatorPostingUrl = postingUrl;
+    if (!String(row.jobUrl || '').trim()) row.jobUrl = postingUrl;
+    stamped += 1;
+  }
+  return { stamped };
+}
+
+/**
  * Employer apply link on a Hiring Cafe job page.
  * Primary source: __NEXT_DATA__.props.pageProps.job.apply_url
  * (the pink "Apply directly on employer's site" control is a <button>, not an <a href>).

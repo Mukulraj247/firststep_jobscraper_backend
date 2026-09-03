@@ -426,9 +426,8 @@ async function tryBrowserEnrich(
 }
 
 /**
- * Enrichment-worker path for one HC posting.
- * Default: HTTP only (direct → Decodo). No Chromium — enrichment is ATS/HTTP on the droplet.
- * Optional browser when HIRING_CAFE_ENRICH_BROWSER_ENABLED=true (not for 2–3GB prod).
+ * Enrichment-worker path for one HC posting: Scrape.do when configured (no Chromium).
+ * Optional browser only if HIRING_CAFE_ENRICH_BROWSER_ENABLED=true.
  */
 export async function enrichHiringCafePostingStandalone(
   postingUrl: string,

@@ -40,8 +40,7 @@ import {
   type LinkedInAggregatorRunHandle,
 } from '../services/linkedinAggregatorRun';
 import { persistLinkedInAccountSession } from '../services/linkedinLogin';
-import { enrichHiringCafeListRows } from '../services/hiringCafeDetailScrape';
-import { resolveHiringCafeScrapeDoFromConfig } from '../services/hiringCafeEnrichmentConfig';
+import { stampHiringCafeListPostingUrls } from '../services/hiringCafeDetail';
 import { enrichAccelListRows } from '../services/accelDetailScrape';
 import { enrichConsiderListRows } from '../services/sequoiaDetailScrape';
 import { enrichChoppingBlockListRows } from '../services/choppingblockDetailScrape';
@@ -827,16 +826,12 @@ async function processConfiguredListExtraction(
     }
 
     if (shouldEnrichHiringCafeDetails(automation) && rows.length > 0) {
-      const cap =
-        typeof extractionConfig.maxItems === 'number' && extractionConfig.maxItems > 0
-          ? extractionConfig.maxItems
-          : 40;
-      const hcScrapeDo = resolveHiringCafeScrapeDoFromConfig(getAutomationConfig(automation));
-      rows = (await enrichHiringCafeListRows(page, rows, {
-        maxJobs: cap,
-        onLog: (message) => appendRunLog(run, message, { flush: true }),
-        scrapeDo: hcScrapeDo,
-      })) as Record<string, any>[];
+      const { stamped } = stampHiringCafeListPostingUrls(rows as Record<string, unknown>[]);
+      await appendRunLog(
+        run,
+        `Hiring Cafe: list-only (${stamped}/${rows.length} posting URLs). Detail + Scrape.do run in enrichment so Chromium is released.`,
+        { flush: true }
+      );
     }
 
     if (shouldEnrichAccelDetails(automation) && rows.length > 0) {

@@ -6,6 +6,7 @@ import {
   mergeHiringCafeDetailIntoRow,
   parseHiringCafeJobPageHtml,
   pickHiringCafeJobUrl,
+  stampHiringCafeListPostingUrls,
   titleFromHiringCafeSlug,
 } from './hiringCafeDetail';
 
@@ -27,6 +28,17 @@ describe('hiringCafeDetail', () => {
         image: 'https://s2.googleusercontent.com/s2/favicons?domain=siemens.com',
       })
     ).toBe(POSTING);
+  });
+
+  it('stamps aggregatorPostingUrl for enrichment without fetching', () => {
+    const rows: Record<string, unknown>[] = [
+      { link: POSTING, company: 'Siemens' },
+      { url: 'https://hiringcafe.com/jobs' },
+    ];
+    const { stamped } = stampHiringCafeListPostingUrls(rows);
+    expect(stamped).toBe(1);
+    expect(rows[0].aggregatorPostingUrl).toBe(POSTING);
+    expect(rows[0].jobUrl).toBe(POSTING);
   });
 
   it('rejects Cloudflare host titles in favor of the URL slug', () => {

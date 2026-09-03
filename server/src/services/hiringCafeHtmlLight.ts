@@ -226,34 +226,13 @@ export async function fetchHiringCafePostingHtml(
     };
   }
 
-  // Tier 1: Try direct (no proxy)
-  const directResult = await fetchHtmlOnce(url, false);
-  if (directResult.ok) {
-    logger.log('info', `Hiring Cafe HTTP direct success: ${url}`);
-    return directResult;
-  }
-
-  // Tier 2: If Cloudflare blocked or failed, try with proxy
-  const proxyAvailable = !!getHiringCafeProxyUrl();
-  if (proxyAvailable && (directResult.cfBlocked || directResult.status === 403 || directResult.status === 503)) {
-    logger.log('info', `Hiring Cafe HTTP direct blocked, retrying with proxy: ${url}`);
-    const proxyResult = await fetchHtmlOnce(url, true);
-    if (proxyResult.ok) {
-      logger.log('info', `Hiring Cafe HTTP proxy success: ${url}`);
-      return proxyResult;
-    }
-    logger.log('warn', `Hiring Cafe HTTP proxy also failed: ${url} - ${proxyResult.error}`);
-  }
-
-  // No proxy available or direct failed for non-CF reason
-  if (directResult.cfBlocked) {
-    logger.log('warn', `Hiring Cafe HTTP Cloudflare blocked (no proxy configured): ${url}`);
-  }
-
   const scrapeDo = opts?.scrapeDo;
-  if (scrapeDo?.enabled && scrapeDo.token) {
-    logger.log('info', `Hiring Cafe HTTP failed, trying Scrape.do: ${url}`);
-    const sd = await fetchHiringCafePostingViaScrapeDo(url, scrapeDo);
+  const scrapeDoReady = Boolean(scrapeDo?.enabled && scrapeDo.token);
+  // HC job pages are Cloudflare-blocked on direct HTTP and Decodo. When Scrape.do is
+  // configured, skip those tiers so enrichment stays off Chromium and finishes faster.
+  if (scrapeDoReady) {
+    logger.log('info', `Hiring Cafe fetching via Scrape.do: ${url}`);
+    const sd = await fetchHiringCafePostingViaScrapeDo(url, scrapeDo!);
     if (sd.ok) {
       return {
         ok: true,
@@ -275,6 +254,26 @@ export async function fetchHiringCafePostingHtml(
     };
   }
 
+  const directResult = await fetchHtmlOnce(url, false);
+  if (directResult.ok) {
+    logger.log('info', `Hiring Cafe HTTP direct success: ${url}`);
+    return directResult;
+  }
+
+  const proxyAvailable = !!getHiringCafeProxyUrl();
+  if (proxyAvailable && (directResult.cfBlocked || directResult.status === 403 || directResult.status === 503)) {
+    logger.log('info', `Hiring Cafe HTTP direct blocked, retrying with proxy: ${url}`);
+    const proxyResult = await fetchHtmlOnce(url, true);
+    if (proxyResult.ok) {
+      logger.log('info', `Hiring Cafe HTTP proxy success: ${url}`);
+      return proxyResult;
+    }
+    logger.log('warn', `Hiring Cafe HTTP proxy also failed: ${url} - ${proxyResult.error}`);
+  }
+
+  if (directResult.cfBlocked) {
+    logger.log('warn', `Hiring Cafe HTTP Cloudflare blocked (no Scrape.do configured): ${url}`);
+  }
   return directResult;
 }
 

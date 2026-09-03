@@ -22,6 +22,7 @@ import { pickConsiderJobUrl } from './sequoiaDetail';
 import { pickChoppingBlockJobUrl } from './choppingblockDetail';
 import { pickAidevboardJobUrl } from './aidevboardDetail';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
+import { classifyJobCategories } from './jobCategoryTagger';
 import logger from '../logger';
 
 export const JOB_BOARD_STALE_DAYS = parseInt(process.env.JOB_BOARD_STALE_DAYS || '14', 10);
@@ -501,6 +502,30 @@ export async function enqueueJobBoardEnrichments(opts: {
         stats.skippedDedup += 1;
       }
       stats.skippedComplete += 1;
+
+      // List-complete rows never hit the enrichment worker — tag here so Specialty
+      // badges appear for every source (career scrapers, HC list-complete, etc.).
+      const tagFields: Record<string, unknown> = {};
+      try {
+        const tagResult = await classifyJobCategories({
+          title: String(fields.jobTitle || ''),
+          description: String(fields.jobDescription || ''),
+          contentHash: String(fields.contentHash || ''),
+          existingClassification: (prev as any)?.categoryClassification || null,
+        });
+        if (!tagResult.skipUpdate) {
+          tagFields.frozenCategories = tagResult.frozenCategories;
+          if (tagResult.categoryClassification) {
+            tagFields.categoryClassification = tagResult.categoryClassification;
+          }
+        }
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `enqueueJobBoardEnrichments tagger failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+        );
+      }
+
       ops.push({
         updateOne: {
           filter: { jobUrlKey: key },
@@ -513,6 +538,7 @@ export async function enqueueJobBoardEnrichments(opts: {
             $addToSet: { robotMetaIds: opts.robotMetaId, runIds: String(opts.runId) },
             $set: {
               ...fields,
+              ...tagFields,
               ownerId,
               status: 'ready',
               lastSeenAt: nowDate,
