@@ -7,6 +7,7 @@ import {
   isHiringCafeUrl,
   isConsiderBoardUrl,
   isConsiderJobPostingUrl,
+  isAggregatorHostUrl,
   usesAggregatorHtmlOnlyEnrichment,
   usesConsiderApplyThenAtsEnrichment,
 } from '../services/aggregatorIdentity';
@@ -32,7 +33,11 @@ import {
   preferJobUrlTitle,
   htmlToPlainText,
 } from '../services/jobPageParser';
-import { contentHashFromFields, isListRowComplete } from '../services/jobBoardEnrichment';
+import {
+  contentHashFromFields,
+  isListRowComplete,
+  rekeySoftGateListingToEmployer,
+} from '../services/jobBoardEnrichment';
 import {
   extractJobFieldsWithGemini,
   isGeminiConfigured,
@@ -42,13 +47,23 @@ import {
   LLM_DAILY_TOKEN_BUDGET,
 } from '../services/geminiJobExtractor';
 import { classifyJobCategories } from '../services/jobCategoryTagger';
-import { resolveHiringCafeScrapeDoForListing } from '../services/hiringCafeEnrichmentConfig';
+import {
+  isCareerBoardScrapeDoEnabled,
+  resolveHiringCafeScrapeDoForListing,
+} from '../services/hiringCafeEnrichmentConfig';
+import {
+  HIRING_CAFE_ENRICHMENT_EXHAUSTED,
+  hiringCafeEnrichmentBackoffMs,
+  isHiringCafeBoardReady,
+  shouldRequeueHiringCafeAfterAttempt,
+} from '../services/hiringCafeEnrichmentPolicy';
 import logger from '../logger';
 
 export const JOB_ENRICHMENT_CONCURRENCY = parseInt(process.env.JOB_ENRICHMENT_CONCURRENCY || '5', 10);
 /** Keep modest — IBM Playwright enrichments are serialized and long-leased. */
 export const JOB_ENRICHMENT_BATCH = parseInt(process.env.JOB_ENRICHMENT_BATCH || '8', 10);
 export const JOB_ENRICHMENT_RATE_PER_MIN = parseInt(process.env.JOB_ENRICHMENT_RATE_PER_MIN || '12', 10);
+/** Non-HC default; Hiring Cafe uses HIRING_CAFE_ENRICHMENT_MAX_ATTEMPTS (10). */
 export const JOB_ENRICHMENT_MAX_ATTEMPTS = parseInt(process.env.JOB_ENRICHMENT_MAX_ATTEMPTS || '4', 10);
 export const SCRAPE_DO_DAILY_CREDIT_BUDGET = parseInt(
   process.env.SCRAPE_DO_DAILY_CREDIT_BUDGET || '15000',
@@ -539,7 +554,8 @@ async function persistResult(
         }
       } else if (!(doc as any).categoryClassification?.classifiedAt) {
         // Tagger down / cooldown — retry later instead of tight-loop reclaiming.
-        $set['enrichment.nextAttemptAt'] = new Date(Date.now() + 2 * 60_000);
+        // Must mutate nested enrichment object — dotted path conflicts with $set.enrichment.
+        enrichment.nextAttemptAt = new Date(Date.now() + 2 * 60_000);
       }
     } catch (err: any) {
       logger.log(
@@ -550,6 +566,27 @@ async function persistResult(
   }
 
   await JobBoardListing.updateOne({ _id: doc._id }, { $set });
+
+  // When a listing first becomes board-ready, bump each linked run's ready count.
+  if (opts.status === 'ready' && doc.status !== 'ready') {
+    const runIds = Array.isArray(doc.runIds)
+      ? doc.runIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (runIds.length > 0) {
+      try {
+        const Run = (await import('../models/Run')).default;
+        await Run.updateMany(
+          { runId: { $in: runIds } },
+          { $inc: { jobsBoardReady: 1 } }
+        );
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `[jobEnrichment] failed to bump jobsBoardReady for runs=${runIds.join(',')}: ${err?.message || err}`
+        );
+      }
+    }
+  }
 }
 
 async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics): Promise<void> {
@@ -1026,9 +1063,95 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
           source: 'html',
         };
         const merged = mergeParsedFields(fields, listFields);
-        const status = boardListingStatus(merged, doc.jobUrl);
-        await persistResult(doc, merged, {
-          status,
+        const employerApply =
+          normalizeJobUrl(merged.applyUrl || '') ||
+          normalizeJobUrl(String(mergedRow.applyUrl || '')) ||
+          '';
+        let persistDoc = doc;
+        if (employerApply && !isAggregatorHostUrl(employerApply)) {
+          const rekey = await rekeySoftGateListingToEmployer({
+            doc,
+            employerUrl: employerApply,
+            aggregatorPostingUrl: hcPosting,
+          });
+          if (rekey.action === 'merged_into') {
+            const winner = await JobBoardListing.findById(rekey.winnerId);
+            if (winner) {
+              persistDoc = winner;
+              merged.applyUrl = employerApply;
+            } else {
+              metrics.failed += 1;
+              circuitBreaker.recordSuccess();
+              return;
+            }
+          } else if (rekey.action === 'rekeyed') {
+            merged.applyUrl = employerApply;
+          }
+        }
+
+        const ready = isHiringCafeBoardReady({
+          title: merged.jobTitle,
+          companyName: merged.companyName,
+          description: merged.jobDescription,
+          applyUrl: employerApply || merged.applyUrl || persistDoc.applyUrl,
+          jobUrl: persistDoc.jobUrl,
+        });
+
+        if (!ready) {
+          const attempts = Number(doc.enrichment?.attempts || 0) + 1;
+          if (shouldRequeueHiringCafeAfterAttempt(attempts)) {
+            await persistResult(persistDoc, merged, {
+              status: 'queued',
+              method: enrichMethod,
+              tier: hcTier,
+              creditsSpent: hcCredits,
+              error: 'hiring_cafe_quality_retry',
+              nextAttemptAt: new Date(Date.now() + hiringCafeEnrichmentBackoffMs(attempts)),
+              incrementAttempts: true,
+            });
+            metrics.failed += 1;
+            circuitBreaker.recordSuccess();
+            return;
+          }
+          await persistResult(persistDoc, merged, {
+            status: 'partial',
+            method: enrichMethod,
+            tier: hcTier,
+            creditsSpent: hcCredits,
+            error: HIRING_CAFE_ENRICHMENT_EXHAUSTED,
+            incrementAttempts: true,
+            structured: {
+              about: String(mergedRow.about || ''),
+              skills: Array.isArray(mergedRow.skills) ? (mergedRow.skills as string[]) : [],
+              responsibilities: Array.isArray(mergedRow.responsibilities)
+                ? (mergedRow.responsibilities as string[])
+                : [],
+              minimumQualifications: Array.isArray(mergedRow.minimumQualifications)
+                ? (mergedRow.minimumQualifications as string[])
+                : [],
+              preferredQualifications: Array.isArray(mergedRow.preferredQualifications)
+                ? (mergedRow.preferredQualifications as string[])
+                : [],
+              benefits: Array.isArray(mergedRow.benefits) ? (mergedRow.benefits as string[]) : [],
+            },
+          });
+          await JobBoardListing.updateOne(
+            { _id: persistDoc._id },
+            {
+              $set: {
+                companyWebsite: String(mergedRow.companyWebsite || ''),
+                aggregatorPostingUrl: hcPosting,
+                'listSnapshot.aggregatorPostingUrl': hcPosting,
+              },
+            }
+          );
+          metrics.partial += 1;
+          circuitBreaker.recordSuccess();
+          return;
+        }
+
+        await persistResult(persistDoc, merged, {
+          status: 'ready',
           method: enrichMethod,
           tier: hcTier,
           creditsSpent: hcCredits,
@@ -1049,7 +1172,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
           },
         });
         await JobBoardListing.updateOne(
-          { _id: doc._id },
+          { _id: persistDoc._id },
           {
             $set: {
               companyWebsite: String(mergedRow.companyWebsite || ''),
@@ -1058,12 +1181,15 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
               companyFoundedYear: Number(mergedRow.companyFoundedYear || 0) || 0,
               'listSnapshot.companyWebsite': String(mergedRow.companyWebsite || ''),
               'listSnapshot.aggregatorPostingUrl': hcPosting,
-              ...(merged.applyUrl ? { applyUrl: String(merged.applyUrl) } : {}),
+              ...(employerApply && !isAggregatorHostUrl(employerApply)
+                ? { applyUrl: employerApply }
+                : merged.applyUrl
+                  ? { applyUrl: String(merged.applyUrl) }
+                  : {}),
             },
           }
         );
-        if (status === 'ready') metrics.ready += 1;
-        else metrics.failed += 1;
+        metrics.ready += 1;
         circuitBreaker.recordSuccess();
         return;
       }
@@ -1071,15 +1197,14 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
 
     // HTTP failed (CF). Requeue with backoff — do not burn Chromium from enrichment.
     const attempts = Number(doc.enrichment?.attempts || 0) + 1;
-    if (attempts < JOB_ENRICHMENT_MAX_ATTEMPTS) {
-      const backoffMs = Math.min(60 * 60_000, 5 * 60_000 * Math.pow(2, Math.max(0, attempts - 1)));
+    if (shouldRequeueHiringCafeAfterAttempt(attempts)) {
       await persistResult(doc, listFields, {
         status: 'queued',
         method: 'none',
         tier: 0,
         creditsSpent: 0,
         error: 'hiring_cafe_http_cf_retry',
-        nextAttemptAt: new Date(Date.now() + backoffMs),
+        nextAttemptAt: new Date(Date.now() + hiringCafeEnrichmentBackoffMs(attempts)),
         incrementAttempts: true,
       });
       metrics.failed += 1;
@@ -1087,17 +1212,15 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       return;
     }
 
-    const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
-      status: status === 'ready' ? 'ready' : 'partial',
+      status: 'partial',
       method: 'list',
       tier: 0,
       creditsSpent: 0,
-      error: 'hiring_cafe_html_only_no_employer_scrape',
+      error: HIRING_CAFE_ENRICHMENT_EXHAUSTED,
       incrementAttempts: true,
     });
-    if (status === 'ready') metrics.ready += 1;
-    else metrics.failed += 1;
+    metrics.partial += 1;
     circuitBreaker.recordSuccess();
     return;
   }
@@ -1147,15 +1270,18 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  if (!process.env.SCRAPE_DO_TOKEN) {
-    // ATS already missed. Without scrape.do, still publish list fields that pass the board gate.
+  if (!process.env.SCRAPE_DO_TOKEN || !isCareerBoardScrapeDoEnabled()) {
+    // ATS already missed. Career scrape.do is opt-in (HC uses a separate gate).
+    // Without it, still publish list fields that pass the board gate.
     const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
       status: status === 'ready' ? 'ready' : 'failed',
       method: status === 'ready' ? 'list' : 'none',
       tier: 0,
       creditsSpent: 0,
-      error: 'SCRAPE_DO_TOKEN_missing',
+      error: !process.env.SCRAPE_DO_TOKEN
+        ? 'SCRAPE_DO_TOKEN_missing'
+        : 'career_scrape_do_disabled',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;
@@ -1449,6 +1575,8 @@ export async function runEnrichmentPass(): Promise<EnrichmentPassMetrics> {
       } catch (err: any) {
         circuitBreaker.recordFailure();
         logger.log('error', `job-enrichment process failed: ${err?.message || err}`);
+        const msg = String(err?.message || 'process_error');
+        const isPathConflict = /would create a conflict at 'enrichment'/i.test(msg);
         try {
           await JobBoardListing.updateOne(
             { _id: current._id },
@@ -1457,10 +1585,14 @@ export async function runEnrichmentPass(): Promise<EnrichmentPassMetrics> {
                 status: 'queued',
                 leaseUntil: null,
                 claimedBy: null,
-                'enrichment.lastError': err?.message || 'process_error',
-                'enrichment.nextAttemptAt': new Date(Date.now() + 60_000),
+                'enrichment.lastError': isPathConflict
+                  ? 'enrichment_path_conflict_requeued'
+                  : msg.slice(0, 500),
+                'enrichment.nextAttemptAt': new Date(Date.now() + (isPathConflict ? 5_000 : 60_000)),
+                // Reset attempts on conflict so poison rows stop climbing forever.
+                ...(isPathConflict ? { 'enrichment.attempts': 0 } : {}),
               },
-              $inc: { 'enrichment.attempts': 1 },
+              ...(isPathConflict ? {} : { $inc: { 'enrichment.attempts': 1 } }),
             }
           );
         } catch {

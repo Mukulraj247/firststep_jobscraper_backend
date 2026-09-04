@@ -91,7 +91,10 @@ import {
 
 const HOURLY_CRON = '0 * * * *';
 
-type AggregatorSummary = DashboardAutomationsSummary & { jobsAddedToBoardTotal?: number };
+type AggregatorSummary = DashboardAutomationsSummary & {
+  jobsAddedToBoardTotal?: number;
+  jobsBoardReadyTotal?: number;
+};
 
 export const AggregatorsPage = () => {
   const navigate = useNavigate();
@@ -176,7 +179,12 @@ export const AggregatorsPage = () => {
           automation.updatedAt || '',
           automation.status || '',
           String(automation.rowsExtracted || 0),
-          String(automation.jobsAddedToBoard || 0),
+          String(
+            typeof automation.jobsBoardUnique === 'number'
+              ? automation.jobsBoardUnique
+              : automation.jobsAddedToBoard || 0
+          ),
+          String(typeof automation.jobsBoardReady === 'number' ? automation.jobsBoardReady : 0),
           automation.lastRunTime || '',
           automation.schedule?.enabled ? '1' : '0',
           automation.schedule?.cron || '',
@@ -707,8 +715,8 @@ export const AggregatorsPage = () => {
               >
                 <StatCard
                   label="On job board"
-                  value={summary?.jobsAddedToBoardTotal ?? 0}
-                  hint="Jobs added from latest aggregator runs"
+                  value={summary?.jobsBoardReadyTotal ?? summary?.jobsAddedToBoardTotal ?? 0}
+                  hint="Searchable jobs from latest aggregator runs"
                   color={METRIC_COLORS.jobs}
                   icon={<WorkOutlineIcon />}
                   delay={200}

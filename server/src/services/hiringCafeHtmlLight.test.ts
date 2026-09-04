@@ -137,14 +137,19 @@ describe('fetchHiringCafePostingHtml', () => {
     expect(axiosGet).not.toHaveBeenCalled();
   });
 
-  it('uses Scrape.do immediately when robot opts are set (skips HTTP/proxy)', async () => {
+  it('tries plain HTTP first, then Scrape.do only after HTTP fails', async () => {
+    axiosGet.mockResolvedValue({
+      status: 403,
+      data: '<html>Just a moment... cf-browser-verification</html>',
+      headers: { 'content-type': 'text/html' },
+    });
     scrapeDoMock.mockResolvedValue({
       ok: true,
       html: NEXT_DATA_HTML,
       method: 'scrape.do',
       light: true,
-      tier: 2,
-      creditsSpent: 5,
+      tier: 1,
+      creditsSpent: 1,
     });
 
     const result = await fetchHiringCafePostingHtml(POSTING, {
@@ -153,8 +158,24 @@ describe('fetchHiringCafePostingHtml', () => {
 
     expect(result.ok).toBe(true);
     expect(result.method).toBe('scrape.do');
-    expect(result.creditsSpent).toBe(5);
+    expect(result.creditsSpent).toBe(1);
+    expect(axiosGet).toHaveBeenCalled();
     expect(scrapeDoMock).toHaveBeenCalled();
-    expect(axiosGet).not.toHaveBeenCalled();
+  });
+
+  it('does not call Scrape.do when plain HTTP already returns __NEXT_DATA__', async () => {
+    axiosGet.mockResolvedValue({
+      status: 200,
+      data: NEXT_DATA_HTML,
+      headers: { 'content-type': 'text/html' },
+    });
+
+    const result = await fetchHiringCafePostingHtml(POSTING, {
+      scrapeDo: { enabled: true, token: 'tok', maxTier: 2 },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.method).toBe('http');
+    expect(scrapeDoMock).not.toHaveBeenCalled();
   });
 });

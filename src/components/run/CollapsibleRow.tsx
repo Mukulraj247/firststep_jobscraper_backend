@@ -12,6 +12,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   IconButton,
   Link,
   List,
@@ -21,8 +22,7 @@ import {
   Typography,
 } from '@mui/material';
 import { DeleteForever, KeyboardArrowDown, KeyboardArrowUp, Settings } from '@mui/icons-material';
-import { deleteSaasRun, getSaasRun, getSaasRunLogs } from '../../api/automation';
-import { listJobs, type JobBoardJob } from '../../api/jobs';
+import { deleteSaasRun, getSaasRun, getSaasRunLogs, getRunJobFunnel, type RunJobFunnelResponse } from '../../api/automation';
 import { columns, type Data } from './runTypes';
 import { RunContent } from './RunContent';
 import { GenericModal } from '../ui/GenericModal';
@@ -80,13 +80,25 @@ export const CollapsibleRow = ({
   const [detailLoading, setDetailLoading] = useState(false);
   const [jobsDialogOpen, setJobsDialogOpen] = useState(false);
   const [jobsLoading, setJobsLoading] = useState(false);
-  const [runJobs, setRunJobs] = useState<JobBoardJob[]>([]);
+  const [jobFunnel, setJobFunnel] = useState<RunJobFunnelResponse | null>(null);
   const jobsAdded =
-    typeof row.jobsAddedToBoard === 'number'
-      ? row.jobsAddedToBoard
-      : typeof detailRow.jobsAddedToBoard === 'number'
-        ? detailRow.jobsAddedToBoard
-        : 0;
+    typeof row.jobsBoardReady === 'number'
+      ? row.jobsBoardReady
+      : typeof detailRow.jobsBoardReady === 'number'
+        ? detailRow.jobsBoardReady
+        : typeof row.jobsAddedToBoard === 'number'
+          ? row.jobsAddedToBoard
+          : typeof detailRow.jobsAddedToBoard === 'number'
+            ? detailRow.jobsAddedToBoard
+            : 0;
+  const jobsUnique =
+    typeof row.jobsBoardUnique === 'number'
+      ? row.jobsBoardUnique
+      : typeof detailRow.jobsBoardUnique === 'number'
+        ? detailRow.jobsBoardUnique
+        : typeof row.jobsAddedToBoard === 'number'
+          ? row.jobsAddedToBoard
+          : 0;
   const runByLabel = row.runByScheduleId
     ? `${row.runByScheduleId}`
     : row.runByUserId
@@ -238,19 +250,31 @@ export const CollapsibleRow = ({
             case 'jobsAdded':
               return (
                 <TableCell key={column.id} align={column.align}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                     <Chip size="small" label={String(jobsAdded)} variant="outlined" />
+                    {jobsUnique > 0 && jobsUnique !== jobsAdded ? (
+                      <Typography variant="caption" color="text.secondary">
+                        {t('runs_table.unique_hint', { count: jobsUnique, defaultValue: 'unique {{count}}' })}
+                      </Typography>
+                    ) : null}
                     <Button
                       size="small"
                       variant="text"
                       onClick={async () => {
                         setJobsDialogOpen(true);
                         setJobsLoading(true);
+                        setJobFunnel(null);
                         try {
-                          const res = await listJobs({ runId: row.runId, limit: 50 });
-                          setRunJobs(res.jobs || []);
+                          const res = await getRunJobFunnel(row.runId);
+                          setJobFunnel(res);
                         } catch {
-                          setRunJobs([]);
+                          setJobFunnel({
+                            rowsScraped: 0,
+                            unique: 0,
+                            onJobBoard: 0,
+                            scraped: [],
+                            added: [],
+                          });
                         } finally {
                           setJobsLoading(false);
                         }
@@ -369,48 +393,114 @@ export const CollapsibleRow = ({
       </GenericModal>
 
       <Dialog open={jobsDialogOpen} onClose={() => setJobsDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{t('runs_table.jobs_dialog.title', { count: jobsAdded })}</DialogTitle>
+        <DialogTitle>
+          {t('runs_table.jobs_dialog.title', 'Jobs from this run')}
+          {jobFunnel && !jobsLoading ? (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, fontWeight: 400 }}>
+              {t('runs_table.jobs_dialog.summary', {
+                scraped: jobFunnel.rowsScraped,
+                unique: jobFunnel.unique,
+                onBoard: jobFunnel.onJobBoard,
+                defaultValue: 'Scraped {{scraped}} · Unique {{unique}} · On board {{onBoard}}',
+              })}
+            </Typography>
+          ) : null}
+        </DialogTitle>
         <DialogContent dividers>
           {jobsLoading ? (
             <Box display="flex" justifyContent="center" py={3}>
               <CircularProgress size={28} />
             </Box>
-          ) : runJobs.length === 0 ? (
+          ) : !jobFunnel || (jobFunnel.scraped.length === 0 && jobFunnel.added.length === 0) ? (
             <Typography color="text.secondary">
               {t('runs_table.jobs_dialog.empty')}
             </Typography>
           ) : (
-            <List dense>
-              {runJobs.map((job) => {
-                const addedAt = formatRunJobAddedAt(job.createdAt);
-                return (
-                <ListItem key={job.id} alignItems="flex-start">
-                  <ListItemText
-                    primary={job.data?.jobTitle || t('runs_table.jobs_dialog.untitled')}
-                    secondary={
-                      <>
-                        {job.data?.companyName || '—'}
-                        {addedAt ? (
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>
+                {t('runs_table.jobs_dialog.scraped_section', {
+                  count: jobFunnel.scraped.length,
+                  defaultValue: 'Scraped URLs ({{count}})',
+                })}
+              </Typography>
+              {jobFunnel.scraped.length === 0 ? (
+                <Typography color="text.secondary" variant="body2" sx={{ mb: 2 }}>
+                  {t('runs_table.jobs_dialog.empty_scraped', 'No scraped URLs for this run.')}
+                </Typography>
+              ) : (
+                <List dense sx={{ mb: 1, maxHeight: 240, overflow: 'auto' }}>
+                  {jobFunnel.scraped.map((item, idx) => (
+                    <ListItem key={`${item.jobUrl}-${idx}`} alignItems="flex-start">
+                      <ListItemText
+                        primary={item.title || item.jobUrl}
+                        secondary={
                           <>
-                            {' · '}
-                            {addedAt}
+                            {item.companyName || '—'}
+                            {item.jobUrl ? (
+                              <>
+                                {' · '}
+                                <Link href={item.jobUrl} target="_blank" rel="noopener noreferrer">
+                                  {t('runs_table.jobs_dialog.open')}
+                                </Link>
+                              </>
+                            ) : null}
                           </>
-                        ) : null}
-                        {job.data?.jobUrl ? (
-                          <>
-                            {' · '}
-                            <Link href={job.data.jobUrl} target="_blank" rel="noopener noreferrer">
-                              {t('runs_table.jobs_dialog.open')}
-                            </Link>
-                          </>
-                        ) : null}
-                      </>
-                    }
-                  />
-                </ListItem>
-                );
-              })}
-            </List>
+                        }
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              )}
+
+              <Divider sx={{ my: 1.5 }} />
+
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>
+                {t('runs_table.jobs_dialog.added_section', {
+                  count: jobFunnel.added.length,
+                  defaultValue: 'Added to job board ({{count}})',
+                })}
+              </Typography>
+              {jobFunnel.added.length === 0 ? (
+                <Typography color="text.secondary" variant="body2">
+                  {t(
+                    'runs_table.jobs_dialog.empty_added',
+                    'No jobs from this run are on the job board yet.'
+                  )}
+                </Typography>
+              ) : (
+                <List dense sx={{ maxHeight: 240, overflow: 'auto' }}>
+                  {jobFunnel.added.map((job) => {
+                    const addedAt = formatRunJobAddedAt(job.createdAt);
+                    return (
+                      <ListItem key={job.id} alignItems="flex-start">
+                        <ListItemText
+                          primary={job.jobTitle || t('runs_table.jobs_dialog.untitled')}
+                          secondary={
+                            <>
+                              {job.companyName || '—'}
+                              {addedAt ? (
+                                <>
+                                  {' · '}
+                                  {addedAt}
+                                </>
+                              ) : null}
+                              {job.jobUrl ? (
+                                <>
+                                  {' · '}
+                                  <Link href={job.jobUrl} target="_blank" rel="noopener noreferrer">
+                                    {t('runs_table.jobs_dialog.open')}
+                                  </Link>
+                                </>
+                              ) : null}
+                            </>
+                          }
+                        />
+                      </ListItem>
+                    );
+                  })}
+                </List>
+              )}
+            </Box>
           )}
         </DialogContent>
         <DialogActions>

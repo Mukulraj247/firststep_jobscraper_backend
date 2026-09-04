@@ -1,7 +1,7 @@
 import Robot from '../models/Robot';
 import type { AutomationRuntimeConfig } from './automation';
 
-export type HiringCafeScrapeDoTier = 1 | 2 | 3;
+export type HiringCafeScrapeDoTier = 1 | 2;
 
 export type HiringCafeScrapeDoOptions = {
   enabled: boolean;
@@ -16,10 +16,11 @@ function envHcScrapeDoEnabled(): boolean {
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
 }
 
+/** HC Scrape.do: tier 1 then tier 2 only — never tier 3 (super). */
 function normalizeMaxTier(value: unknown): HiringCafeScrapeDoTier {
   const n = Number(value);
   if (n === 1) return 1;
-  if (n === 3) return 3;
+  // Explicit 3 (or anything else) clamps to 2 — never allow super tier.
   return 2;
 }
 
@@ -48,6 +49,15 @@ export function resolveHiringCafeScrapeDoFromEnv(): HiringCafeScrapeDoOptions | 
   if (!token) return null;
   const maxTier = normalizeMaxTier(process.env.HIRING_CAFE_SCRAPE_DO_MAX_TIER);
   return { enabled: true, token, maxTier };
+}
+
+/**
+ * Career / employer board enrichment may use Scrape.do only when explicitly enabled.
+ * Default OFF — enabling SCRAPE_DO_TOKEN for Hiring Cafe must not burn credits on other jobs.
+ */
+export function isCareerBoardScrapeDoEnabled(): boolean {
+  const raw = String(process.env.JOB_ENRICHMENT_SCRAPE_DO_ENABLED || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
 }
 
 export function resolveHiringCafeScrapeDoFromRobot(robot: unknown): HiringCafeScrapeDoOptions | null {

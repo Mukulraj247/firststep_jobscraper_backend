@@ -759,9 +759,14 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
       });
       const jobsAddedToBoard =
         (Number(boardStats.queued) || 0) + (Number(boardStats.readyFromList) || 0);
+      const jobsBoardUnique =
+        typeof boardStats.uniqueNew === 'number' ? boardStats.uniqueNew : jobsAddedToBoard;
+      const jobsBoardReady = Number(boardStats.readyFromList) || 0;
       const jobsBoardConsidered = Number(boardStats.considered) || 0;
       const jobsBoardDeduped = Number(boardStats.skippedDedup) || 0;
       run.jobsAddedToBoard = jobsAddedToBoard;
+      run.jobsBoardUnique = jobsBoardUnique;
+      run.jobsBoardReady = jobsBoardReady;
       run.jobsBoardConsidered = jobsBoardConsidered;
       run.jobsBoardDeduped = jobsBoardDeduped;
       const RunModel = (await import('../models/Run')).default;
@@ -770,6 +775,8 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
         {
           $set: {
             jobsAddedToBoard,
+            jobsBoardUnique,
+            jobsBoardReady,
             jobsBoardConsidered,
             jobsBoardDeduped,
           },
@@ -783,6 +790,8 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
     }
   } else {
     run.jobsAddedToBoard = 0;
+    run.jobsBoardUnique = 0;
+    run.jobsBoardReady = 0;
     run.jobsBoardConsidered = 0;
     run.jobsBoardDeduped = 0;
     try {
@@ -792,6 +801,8 @@ export const persistExtractedDataForRun = async (run: IRun | any, robot: IRobot 
         {
           $set: {
             jobsAddedToBoard: 0,
+            jobsBoardUnique: 0,
+            jobsBoardReady: 0,
             jobsBoardConsidered: 0,
             jobsBoardDeduped: 0,
           },
@@ -974,6 +985,13 @@ export const enrichRunForSaas = async (run: any, robot?: any) => {
     durationMs: resolveRunDurationMs(run),
     rowsExtracted,
     jobsAddedToBoard: typeof run.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+    jobsBoardUnique:
+      typeof run.jobsBoardUnique === 'number'
+        ? run.jobsBoardUnique
+        : typeof run.jobsAddedToBoard === 'number'
+          ? run.jobsAddedToBoard
+          : 0,
+    jobsBoardReady: typeof run.jobsBoardReady === 'number' ? run.jobsBoardReady : 0,
     jobsBoardConsidered: typeof run.jobsBoardConsidered === 'number' ? run.jobsBoardConsidered : 0,
     jobsBoardDeduped: typeof run.jobsBoardDeduped === 'number' ? run.jobsBoardDeduped : 0,
     anomaly: run.anomaly || null,
@@ -1024,6 +1042,13 @@ export const enrichRunForList = (
     duration: durationMs,
     rowsExtracted: typeof run?.rowsExtracted === 'number' ? run.rowsExtracted : extractedCount,
     jobsAddedToBoard: typeof run?.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+    jobsBoardUnique:
+      typeof run?.jobsBoardUnique === 'number'
+        ? run.jobsBoardUnique
+        : typeof run?.jobsAddedToBoard === 'number'
+          ? run.jobsAddedToBoard
+          : 0,
+    jobsBoardReady: typeof run?.jobsBoardReady === 'number' ? run.jobsBoardReady : 0,
     jobsBoardConsidered: typeof run?.jobsBoardConsidered === 'number' ? run.jobsBoardConsidered : 0,
     jobsBoardDeduped: typeof run?.jobsBoardDeduped === 'number' ? run.jobsBoardDeduped : 0,
     anomaly: run?.anomaly || null,

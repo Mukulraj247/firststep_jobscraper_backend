@@ -719,9 +719,15 @@
         }
       },
       "view_jobs": "View jobs",
+      "unique_hint": "unique {{count}}",
       "jobs_dialog": {
-        "title": "Jobs from this run ({{count}} added)",
+        "title": "Jobs from this run",
+        "summary": "Scraped {{scraped}} · Unique {{unique}} · On board {{onBoard}}",
+        "scraped_section": "Scraped URLs ({{count}})",
+        "added_section": "Added to job board ({{count}})",
         "empty": "No job-board listings linked to this run.",
+        "empty_scraped": "No scraped URLs for this run.",
+        "empty_added": "No jobs from this run are on the job board yet.",
         "untitled": "Untitled role",
         "open": "Open"
       }

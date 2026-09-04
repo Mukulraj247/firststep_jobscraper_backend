@@ -43,6 +43,8 @@ export function AutomationCardList({
           ...automation,
           showJobBoard,
           jobsAddedToBoard: automation.jobsAddedToBoard,
+          jobsBoardUnique: automation.jobsBoardUnique,
+          jobsBoardReady: automation.jobsBoardReady,
         });
         return (
           <Paper

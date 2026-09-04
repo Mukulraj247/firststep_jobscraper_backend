@@ -681,7 +681,9 @@ export function mobileCardDefinitionItems(input: {
   companyName?: string | null;
   lastRunTime?: string | null;
   rowsExtracted?: number | null;
+  jobsBoardUnique?: number | null;
   jobsAddedToBoard?: number | null;
+  jobsBoardReady?: number | null;
   showJobBoard?: boolean;
 }): Array<{ term: string; value: string }> {
   const items = [
@@ -691,7 +693,19 @@ export function mobileCardDefinitionItems(input: {
     { term: 'Rows', value: String(input.rowsExtracted || 0) },
   ];
   if (input.showJobBoard) {
-    items.push({ term: 'Job board', value: String(input.jobsAddedToBoard || 0) });
+    const unique =
+      typeof input.jobsBoardUnique === 'number'
+        ? input.jobsBoardUnique
+        : input.jobsAddedToBoard || 0;
+    items.push({ term: 'Unique', value: String(unique) });
+    items.push({
+      term: 'Job board',
+      value: String(
+        typeof input.jobsBoardReady === 'number'
+          ? input.jobsBoardReady
+          : input.jobsAddedToBoard || 0
+      ),
+    });
   }
   return items;
 }

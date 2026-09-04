@@ -470,8 +470,7 @@ export const AutomationConfigPage = ({
           scrapeDoMaxTier: (() => {
             const n = Number(config.hiringCafeEnrichment?.scrapeDoMaxTier);
             if (n === 1) return 1;
-            if (n === 3) return 3;
-            return 2;
+            return 2; // never tier 3 for HC
           })(),
           ...(omitBlank(config.hiringCafeEnrichment?.scrapeDoToken)
             ? { scrapeDoToken: config.hiringCafeEnrichment.scrapeDoToken }
@@ -1356,19 +1355,18 @@ export const AutomationConfigPage = ({
                   label="Max Scrape.do tier"
                   value={(() => {
                     const n = Number(config.hiringCafeEnrichment?.scrapeDoMaxTier);
-                    return n === 1 || n === 3 ? n : 2;
+                    return n === 1 ? 1 : 2;
                   })()}
                   onChange={(event) => {
                     const n = Number(event.target.value);
                     updateNested(
                       ['hiringCafeEnrichment', 'scrapeDoMaxTier'],
-                      n === 1 || n === 3 ? n : 2
+                      n === 1 ? 1 : 2
                     );
                   }}
                 >
-                  <MenuItem value={1}>Tier 1 — HTML only (test, ~1 credit)</MenuItem>
-                  <MenuItem value={2}>Tier 2 — JS render (recommended)</MenuItem>
-                  <MenuItem value={3}>Tier 3 — super render (hard Cloudflare)</MenuItem>
+                  <MenuItem value={1}>Tier 1 only — after free HTTP (~1 credit)</MenuItem>
+                  <MenuItem value={2}>Tier 1 → 2 — after free HTTP (recommended, never tier 3)</MenuItem>
                 </Select>
               </FormControl>
             </SectionPaper>

@@ -370,7 +370,7 @@ export function AutomationTable({
         stickyHeader
         size={DESKTOP_TABLE_SIZE}
         sx={{
-          minWidth: showJobBoardColumn ? DESKTOP_TABLE_MIN_WIDTH_PX + 72 : DESKTOP_TABLE_MIN_WIDTH_PX,
+          minWidth: showJobBoardColumn ? DESKTOP_TABLE_MIN_WIDTH_PX + 144 : DESKTOP_TABLE_MIN_WIDTH_PX,
           tableLayout: 'fixed',
           borderCollapse: 'separate',
           borderSpacing: 0,
@@ -389,17 +389,18 @@ export function AutomationTable({
       >
         <caption>
           {showJobBoardColumn
-            ? `${AUTOMATIONS_TABLE_CAPTION} Plus job board count.`
+            ? `${AUTOMATIONS_TABLE_CAPTION} Plus unique and job board counts.`
             : AUTOMATIONS_TABLE_CAPTION}
         </caption>
         <colgroup>
-          <col style={{ width: showJobBoardColumn ? '10%' : '11%' }} />
+          <col style={{ width: showJobBoardColumn ? '9%' : '11%' }} />
           <col style={{ width: '9%' }} />
           <col style={{ width: '9%' }} />
-          <col style={{ width: showJobBoardColumn ? '11%' : '13%' }} />
+          <col style={{ width: showJobBoardColumn ? '10%' : '13%' }} />
           <col style={{ width: '7%' }} />
-          <col style={{ width: showJobBoardColumn ? '12%' : '14%' }} />
+          <col style={{ width: showJobBoardColumn ? '11%' : '14%' }} />
           <col style={{ width: '5%' }} />
+          {showJobBoardColumn ? <col style={{ width: '5%' }} /> : null}
           {showJobBoardColumn ? <col style={{ width: '6%' }} /> : null}
           <col style={{ width: '8%' }} />
           <col style={{ width: '9%' }} />
@@ -414,6 +415,9 @@ export function AutomationTable({
             <TableCell sx={stickyHeaderCellSx()}>URL</TableCell>
             <TableCell sx={stickyHeaderCellSx()}>Last run</TableCell>
             <TableCell sx={stickyHeaderCellSx()} align="right">Rows</TableCell>
+            {showJobBoardColumn ? (
+              <TableCell sx={stickyHeaderCellSx()} align="right">Unique</TableCell>
+            ) : null}
             {showJobBoardColumn ? (
               <TableCell sx={stickyHeaderCellSx()} align="right">Job board</TableCell>
             ) : null}
@@ -510,7 +514,16 @@ export function AutomationTable({
               </TableCell>
               {showJobBoardColumn ? (
                 <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
-                  {automation.jobsAddedToBoard || 0}
+                  {typeof automation.jobsBoardUnique === 'number'
+                    ? automation.jobsBoardUnique
+                    : automation.jobsAddedToBoard || 0}
+                </TableCell>
+              ) : null}
+              {showJobBoardColumn ? (
+                <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+                  {typeof automation.jobsBoardReady === 'number'
+                    ? automation.jobsBoardReady
+                    : 0}
                 </TableCell>
               ) : null}
               <TableCell>

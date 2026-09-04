@@ -39,13 +39,13 @@ describe('hiringCafeScrapeDo', () => {
     expect(scrapeUrlHtmlMock).not.toHaveBeenCalled();
   });
 
-  it('returns parsed HC html on Scrape.do success', async () => {
+  it('returns parsed HC html on Scrape.do success and always starts at tier 1', async () => {
     scrapeUrlHtmlMock.mockResolvedValue({
       ok: true,
       status: 200,
       html: NEXT_DATA_HTML,
-      tier: 2,
-      creditsSpent: 5,
+      tier: 1,
+      creditsSpent: 1,
       expired: false,
       rateLimited: false,
     });
@@ -58,14 +58,37 @@ describe('hiringCafeScrapeDo', () => {
 
     expect(result.ok).toBe(true);
     expect(result.method).toBe('scrape.do');
-    expect(result.creditsSpent).toBe(5);
+    expect(result.creditsSpent).toBe(1);
     expect(scrapeUrlHtmlMock).toHaveBeenCalledWith(
       POSTING,
-      expect.objectContaining({ token: 't', startTier: 2, maxTier: 2, useLearnedTier: false })
+      expect.objectContaining({ token: 't', startTier: 1, maxTier: 2, useLearnedTier: false })
     );
   });
 
-  it('starts at tier 1 when maxTier is 1', async () => {
+  it('caps maxTier at 2 even if caller asks for 3', async () => {
+    scrapeUrlHtmlMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      html: NEXT_DATA_HTML,
+      tier: 1,
+      creditsSpent: 1,
+      expired: false,
+      rateLimited: false,
+    });
+
+    await fetchHiringCafePostingViaScrapeDo(POSTING, {
+      enabled: true,
+      token: 't',
+      maxTier: 3 as any,
+    });
+
+    expect(scrapeUrlHtmlMock).toHaveBeenCalledWith(
+      POSTING,
+      expect.objectContaining({ startTier: 1, maxTier: 2 })
+    );
+  });
+
+  it('respects maxTier 1 (tier 1 only, no tier 2)', async () => {
     scrapeUrlHtmlMock.mockResolvedValue({
       ok: true,
       status: 200,

@@ -54,7 +54,10 @@ export type AggregatorDashboardResponse = {
   provider: string;
   searches: AutomationSummary[];
   pagination: DashboardAutomationsResponse['pagination'];
-  summary: DashboardAutomationsSummary & { jobsAddedToBoardTotal?: number };
+  summary: DashboardAutomationsSummary & {
+    jobsAddedToBoardTotal?: number;
+    jobsBoardReadyTotal?: number;
+  };
 };
 
 export type AggregatorFetcher = (

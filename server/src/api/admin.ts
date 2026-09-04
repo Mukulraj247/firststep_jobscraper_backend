@@ -245,6 +245,13 @@ function enrichAdminRun(run: any, robot: any | undefined, emailByUserId: Map<str
     runBySDK: !!run.runBySDK,
     rowsExtracted: denormalizedRows,
     jobsAddedToBoard: typeof run.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+    jobsBoardUnique:
+      typeof run.jobsBoardUnique === 'number'
+        ? run.jobsBoardUnique
+        : typeof run.jobsAddedToBoard === 'number'
+          ? run.jobsAddedToBoard
+          : 0,
+    jobsBoardReady: typeof run.jobsBoardReady === 'number' ? run.jobsBoardReady : 0,
     jobsBoardConsidered: typeof run.jobsBoardConsidered === 'number' ? run.jobsBoardConsidered : 0,
     jobsBoardDeduped: typeof run.jobsBoardDeduped === 'number' ? run.jobsBoardDeduped : 0,
     anomaly: run.anomaly || null,

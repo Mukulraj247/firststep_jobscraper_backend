@@ -43,6 +43,8 @@ export const RUN_LIST_PROJECTION: Record<string, 1> = {
   browserId: 1,
   rowsExtracted: 1,
   jobsAddedToBoard: 1,
+  jobsBoardUnique: 1,
+  jobsBoardReady: 1,
   jobsBoardConsidered: 1,
   jobsBoardDeduped: 1,
   anomaly: 1,
@@ -71,6 +73,8 @@ export const RUN_DASHBOARD_LATEST_PROJECTION: Record<string, 1> = {
   normalizedFailureReason: 1,
   rowsExtracted: 1,
   jobsAddedToBoard: 1,
+  jobsBoardUnique: 1,
+  jobsBoardReady: 1,
 };
 
 /** Robot fields for dashboard list cards — no recording workflow or OAuth secrets. */

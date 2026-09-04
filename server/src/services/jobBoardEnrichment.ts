@@ -41,6 +41,8 @@ export interface EnrichmentEnqueueStats {
   queued: number;
   readyFromList: number;
   expiredSkipped: number;
+  /** Unique job URLs not already on the board (= queued + readyFromList). */
+  uniqueNew: number;
 }
 
 function asText(v: unknown): string {
@@ -124,11 +126,15 @@ export function isListRowComplete(
   snapshot: IJobBoardListSnapshot,
   opts?: { source?: string | null }
 ): boolean {
+  const source = String(opts?.source || '').trim().toLowerCase();
+  // Hiring Cafe list rows are stubs — detail enrichment must supply apply URL + real JD
+  // before the row can be board-visible (`ready`). Never promote from list alone.
+  if (source === 'hiring_cafe') return false;
+
   const descOk = (snapshot.jobDescription || '').length >= JOB_BOARD_MIN_DESC_CHARS;
   const hasCore = Boolean(snapshot.jobTitle && snapshot.companyName && descOk);
   if (!hasCore) return false;
 
-  const source = String(opts?.source || '').trim().toLowerCase();
   if (usesAggregatorHtmlOnlyEnrichment(source)) {
     return true;
   }
@@ -269,6 +275,225 @@ export function resolveBoardEnqueueIdentity(
   return null;
 }
 
+export type SoftGateRekeyResult =
+  | { action: 'noop' }
+  | { action: 'rekeyed'; employerUrl: string; jobUrlKey: string }
+  | { action: 'merged_into'; winnerId: string; employerUrl: string; jobUrlKey: string };
+
+function fillMissingListingFields(
+  winner: Record<string, any>,
+  donor: Record<string, any>
+): Record<string, unknown> {
+  const $set: Record<string, unknown> = {};
+  const take = (field: string, preferLonger = false) => {
+    const w = winner[field];
+    const d = donor[field];
+    if (preferLonger) {
+      const ws = String(w || '');
+      const ds = String(d || '');
+      if (ds.length > ws.length) $set[field] = d;
+      return;
+    }
+    const empty =
+      w == null ||
+      w === '' ||
+      w === 0 ||
+      (Array.isArray(w) && w.length === 0);
+    if (empty && d != null && d !== '' && d !== 0 && !(Array.isArray(d) && d.length === 0)) {
+      $set[field] = d;
+    }
+  };
+  take('jobTitle');
+  take('companyName');
+  take('jobDescription', true);
+  take('descriptionSnippet', true);
+  take('location');
+  take('salaryRange');
+  take('employmentType');
+  take('remoteType');
+  take('jobCategory');
+  take('jobExperience');
+  take('companyLogoUrl');
+  take('seniorityLevel');
+  take('educationRequirement');
+  take('visaSponsorship');
+  take('roleType');
+  take('sectorIndustry');
+  take('about', true);
+  take('skills');
+  take('certifications');
+  take('minimumQualifications');
+  take('preferredQualifications');
+  take('responsibilities');
+  take('benefits');
+  take('frozenCategories');
+  take('companyWebsite');
+  take('companyEmployeeCount');
+  take('companyFoundedYear');
+  // Prefer Hiring Cafe chip salaries ($Nk-$Mk/yr) over mangled "$142.8".
+  const wSal = String(winner.salaryRange || '');
+  const dSal = String(donor.salaryRange || '');
+  if (/\/(?:hr|yr|mo)\b/i.test(dSal) && !/\/(?:hr|yr|mo)\b/i.test(wSal)) {
+    $set.salaryRange = dSal;
+  }
+  return $set;
+}
+
+/**
+ * Soft-gated aggregator rows are keyed on the aggregator posting URL until an
+ * employer/ATS apply URL is known. Once apply resolves, move board identity onto
+ * the employer URL — or merge into an existing row already keyed that way —
+ * so the same job does not appear twice (HC slug + amazon.jobs, etc.).
+ */
+export async function rekeySoftGateListingToEmployer(opts: {
+  doc: Pick<
+    IJobBoardListing,
+    | '_id'
+    | 'jobUrl'
+    | 'applyUrl'
+    | 'jobUrlKey'
+    | 'aggregatorPostingUrl'
+    | 'listSnapshot'
+    | 'robotMetaIds'
+    | 'runIds'
+  > &
+    Record<string, any>;
+  employerUrl: string;
+  aggregatorPostingUrl?: string;
+}): Promise<SoftGateRekeyResult> {
+  const employerUrl = normalizeJobUrl(opts.employerUrl);
+  if (!employerUrl || isAggregatorPostingUrl(employerUrl)) return { action: 'noop' };
+
+  const currentUrl = normalizeJobUrl(opts.doc.jobUrl) || String(opts.doc.jobUrl || '').trim();
+  const currentIsSoftGate = Boolean(currentUrl && isAggregatorJobPostingUrl(currentUrl));
+  if (!currentIsSoftGate) return { action: 'noop' };
+
+  const newKey = jobUrlKey(employerUrl);
+  if (!newKey) return { action: 'noop' };
+
+  const posting =
+    normalizeJobUrl(opts.aggregatorPostingUrl) ||
+    normalizeJobUrl(opts.doc.aggregatorPostingUrl) ||
+    normalizeJobUrl((opts.doc.listSnapshot as any)?.aggregatorPostingUrl) ||
+    (currentIsSoftGate ? currentUrl : '') ||
+    '';
+
+  const existing = await JobBoardListing.findOne({
+    jobUrlKey: newKey,
+    _id: { $ne: opts.doc._id },
+  });
+
+  if (existing) {
+    const $set = fillMissingListingFields(existing as any, opts.doc as any);
+    $set.applyUrl = normalizeJobUrl(existing.applyUrl) || employerUrl;
+    $set.jobUrl = normalizeJobUrl(existing.jobUrl) || employerUrl;
+    $set.jobUrlKey = newKey;
+    if (posting) {
+      $set.aggregatorPostingUrl = posting;
+      $set['listSnapshot.aggregatorPostingUrl'] = posting;
+    }
+    $set.lastSeenAt = new Date();
+
+    await JobBoardListing.updateOne(
+      { _id: existing._id },
+      {
+        $set,
+        $addToSet: {
+          robotMetaIds: { $each: (opts.doc.robotMetaIds || []).map(String) },
+          runIds: { $each: (opts.doc.runIds || []).map(String) },
+        },
+      }
+    );
+    await JobBoardListing.deleteOne({ _id: opts.doc._id });
+    logger.log(
+      'info',
+      `soft-gate merge: deleted ${_idStr(opts.doc._id)} into ${_idStr(existing._id)} key=${newKey.slice(0, 12)}`
+    );
+    return {
+      action: 'merged_into',
+      winnerId: String(existing._id),
+      employerUrl,
+      jobUrlKey: newKey,
+    };
+  }
+
+  await JobBoardListing.updateOne(
+    { _id: opts.doc._id },
+    {
+      $set: {
+        jobUrl: employerUrl,
+        applyUrl: employerUrl,
+        jobUrlKey: newKey,
+        ...(posting
+          ? {
+              aggregatorPostingUrl: posting,
+              'listSnapshot.aggregatorPostingUrl': posting,
+            }
+          : {}),
+      },
+    }
+  );
+  opts.doc.jobUrl = employerUrl;
+  opts.doc.applyUrl = employerUrl;
+  opts.doc.jobUrlKey = newKey;
+  logger.log(
+    'info',
+    `soft-gate rekey: ${_idStr(opts.doc._id)} → ${employerUrl.slice(0, 80)} key=${newKey.slice(0, 12)}`
+  );
+  return { action: 'rekeyed', employerUrl, jobUrlKey: newKey };
+}
+
+function _idStr(id: unknown): string {
+  return id != null ? String(id) : '';
+}
+
+/**
+ * After enqueueing an employer-keyed row, drop soft-gate orphans still keyed on
+ * the same aggregator posting URL (prevents HC slug + employer URL twin cards).
+ */
+export async function collapseSoftGateOrphansForEmployerBatch(
+  items: Array<{ jobUrl: string; applyUrl: string; snapshot: IJobBoardListSnapshot }>
+): Promise<number> {
+  let deleted = 0;
+  for (const item of items) {
+    if (isAggregatorPostingUrl(item.jobUrl)) continue;
+    const posting = normalizeJobUrl(item.snapshot.aggregatorPostingUrl || '');
+    if (!posting || !isAggregatorJobPostingUrl(posting)) continue;
+    const employerKey = jobUrlKey(item.jobUrl);
+    const postingKey = jobUrlKey(posting);
+    if (!employerKey || !postingKey || employerKey === postingKey) continue;
+
+    const orphans = await JobBoardListing.find({
+      jobUrlKey: postingKey,
+    }).limit(5);
+    if (!orphans.length) continue;
+
+    const winner = await JobBoardListing.findOne({ jobUrlKey: employerKey });
+    for (const orphan of orphans) {
+      if (winner) {
+        const $set = fillMissingListingFields(winner as any, orphan as any);
+        if (posting) {
+          $set.aggregatorPostingUrl = posting;
+          $set['listSnapshot.aggregatorPostingUrl'] = posting;
+        }
+        await JobBoardListing.updateOne(
+          { _id: winner._id },
+          {
+            $set,
+            $addToSet: {
+              robotMetaIds: { $each: (orphan.robotMetaIds || []).map(String) },
+              runIds: { $each: (orphan.runIds || []).map(String) },
+            },
+          }
+        );
+      }
+      await JobBoardListing.deleteOne({ _id: orphan._id });
+      deleted += 1;
+    }
+  }
+  return deleted;
+}
+
 export function contentHashFromFields(fields: {
   jobTitle?: string;
   companyName?: string;
@@ -372,8 +597,20 @@ function shouldRequeueIncomplete(prev: any): boolean {
   if (status !== 'partial' && status !== 'failed') return false;
   const err = String(prev?.enrichment?.lastError || '');
   const method = String(prev?.enrichment?.method || '');
+  // Exhausted rows stay on Failure Dashboard until manual requeue —
+  // do not auto-revive on every aggregator list scrape (burns Scrape.do).
+  if (/hiring_cafe_enrichment_exhausted/i.test(err)) return false;
+  const attempts = Number(prev?.enrichment?.attempts || 0);
+  const maxAttempts = parseInt(
+    process.env.HIRING_CAFE_ENRICHMENT_MAX_ATTEMPTS ||
+      process.env.JOB_ENRICHMENT_MAX_ATTEMPTS ||
+      '10',
+    10
+  );
+  if (attempts >= maxAttempts) return false;
   return (
     /hiring_cafe_html_only/i.test(err) ||
+    /hiring_cafe_quality_retry/i.test(err) ||
     /cloudflare/i.test(err) ||
     /scrape_failed/i.test(err) ||
     err === '' ||
@@ -402,6 +639,7 @@ export async function enqueueJobBoardEnrichments(opts: {
     queued: 0,
     readyFromList: 0,
     expiredSkipped: 0,
+    uniqueNew: 0,
   };
 
   const ownerId = normalizeOwnerIdForWrite(opts.ownerId);
@@ -614,9 +852,27 @@ export async function enqueueJobBoardEnrichments(opts: {
     }
   }
 
+  // Employer-keyed rows collapse soft-gate twins still keyed on aggregator posting URLs.
+  try {
+    const collapsed = await collapseSoftGateOrphansForEmployerBatch(Array.from(byKey.values()));
+    if (collapsed > 0) {
+      logger.log(
+        'info',
+        `job-board enqueue collapsed ${collapsed} soft-gate orphan(s) for robot=${opts.robotMetaId}`
+      );
+    }
+  } catch (err: any) {
+    logger.log(
+      'warn',
+      `job-board enqueue soft-gate collapse failed (fail-open): ${err?.message || err}`
+    );
+  }
+
+  stats.uniqueNew = (Number(stats.queued) || 0) + (Number(stats.readyFromList) || 0);
+
   logger.log(
     'info',
-    `job-board enqueue owner=${ownerId} robot=${opts.robotMetaId} considered=${stats.considered} queued=${stats.queued} readyFromList=${stats.readyFromList} dedup=${stats.skippedDedup} noUrl=${stats.skippedNoUrl}`
+    `job-board enqueue owner=${ownerId} robot=${opts.robotMetaId} considered=${stats.considered} queued=${stats.queued} readyFromList=${stats.readyFromList} uniqueNew=${stats.uniqueNew} dedup=${stats.skippedDedup} noUrl=${stats.skippedNoUrl}`
   );
 
   return stats;

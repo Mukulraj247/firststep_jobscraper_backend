@@ -208,7 +208,7 @@ async function fetchHtmlOnce(
 
 /**
  * Plain HTTP GET of a Hiring Cafe /job/{slug} URL only.
- * Tiered approach: direct first, then proxy on Cloudflare block.
+ * Order: direct HTTP → proxy HTTP → Scrape.do tier 1 → tier 2 (never tier 3).
  * Rejects employer / apply hosts so we never leave HC for detail content.
  */
 export async function fetchHiringCafePostingHtml(
@@ -226,12 +226,30 @@ export async function fetchHiringCafePostingHtml(
     };
   }
 
+  // 1) Cheap plain HTTP (no Scrape.do credits)
+  const directResult = await fetchHtmlOnce(url, false);
+  if (directResult.ok) {
+    logger.log('info', `Hiring Cafe HTTP direct success: ${url}`);
+    return directResult;
+  }
+
+  // 2) Proxy HTTP on Cloudflare / 403 / 503
+  const proxyAvailable = !!getHiringCafeProxyUrl();
+  if (proxyAvailable && (directResult.cfBlocked || directResult.status === 403 || directResult.status === 503)) {
+    logger.log('info', `Hiring Cafe HTTP direct blocked, retrying with proxy: ${url}`);
+    const proxyResult = await fetchHtmlOnce(url, true);
+    if (proxyResult.ok) {
+      logger.log('info', `Hiring Cafe HTTP proxy success: ${url}`);
+      return proxyResult;
+    }
+    logger.log('warn', `Hiring Cafe HTTP proxy also failed: ${url} - ${proxyResult.error}`);
+  }
+
+  // 3) Scrape.do only after free HTTP failed — tier 1 then tier 2 (never 3)
   const scrapeDo = opts?.scrapeDo;
   const scrapeDoReady = Boolean(scrapeDo?.enabled && scrapeDo.token);
-  // HC job pages are Cloudflare-blocked on direct HTTP and Decodo. When Scrape.do is
-  // configured, skip those tiers so enrichment stays off Chromium and finishes faster.
   if (scrapeDoReady) {
-    logger.log('info', `Hiring Cafe fetching via Scrape.do: ${url}`);
+    logger.log('info', `Hiring Cafe HTTP failed, escalating to Scrape.do (tier 1→2): ${url}`);
     const sd = await fetchHiringCafePostingViaScrapeDo(url, scrapeDo!);
     if (sd.ok) {
       return {
@@ -252,23 +270,6 @@ export async function fetchHiringCafePostingHtml(
       creditsSpent: sd.creditsSpent,
       tier: sd.tier,
     };
-  }
-
-  const directResult = await fetchHtmlOnce(url, false);
-  if (directResult.ok) {
-    logger.log('info', `Hiring Cafe HTTP direct success: ${url}`);
-    return directResult;
-  }
-
-  const proxyAvailable = !!getHiringCafeProxyUrl();
-  if (proxyAvailable && (directResult.cfBlocked || directResult.status === 403 || directResult.status === 503)) {
-    logger.log('info', `Hiring Cafe HTTP direct blocked, retrying with proxy: ${url}`);
-    const proxyResult = await fetchHtmlOnce(url, true);
-    if (proxyResult.ok) {
-      logger.log('info', `Hiring Cafe HTTP proxy success: ${url}`);
-      return proxyResult;
-    }
-    logger.log('warn', `Hiring Cafe HTTP proxy also failed: ${url} - ${proxyResult.error}`);
   }
 
   if (directResult.cfBlocked) {

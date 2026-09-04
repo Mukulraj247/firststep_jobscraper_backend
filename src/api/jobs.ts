@@ -112,3 +112,45 @@ export const getJob = async (id: string): Promise<JobBoardJob> => {
   const response = await axios.get(`${apiUrl}/api/jobs/${id}`, { withCredentials: true });
   return response.data.job;
 };
+
+export interface EnrichmentFailureItem {
+  id: string;
+  title: string;
+  company: string;
+  jobUrl: string;
+  aggregatorPostingUrl: string;
+  applyUrl: string;
+  status: string;
+  attempts: number;
+  lastError: string;
+  lastEnrichedAt: string | Date | null;
+  updatedAt: string | Date | null;
+}
+
+export const listEnrichmentFailures = async (params?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+}): Promise<{ total: number; page: number; limit: number; items: EnrichmentFailureItem[] }> => {
+  const page = params?.page ?? 0;
+  const limit = params?.limit ?? 25;
+  const response = await axios.get(`${apiUrl}/api/jobs/enrichment-failures`, {
+    params: {
+      page,
+      limit,
+      ...(params?.q ? { q: params.q } : {}),
+    },
+    withCredentials: true,
+  });
+  const data = response.data || {};
+  return {
+    total: Number(data.total || 0),
+    page: Number(data.page ?? page),
+    limit: Number(data.limit ?? limit),
+    items: Array.isArray(data.items) ? data.items : [],
+  };
+};
+
+export const requeueEnrichmentFailure = async (id: string): Promise<void> => {
+  await axios.post(`${apiUrl}/api/jobs/enrichment-failures/${id}/requeue`, {}, { withCredentials: true });
+};

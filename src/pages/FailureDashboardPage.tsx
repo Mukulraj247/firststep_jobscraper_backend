@@ -24,6 +24,7 @@ import {
 } from '../features/failures/failureQueries';
 import { cardSx, FIRSTSTEP } from '../components/dashboard/ops/dashboardTokens';
 import { FailuresHero } from '../features/failures/FailuresHero';
+import { EnrichmentFailuresPanel } from '../features/failures/EnrichmentFailuresPanel';
 import { FailureReasonSummary } from '../features/failures/FailureReasonSummary';
 import { FailureFilters } from '../features/failures/FailureFilters';
 import { FailureTable } from '../features/failures/FailureTable';
@@ -336,6 +337,8 @@ export const FailureDashboardPage = () => {
         }}
         onRefresh={() => { void load(); }}
       />
+
+      <EnrichmentFailuresPanel />
 
       <Box
         component="span"

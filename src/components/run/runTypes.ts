@@ -37,6 +37,8 @@ export interface Data {
   binaryOutput: any;
   duration?: number | null;
   jobsAddedToBoard?: number;
+  jobsBoardUnique?: number;
+  jobsBoardReady?: number;
   companyName?: string;
   anomaly?: string | null;
   anomalyMeta?: any;

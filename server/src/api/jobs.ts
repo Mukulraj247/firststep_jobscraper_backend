@@ -25,6 +25,12 @@ import {
 } from '../services/jobPageParser';
 import { isAggregatorApplyHost } from '../services/aggregatorIdentity';
 import { deriveChoppingBlockCompany } from '../services/choppingblockDetail';
+import {
+  HIRING_CAFE_ENRICHMENT_EXHAUSTED,
+  HIRING_CAFE_ENRICHMENT_MAX_ATTEMPTS,
+  isHiringCafeBoardReady,
+  isSkillsDumpDescription,
+} from '../services/hiringCafeEnrichmentPolicy';
 
 const router = Router();
 
@@ -81,7 +87,7 @@ function companyFilterClause(company: string): Record<string, any> | null {
 }
 
 /** Prefer detail enrichment, but list-complete rows are allowed when description is usable. */
-function boardMatch(ownerId: string): Record<string, any> {
+export function boardMatch(ownerId: string): Record<string, any> {
   return {
     ownerId,
     // `partial` rows are incomplete enrichment results and are never
@@ -109,7 +115,7 @@ function boardMatch(ownerId: string): Record<string, any> {
   };
 }
 
-function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowIncomplete?: boolean }) {
+export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowIncomplete?: boolean }) {
   const list = row.listSnapshot || {};
   let title = decodeHtmlEntities(row.jobTitle || list.jobTitle || '');
   const jobUrl = row.jobUrl || '';
@@ -137,6 +143,22 @@ function mapListingToJob(row: any, opts?: { fullDescription?: boolean; allowInco
       jobUrl: jobUrl || row.applyUrl || '',
     })
   ) {
+    return null;
+  }
+  if (
+    !opts?.allowIncomplete &&
+    String(row.source || '').toLowerCase() === 'hiring_cafe' &&
+    !isHiringCafeBoardReady({
+      title,
+      companyName: company,
+      description,
+      applyUrl: row.applyUrl || '',
+      jobUrl: jobUrl || row.applyUrl || '',
+    })
+  ) {
+    return null;
+  }
+  if (!opts?.allowIncomplete && isSkillsDumpDescription(description)) {
     return null;
   }
   // List cards need structured preview (keep newlines) so UI can extract quals/benefits.
@@ -572,6 +594,115 @@ router.get('/jobs', async (req: any, res: any) => {
   }
 });
 
+/** Exhausted Hiring Cafe enrichments (hidden from board) for Failure Dashboard. */
+router.get('/jobs/enrichment-failures', async (req: any, res: any) => {
+  try {
+    const ownerId = normalizeOwnerIdForWrite(req.user.id);
+    const page = Math.max(0, parseInt(String(req.query.page || '0'), 10) || 0);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '25'), 10) || 25));
+    const q = String(req.query.q || '').trim();
+
+    const match: Record<string, any> = {
+      ownerId,
+      source: 'hiring_cafe',
+      status: { $in: ['partial', 'failed'] },
+      $or: [
+        { 'enrichment.attempts': { $gte: HIRING_CAFE_ENRICHMENT_MAX_ATTEMPTS } },
+        { 'enrichment.lastError': HIRING_CAFE_ENRICHMENT_EXHAUSTED },
+      ],
+    };
+    if (q) {
+      const re = new RegExp(escapeRegex(q), 'i');
+      match.$and = [
+        {
+          $or: [
+            { jobTitle: re },
+            { companyName: re },
+            { jobUrl: re },
+            { aggregatorPostingUrl: re },
+            { 'enrichment.lastError': re },
+          ],
+        },
+      ];
+    }
+
+    const [total, rows] = await Promise.all([
+      JobBoardListing.countDocuments(match),
+      JobBoardListing.find(match)
+        .sort({ 'enrichment.lastEnrichedAt': -1, updatedAt: -1 })
+        .skip(page * limit)
+        .limit(limit)
+        .select(
+          'jobTitle companyName jobUrl applyUrl aggregatorPostingUrl status enrichment updatedAt createdAt listSnapshot'
+        )
+        .lean(),
+    ]);
+
+    return res.json({
+      total,
+      page,
+      limit,
+      items: rows.map((row: any) => {
+        const list = row.listSnapshot || {};
+        return {
+          id: String(row._id),
+          title: row.jobTitle || list.jobTitle || '',
+          company: row.companyName || list.companyName || '',
+          jobUrl: row.jobUrl || '',
+          aggregatorPostingUrl: row.aggregatorPostingUrl || list.aggregatorPostingUrl || '',
+          applyUrl: row.applyUrl || '',
+          status: row.status,
+          attempts: Number(row.enrichment?.attempts || 0),
+          lastError: String(row.enrichment?.lastError || ''),
+          lastEnrichedAt: row.enrichment?.lastEnrichedAt || null,
+          updatedAt: row.updatedAt || null,
+        };
+      }),
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch enrichment failures: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch enrichment failures' });
+  }
+});
+
+/** Manual requeue — resets attempts so enrichment can try a fresh 10. */
+router.post('/jobs/enrichment-failures/:id/requeue', async (req: any, res: any) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+    const ownerId = normalizeOwnerIdForWrite(req.user.id);
+    const result = await JobBoardListing.updateOne(
+      {
+        _id: id,
+        ownerId,
+        source: 'hiring_cafe',
+        status: { $in: ['partial', 'failed', 'queued'] },
+      },
+      {
+        $set: {
+          status: 'queued',
+          priority: 10,
+          leaseUntil: null,
+          claimedBy: null,
+          'enrichment.attempts': 0,
+          'enrichment.method': 'none',
+          'enrichment.lastError': 'manual_requeue_from_failure_dashboard',
+          'enrichment.nextAttemptAt': null,
+        },
+      }
+    );
+    if (!result.matchedCount) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+    return res.json({ ok: true, requeued: true });
+  } catch (error: any) {
+    logger.log('error', `Failed to requeue enrichment failure: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to requeue' });
+  }
+});
+
 router.get('/jobs/:id', async (req: any, res: any) => {
   try {
     const id = String(req.params.id || '').trim();
@@ -583,7 +714,7 @@ router.get('/jobs/:id', async (req: any, res: any) => {
     const row: any = await JobBoardListing.findOne({
       _id: id,
       ownerId,
-      status: { $in: ['ready', 'partial'] },
+      status: 'ready',
     })
       .select(
         'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'

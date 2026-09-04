@@ -96,7 +96,7 @@ describe('jobBoardEnrichment helpers', () => {
     expect(String(a.jobUrl)).not.toMatch(/hiringcafe/i);
   });
 
-  it('isListRowComplete accepts hiring_cafe rows without location when description is long', () => {
+  it('isListRowComplete never accepts hiring_cafe from list alone (needs detail enrichment)', () => {
     expect(
       isListRowComplete(
         {
@@ -107,7 +107,7 @@ describe('jobBoardEnrichment helpers', () => {
         },
         { source: 'hiring_cafe' }
       )
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isListRowComplete({
         jobTitle: 'Engineer',
@@ -149,6 +149,19 @@ describe('jobBoardEnrichment helpers', () => {
     expect(identity).not.toBeNull();
     expect(identity!.jobUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
     expect(identity!.applyUrl).toBe('https://boards.greenhouse.io/acme/jobs/999');
+  });
+
+  it('amazon.jobs www and apex hosts share the same jobUrlKey', () => {
+    const bare =
+      'https://amazon.jobs/en/jobs/10528088/applied-scientist-global-risk-intelligence-and-prevention-seller-abuse-prevention';
+    const www =
+      'https://www.amazon.jobs/en/jobs/10528088/applied-scientist-global-risk-intelligence-and-prevention-seller-abuse-prevention';
+    expect(jobUrlKey(bare)).toBe(jobUrlKey(www));
+    expect(jobUrlKey(bare)).not.toBe(
+      jobUrlKey(
+        'https://hiringcafe.com/job/applied-scientist-global-risk-intelligence-and-prevention-seller-rsn2lxvo42oe6q7h'
+      )
+    );
   });
 
   it('resolveBoardEnqueueIdentity queues thin hiring_cafe rows on posting URL for enrichment recovery', () => {

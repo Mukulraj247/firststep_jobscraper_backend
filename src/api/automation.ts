@@ -30,7 +30,7 @@ export interface PublicAutomationConfig {
   enrichHiringCafeDetails?: boolean;
   hiringCafeEnrichment?: {
     scrapeDoEnabled?: boolean;
-    scrapeDoMaxTier?: 1 | 2 | 3;
+    scrapeDoMaxTier?: 1 | 2;
   };
   destinationType?: AutomationDestinationType;
 }
@@ -51,6 +51,10 @@ export interface AutomationSummary {
   rowsExtracted: number;
   /** Jobs from the latest run that were accepted onto the job board (aggregators). */
   jobsAddedToBoard?: number;
+  /** Unique new job URLs from the latest run (not already on the board). */
+  jobsBoardUnique?: number;
+  /** Searchable board-ready listings from the latest run. */
+  jobsBoardReady?: number;
   status: string;
   latestRunId?: string | null;
   latestFailureReason?: string | null;
@@ -192,7 +196,10 @@ export const getDashboardAggregators = async (params?: {
   provider: string;
   searches: AutomationSummary[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
-  summary: DashboardAutomationsSummary & { jobsAddedToBoardTotal?: number };
+  summary: DashboardAutomationsSummary & {
+    jobsAddedToBoardTotal?: number;
+    jobsBoardReadyTotal?: number;
+  };
 }> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 10;
@@ -222,6 +229,7 @@ export const getDashboardAggregators = async (params?: {
       successfulCount: 0,
       failedCount: 0,
       jobsAddedToBoardTotal: 0,
+      jobsBoardReadyTotal: 0,
     },
   };
 };
@@ -637,7 +645,35 @@ export const getSaasRunLogs = async (
   return {
     logs: response.data?.logs || [],
     nextCursor: response.data?.nextCursor || null,
-    hasMore: response.data?.hasMore === true,
+    hasMore: !!response.data?.hasMore,
+  };
+};
+
+export type RunJobFunnelResponse = {
+  rowsScraped: number;
+  unique: number;
+  onJobBoard: number;
+  scraped: Array<{ title?: string; companyName?: string; jobUrl: string }>;
+  added: Array<{
+    id: string;
+    jobTitle: string;
+    companyName: string;
+    jobUrl: string;
+    createdAt: string | Date | null;
+  }>;
+};
+
+export const getRunJobFunnel = async (runId: string): Promise<RunJobFunnelResponse> => {
+  const response = await axios.get(`${apiUrl}/api/runs/${encodeURIComponent(runId)}/job-funnel`, {
+    withCredentials: true,
+  });
+  const data = response.data || {};
+  return {
+    rowsScraped: Number(data.rowsScraped) || 0,
+    unique: Number(data.unique) || 0,
+    onJobBoard: Number(data.onJobBoard) || 0,
+    scraped: Array.isArray(data.scraped) ? data.scraped : [],
+    added: Array.isArray(data.added) ? data.added : [],
   };
 };
 

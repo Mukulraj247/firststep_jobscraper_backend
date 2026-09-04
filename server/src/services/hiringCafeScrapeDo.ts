@@ -29,7 +29,8 @@ export type HiringCafeScrapeDoFetchResult = {
 };
 
 /**
- * Fetch a Hiring Cafe posting via Scrape.do (tier 2+ render).
+ * Fetch a Hiring Cafe posting via Scrape.do after plain HTTP failed.
+ * Escalation: always start at tier 1, then tier 2 if needed — never tier 3.
  * Never called for employer / apply URLs — HC posting URLs only.
  */
 export async function fetchHiringCafePostingViaScrapeDo(
@@ -43,17 +44,17 @@ export async function fetchHiringCafePostingViaScrapeDo(
       html: '',
       method: 'scrape.do',
       light: false,
-      tier: 2,
+      tier: 1,
       creditsSpent: 0,
       error: 'Not a Hiring Cafe job posting URL',
     };
   }
 
-  const maxTier = opts.maxTier ?? 2;
-  const startTier = maxTier === 1 ? 1 : 2;
+  // Cap at 2 even if a caller passes 3 — never burn super-tier credits on HC.
+  const maxTier = Math.min(2, opts.maxTier ?? 2) as ScrapeTier;
   const result = await scrapeUrlHtml(url, {
     token: opts.token,
-    startTier,
+    startTier: 1,
     maxTier,
     useLearnedTier: false,
     shouldEscalate: (status, html) => {

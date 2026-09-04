@@ -214,6 +214,13 @@ export const useCachedRuns = (params?: {
         duration: run.durationMs ?? run.duration ?? null,
         jobsAddedToBoard:
           typeof run.jobsAddedToBoard === 'number' ? run.jobsAddedToBoard : 0,
+        jobsBoardUnique:
+          typeof run.jobsBoardUnique === 'number'
+            ? run.jobsBoardUnique
+            : typeof run.jobsAddedToBoard === 'number'
+              ? run.jobsAddedToBoard
+              : 0,
+        jobsBoardReady: typeof run.jobsBoardReady === 'number' ? run.jobsBoardReady : 0,
         log: typeof run.log === 'string' ? run.log : '',
         serializableOutput: run.serializableOutput || {},
         binaryOutput: run.binaryOutput || {},

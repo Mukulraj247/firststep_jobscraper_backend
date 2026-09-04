@@ -314,6 +314,8 @@ export const toPublicRunDto = (
     retryCount: source.retryCount,
     rowsExtracted: source.rowsExtracted,
     jobsAddedToBoard: source.jobsAddedToBoard,
+    jobsBoardUnique: source.jobsBoardUnique,
+    jobsBoardReady: source.jobsBoardReady,
     jobsBoardConsidered: source.jobsBoardConsidered,
     jobsBoardDeduped: source.jobsBoardDeduped,
     anomaly: source.anomaly,

@@ -4,7 +4,9 @@ import { requireSignInOrApiKey } from '../middlewares/auth';
 import Robot from '../models/Robot';
 import Run from '../models/Run';
 import ExtractedData from '../models/ExtractedData';
+import JobBoardListing from '../models/JobBoardListing';
 import logger from '../logger';
+import { boardMatch, mapListingToJob } from './jobs';
 import moment from 'moment-timezone';
 import {
   automationScheduleNeedsRepack,
@@ -931,9 +933,13 @@ router.get('/dashboard/aggregators', async (req: any, res: any) => {
     const runTotals = await computeFilteredDashboardRunTotals(req.user.id, allMetaIds);
 
     let jobsAddedToBoardTotal = 0;
+    let jobsBoardReadyTotal = 0;
     for (const run of runTotals.latestRuns.values()) {
       if (typeof run?.jobsAddedToBoard === 'number') {
         jobsAddedToBoardTotal += run.jobsAddedToBoard;
+      }
+      if (typeof run?.jobsBoardReady === 'number') {
+        jobsBoardReadyTotal += run.jobsBoardReady;
       }
     }
 
@@ -943,13 +949,22 @@ router.get('/dashboard/aggregators', async (req: any, res: any) => {
       const rowsExtracted = latestRun?.runId
         ? runTotals.rowCounts.get(String(latestRun.runId)) || 0
         : 0;
+      const jobsAddedToBoard =
+        typeof latestRun?.jobsAddedToBoard === 'number' ? latestRun.jobsAddedToBoard : 0;
+      const jobsBoardUnique =
+        typeof latestRun?.jobsBoardUnique === 'number'
+          ? latestRun.jobsBoardUnique
+          : jobsAddedToBoard;
+      const jobsBoardReady =
+        typeof latestRun?.jobsBoardReady === 'number' ? latestRun.jobsBoardReady : 0;
       return {
         ...mapAutomation(robot, latestRun, rowsExtracted),
         aggregatorProvider:
           robot.recording_meta?.saasConfig?.aggregatorProvider || provider || '',
         targetUrl: robot.recording_meta?.url || '',
-        jobsAddedToBoard:
-          typeof latestRun?.jobsAddedToBoard === 'number' ? latestRun.jobsAddedToBoard : 0,
+        jobsAddedToBoard,
+        jobsBoardUnique,
+        jobsBoardReady,
       };
     });
 
@@ -966,6 +981,7 @@ router.get('/dashboard/aggregators', async (req: any, res: any) => {
         successfulCount: runTotals.successfulCount,
         failedCount: runTotals.failedCount,
         jobsAddedToBoardTotal,
+        jobsBoardReadyTotal,
       },
     });
   } catch (error: any) {
@@ -2271,6 +2287,116 @@ router.get('/runs/:id/logs', async (req: any, res: any) => {
   } catch (error: any) {
     logger.log('error', `Failed to fetch run logs ${req.params.id}: ${error.message}`);
     return res.status(500).json({ error: 'Failed to fetch run logs' });
+  }
+});
+
+router.get('/runs/:id/job-funnel', async (req: any, res: any) => {
+  try {
+    const runId = String(req.params.id || '').trim();
+    if (!runId) return res.status(400).json({ error: 'runId required' });
+
+    const run: any = await Run.findOne({ runId })
+      .select(
+        'runId robotMetaId rowsExtracted jobsAddedToBoard jobsBoardUnique jobsBoardReady jobsBoardConsidered jobsBoardDeduped'
+      )
+      .lean();
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+
+    const robot: any = await Robot.findOne({
+      ...ownerIdFilter(req.user.id),
+      'recording_meta.id': run.robotMetaId,
+    }).lean();
+    if (!robot) return res.status(404).json({ error: 'Run not found' });
+
+    const ownerId = normalizeOwnerIdForWrite(req.user.id);
+    const FUNNEL_LIMIT = 500;
+
+    const extractedRows = await ExtractedData.find({ runId })
+      .select('data')
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(FUNNEL_LIMIT)
+      .lean();
+
+    const scraped = extractedRows
+      .map((row: any) => {
+        const data = row?.data || {};
+        const jobUrl = String(
+          data.jobUrl || data.job_url || data.url || data.link || data.href || data.applyUrl || ''
+        ).trim();
+        if (!jobUrl) return null;
+        return {
+          title: String(data.jobTitle || data.title || data.name || '').trim() || undefined,
+          companyName: String(data.companyName || data.company || '').trim() || undefined,
+          jobUrl,
+        };
+      })
+      .filter(Boolean) as Array<{ title?: string; companyName?: string; jobUrl: string }>;
+
+    // Fallback: list rows from serializableOutput when ExtractedData is empty.
+    if (scraped.length === 0) {
+      const outputRun: any = await Run.findOne({ runId }).select('serializableOutput').lean();
+      const cfg = getAutomationConfig(robot);
+      const fallback = pageLegacyOutputRows(outputRun?.serializableOutput, cfg, 0, FUNNEL_LIMIT);
+      for (const row of fallback.rows || []) {
+        const data = row?.data || {};
+        const jobUrl = String(
+          data.jobUrl || data.job_url || data.url || data.link || data.href || data.applyUrl || ''
+        ).trim();
+        if (!jobUrl) continue;
+        scraped.push({
+          title: String(data.jobTitle || data.title || data.name || '').trim() || undefined,
+          companyName: String(data.companyName || data.company || '').trim() || undefined,
+          jobUrl,
+        });
+      }
+    }
+
+    const match = {
+      ...boardMatch(ownerId),
+      runIds: runId,
+    };
+    const boardRows = await JobBoardListing.find(match)
+      .select(
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about source aggregatorPostingUrl listSnapshot createdAt lastSeenAt frozenCategories'
+      )
+      .sort({ createdAt: -1 })
+      .limit(FUNNEL_LIMIT)
+      .lean();
+
+    const added = boardRows
+      .map((row) => mapListingToJob(row, { fullDescription: false, allowIncomplete: false }))
+      .filter(Boolean)
+      .map((job: any) => ({
+        id: job.id,
+        jobTitle: job.data?.jobTitle || '',
+        companyName: job.data?.companyName || '',
+        jobUrl: job.data?.jobUrl || job.data?.applyUrl || '',
+        createdAt: job.createdAt || null,
+      }));
+
+    const rowsScraped =
+      typeof run.rowsExtracted === 'number' && run.rowsExtracted > 0
+        ? run.rowsExtracted
+        : scraped.length;
+    const unique =
+      typeof run.jobsBoardUnique === 'number'
+        ? run.jobsBoardUnique
+        : typeof run.jobsAddedToBoard === 'number'
+          ? run.jobsAddedToBoard
+          : 0;
+    // Live boardMatch count — matches the "Added" list and Job board search.
+    const onJobBoard = added.length;
+
+    return res.json({
+      rowsScraped,
+      unique,
+      onJobBoard,
+      scraped,
+      added,
+    });
+  } catch (error: any) {
+    logger.log('error', `Failed to fetch run job funnel ${req.params.id}: ${error.message}`);
+    return res.status(500).json({ error: 'Failed to fetch run job funnel' });
   }
 });
 

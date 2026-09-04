@@ -54,6 +54,10 @@ export interface IRun extends Document {
   rowsExtracted: number;
   /** Net-new / promoted job-board rows from this run (queued + readyFromList). */
   jobsAddedToBoard?: number;
+  /** Unique job URLs not already on the board (queued + readyFromList). */
+  jobsBoardUnique?: number;
+  /** Listings from this run that reached searchable board-ready status. */
+  jobsBoardReady?: number;
   /** Board enqueue: rows considered from extraction. */
   jobsBoardConsidered?: number;
   /** Board enqueue: skipped as already on board / fresh. */
@@ -110,6 +114,8 @@ const RunSchema: Schema = new Schema(
     queueJobId: { type: String, default: null },
     rowsExtracted: { type: Number, default: 0 },
     jobsAddedToBoard: { type: Number, default: 0 },
+    jobsBoardUnique: { type: Number, default: 0 },
+    jobsBoardReady: { type: Number, default: 0 },
     jobsBoardConsidered: { type: Number, default: 0 },
     jobsBoardDeduped: { type: Number, default: 0 },
     anomaly: { type: String, default: null },
