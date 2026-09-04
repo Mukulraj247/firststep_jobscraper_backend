@@ -263,31 +263,35 @@ export async function recoverPhenomAtsSkipFailures(limit = 40): Promise<number> 
 }
 
 const FREE_PATH_SKIP_ERRORS = [
-  'career_scrape_do_disabled',
-  'SCRAPE_DO_TOKEN_missing',
+  // Old Phenom "skip scrape.do" rows that never got a free PCSX attempt.
   'career_host_skip_scrape_do',
-  'daily_credit_budget_exhausted',
 ];
 
 /**
- * Requeue career rows that stalled on disabled scrape.do / budget pauses now that
- * free ATS/HTML detectors cover more hosts (TalentBrew detail, careerhtml, …).
+ * One-shot recovery for legacy Phenom skips only.
+ *
+ * Do NOT requeue `SCRAPE_DO_TOKEN_missing` / `career_scrape_do_disabled` here —
+ * those already ran detectAts + free HTML/ATS and failed. Requeueing them every
+ * pass creates an infinite claimed=N failed=N / requeued=N loop (ready=0, ats=0).
  */
-export async function recoverFreePathSkipFailures(limit = 100): Promise<number> {
+export async function recoverFreePathSkipFailures(limit = 40): Promise<number> {
+  const staleBefore = new Date(Date.now() - 6 * 60 * 60 * 1000);
   const docs = await JobBoardListing.find({
-    status: { $in: ['failed', 'queued'] },
+    status: 'failed',
     'enrichment.lastError': { $in: FREE_PATH_SKIP_ERRORS },
+    'enrichment.attempts': { $lte: 2 },
+    updatedAt: { $lte: staleBefore },
     $or: [{ source: '' }, { source: { $exists: false } }, { source: null }],
   })
     .select('_id jobUrl applyUrl')
-    .sort({ updatedAt: -1 })
-    .limit(Math.max(limit * 3, limit))
+    .sort({ updatedAt: 1 })
+    .limit(Math.max(limit * 2, limit))
     .lean();
 
   const ids = docs
     .filter((row) => {
       const urls = [row.jobUrl, row.applyUrl].filter(Boolean) as string[];
-      return urls.some((url) => Boolean(detectAts(url)));
+      return urls.some((url) => detectAts(url)?.provider === 'phenom');
     })
     .slice(0, limit)
     .map((row) => row._id);
@@ -300,7 +304,8 @@ export async function recoverFreePathSkipFailures(limit = 100): Promise<number> 
         status: 'queued',
         leaseUntil: null,
         claimedBy: null,
-        'enrichment.nextAttemptAt': null,
+        // Stagger so we do not instantly re-thrash the same batch.
+        'enrichment.nextAttemptAt': new Date(Date.now() + 5 * 60_000),
         'enrichment.lastError': '',
       },
     }
@@ -1317,14 +1322,15 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   // Career never uses scrape.do — resolve list/fail before any credit gate.
   if (!process.env.SCRAPE_DO_TOKEN || !isCareerBoardScrapeDoEnabled()) {
     const status = boardListingStatus(listFields, doc.jobUrl);
+    const freePathMiss = status !== 'ready';
     await persistResult(doc, listFields, {
-      status: status === 'ready' ? 'ready' : 'failed',
-      method: status === 'ready' ? 'list' : 'none',
+      status: freePathMiss ? 'failed' : 'ready',
+      method: freePathMiss ? 'none' : 'list',
       tier: 0,
       creditsSpent: 0,
-      error: !process.env.SCRAPE_DO_TOKEN
-        ? 'SCRAPE_DO_TOKEN_missing'
-        : 'career_scrape_do_disabled',
+      // Distinct from scrape.do — free ATS/HTML already missed; do not auto-requeue in a tight loop.
+      error: freePathMiss ? 'career_free_path_miss' : undefined,
+      nextAttemptAt: freePathMiss ? new Date(Date.now() + 12 * 60 * 60 * 1000) : null,
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;
