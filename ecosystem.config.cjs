@@ -142,8 +142,8 @@ module.exports = {
         LOW_MEMORY_MODE: 'true',
         HIRING_CAFE_SCRAPE_DO_ENABLED: 'true',
         JOB_ENRICHMENT_SCRAPE_DO_ENABLED: 'false',
-        JOB_ENRICHMENT_BATCH: '8',
-        JOB_ENRICHMENT_CONCURRENCY: '4',
+        JOB_ENRICHMENT_BATCH: '16',
+        JOB_ENRICHMENT_CONCURRENCY: '8',
       },
     },
     {
