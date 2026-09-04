@@ -318,18 +318,32 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
   const now = new Date();
   const leaseUntil = new Date(Date.now() + LEASE_MS);
 
-  // Prefer Hiring Cafe / aggregator stubs first — they are thin list rows that only
-  // become visible on the Job Board after enrichment, and they were starving behind
-  // large career-site queues.
-  const claimFilters: Array<Record<string, unknown>> = [
+  // When Scrape.do budget is exhausted, HC enrichments mostly fail (CF + no credits).
+  // Prefer career/free-path rows so Capital One / TalentBrew / ATS queues can drain.
+  const spent = await getCreditsSpentToday();
+  const scrapeDoPaused = spent >= SCRAPE_DO_DAILY_CREDIT_BUDGET;
+
+  const careerFirst: Array<Record<string, unknown>> = [
+    { $or: [{ source: '' }, { source: { $exists: false } }, { source: null }] },
+    {
+      source: {
+        $in: ['accel', 'sequoia', 'capitalg', 'choppingblock', 'aidevboard', 'startups_gallery'],
+      },
+    },
+    { source: 'hiring_cafe' },
+  ];
+
+  const hcFirst: Array<Record<string, unknown>> = [
     { source: 'hiring_cafe' },
     {
       source: {
         $in: ['accel', 'sequoia', 'capitalg', 'choppingblock', 'aidevboard', 'startups_gallery'],
       },
     },
-    {}, // anything else queued
+    {}, // anything else queued (career)
   ];
+
+  const claimFilters = scrapeDoPaused ? careerFirst : hcFirst;
 
   for (const extra of claimFilters) {
     while (claimed.length < limit) {
@@ -351,7 +365,9 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
           },
         },
         {
-          sort: { priority: -1, createdAt: 1 },
+          // Career is priority 0; HC is 10. When draining career-first, sort by createdAt only
+          // within the career filter. When HC-first, keep priority so HC still wins inside {}.
+          sort: scrapeDoPaused ? { createdAt: 1 } : { priority: -1, createdAt: 1 },
           returnDocument: 'after',
         }
       );
