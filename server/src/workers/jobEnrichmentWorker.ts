@@ -262,6 +262,57 @@ export async function recoverPhenomAtsSkipFailures(limit = 40): Promise<number> 
   return res.modifiedCount || 0;
 }
 
+const FREE_PATH_SKIP_ERRORS = [
+  'career_scrape_do_disabled',
+  'SCRAPE_DO_TOKEN_missing',
+  'career_host_skip_scrape_do',
+  'daily_credit_budget_exhausted',
+];
+
+/**
+ * Requeue career rows that stalled on disabled scrape.do / budget pauses now that
+ * free ATS/HTML detectors cover more hosts (TalentBrew detail, careerhtml, …).
+ */
+export async function recoverFreePathSkipFailures(limit = 100): Promise<number> {
+  const docs = await JobBoardListing.find({
+    status: { $in: ['failed', 'queued'] },
+    'enrichment.lastError': { $in: FREE_PATH_SKIP_ERRORS },
+    $or: [{ source: '' }, { source: { $exists: false } }, { source: null }],
+  })
+    .select('_id jobUrl applyUrl')
+    .sort({ updatedAt: -1 })
+    .limit(Math.max(limit * 3, limit))
+    .lean();
+
+  const ids = docs
+    .filter((row) => {
+      const urls = [row.jobUrl, row.applyUrl].filter(Boolean) as string[];
+      return urls.some((url) => Boolean(detectAts(url)));
+    })
+    .slice(0, limit)
+    .map((row) => row._id);
+  if (!ids.length) return 0;
+
+  const res = await JobBoardListing.updateMany(
+    { _id: { $in: ids } },
+    {
+      $set: {
+        status: 'queued',
+        leaseUntil: null,
+        claimedBy: null,
+        'enrichment.nextAttemptAt': null,
+        'enrichment.lastError': '',
+      },
+    }
+  );
+  return res.modifiedCount || 0;
+}
+
+function nextUtcMidnightMs(nowMs: number = Date.now()): number {
+  const d = new Date(nowMs);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 5, 0, 0);
+}
+
 async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
   const claimed: IJobBoardListing[] = [];
   const now = new Date();
@@ -1016,6 +1067,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
       if (hcScrapeDo?.enabled) {
         const spentToday = await getCreditsSpentToday();
         if (spentToday >= SCRAPE_DO_DAILY_CREDIT_BUDGET) {
+          metrics.budget_paused = true;
           logger.log('warn', 'Hiring Cafe Scrape.do skipped — daily credit budget exhausted');
         } else {
           scrapeDoOpts = { scrapeDo: hcScrapeDo };
@@ -1246,33 +1298,8 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  // Wait for rate limiter token
-  while (!rateLimiter.tryTake()) {
-    await new Promise((r) => setTimeout(r, Math.min(rateLimiter.msUntilToken(), 2000)));
-  }
-
-  const spentToday = await getCreditsSpentToday();
-  if (spentToday >= SCRAPE_DO_DAILY_CREDIT_BUDGET) {
-    metrics.budget_paused = true;
-    // Put back to queued without burning an attempt
-    await JobBoardListing.updateOne(
-      { _id: doc._id },
-      {
-        $set: {
-          status: 'queued',
-          leaseUntil: null,
-          claimedBy: null,
-          'enrichment.nextAttemptAt': new Date(Date.now() + 30 * 60 * 1000),
-          'enrichment.lastError': 'daily_credit_budget_exhausted',
-        },
-      }
-    );
-    return;
-  }
-
+  // Career never uses scrape.do — resolve list/fail before any credit gate.
   if (!process.env.SCRAPE_DO_TOKEN || !isCareerBoardScrapeDoEnabled()) {
-    // ATS already missed. Career scrape.do is opt-in (HC uses a separate gate).
-    // Without it, still publish list fields that pass the board gate.
     const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
       status: status === 'ready' ? 'ready' : 'failed',
@@ -1286,6 +1313,29 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     });
     if (status === 'ready') metrics.ready += 1;
     else metrics.failed += 1;
+    return;
+  }
+
+  // Wait for rate limiter token (career scrape.do path only — normally disabled)
+  while (!rateLimiter.tryTake()) {
+    await new Promise((r) => setTimeout(r, Math.min(rateLimiter.msUntilToken(), 2000)));
+  }
+
+  const spentToday = await getCreditsSpentToday();
+  if (spentToday >= SCRAPE_DO_DAILY_CREDIT_BUDGET) {
+    metrics.budget_paused = true;
+    await JobBoardListing.updateOne(
+      { _id: doc._id },
+      {
+        $set: {
+          status: 'queued',
+          leaseUntil: null,
+          claimedBy: null,
+          'enrichment.nextAttemptAt': new Date(nextUtcMidnightMs()),
+          'enrichment.lastError': 'daily_credit_budget_exhausted',
+        },
+      }
+    );
     return;
   }
 
@@ -1543,10 +1593,10 @@ export async function runEnrichmentPass(): Promise<EnrichmentPassMetrics> {
     return metrics;
   }
 
+  // Scrape.do budget gates HC paid fetches only — never stop claiming free career/ATS work.
   const spent = await getCreditsSpentToday();
   if (spent >= SCRAPE_DO_DAILY_CREDIT_BUDGET) {
     metrics.budget_paused = true;
-    return metrics;
   }
 
   const recovered = await recoverExpiredLeases();
@@ -1559,6 +1609,14 @@ export async function runEnrichmentPass(): Promise<EnrichmentPassMetrics> {
     logger.log(
       'info',
       `job-enrichment requeued ${phenomRecovered} Phenom listings previously skipped for scrape.do`
+    );
+  }
+
+  const freePathRecovered = await recoverFreePathSkipFailures();
+  if (freePathRecovered > 0) {
+    logger.log(
+      'info',
+      `job-enrichment requeued ${freePathRecovered} career listings for free ATS/HTML paths`
     );
   }
 
@@ -1628,8 +1686,8 @@ export async function startJobEnrichmentLoop(): Promise<void> {
       lastMetrics = metrics;
 
       if (metrics.claimed === 0) {
-        // Keep polling frequently — new backfills should not wait a full minute.
-        idleSleepMs = metrics.budget_paused ? 60_000 : Math.min(15_000, Math.max(3000, idleSleepMs + 2000));
+        // Do not idle 60s on scrape.do budget alone — free career paths must keep polling.
+        idleSleepMs = Math.min(15_000, Math.max(3000, idleSleepMs + 2000));
         await new Promise((r) => setTimeout(r, idleSleepMs));
       } else {
         idleSleepMs = 3000;

@@ -4,14 +4,16 @@
  *
  * Usage: npx ts-node server/src/scripts/requeueStuckHiringCafeEnrichments.ts
  */
-require('dotenv').config();
-const mongoose = require('mongoose');
+import * as dotenv from 'dotenv';
+import mongoose from 'mongoose';
+
+dotenv.config();
 
 (async () => {
   const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DB_URL;
   if (!uri) throw new Error('MONGODB_URI missing');
   await mongoose.connect(uri, process.env.MONGODB_DATABASE ? { dbName: process.env.MONGODB_DATABASE } : undefined);
-  const db = mongoose.connection.db;
+  const db = mongoose.connection.db!;
   const coll = db.collection('maxun_job_board');
 
   const filter = {

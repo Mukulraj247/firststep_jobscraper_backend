@@ -32,6 +32,7 @@ import {
   assertSafeFindlyApiBase,
   looksLikePhenomBoard,
   looksLikeTalentBrewBoard,
+  looksLikeTalentBrewJobDetail,
   parseTalentBrewBoardFilters,
   parseTalentBrewResultsHtml,
   looksLikeZwayamBoard,
@@ -2350,6 +2351,18 @@ describe('Phenom board adapter', () => {
   it('does not classify Empower Talent Brew→Workday as talentbrew', () => {
     expect(looksLikeTalentBrewBoard('https://jobs.empower.com/search-jobs')).toBe(false);
     expect(looksLikeWorkdayBoard('https://jobs.empower.com/search-jobs')).toBe(true);
+  });
+
+  it('detects TalentBrew/Radancy job detail URLs for free careerhtml enrich', () => {
+    const capitalOne =
+      'https://capitalonecareers.com/en/job/mclean/senior-data-analyst/1732/98246876496';
+    const commonSpirit =
+      'https://commonspirit.careers/en/job/stockton/rad-tech-i/35300/99761066800';
+    expect(looksLikeTalentBrewJobDetail(capitalOne)).toBe(true);
+    expect(looksLikeTalentBrewJobDetail(commonSpirit)).toBe(true);
+    expect(detectAts(capitalOne)?.provider).toBe('careerhtml');
+    expect(detectAts(commonSpirit)?.provider).toBe('careerhtml');
+    expect(looksLikeTalentBrewJobDetail('https://boards.greenhouse.io/acme/jobs/123')).toBe(false);
   });
 
   it('parses Talent Brew results HTML into job rows', () => {

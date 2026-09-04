@@ -7,6 +7,7 @@ import ProxyForm from '../components/proxy/ProxyForm';
 import { DashboardPage } from './DashboardPage';
 import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
+import { EnrichmentPage } from './EnrichmentPage';
 import { CommunicationPage } from './CommunicationPage';
 import { AggregatorsPage } from './AggregatorsPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
@@ -330,6 +331,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
         />;
       case 'failures':
         return <FailureDashboardPage />;
+      case 'enrichment':
+        return <EnrichmentPage />;
       case 'communication':
         return <CommunicationPage />;
       case 'aggregators':

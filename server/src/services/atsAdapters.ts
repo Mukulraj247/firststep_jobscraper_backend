@@ -648,6 +648,34 @@ function detectCareerHtml(
   };
 }
 
+/**
+ * Radancy / TalentBrew job detail pages:
+ * /en/job/{city}/{slug}/{orgId}/{jobId} (Capital One, Schwab, CommonSpirit, …).
+ */
+export function looksLikeTalentBrewJobDetail(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /\/(?:[a-z]{2}\/)?job\/[^/]+\/[^/]+\/\d+\/\d+\/?$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function detectTalentBrewJobDetail(
+  parsed: URL
+): { provider: 'careerhtml'; apiUrl: string; companyHint: string } | null {
+  if (!looksLikeTalentBrewJobDetail(parsed.href)) return null;
+  if (isHiringCafeHost(parsed.hostname)) return null;
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const clean = new URL(parsed.href);
+  clean.hash = '';
+  return {
+    provider: 'careerhtml',
+    apiUrl: clean.toString(),
+    companyHint: careerHtmlCompanyHint(host),
+  };
+}
+
 const SKIP_SCRAPE_DO_HOSTS = new Set([
   'careers.ibm.com',
   'ibmglobal.avature.net',
@@ -956,6 +984,10 @@ export function detectAts(url: string): { provider: AtsProvider; apiUrl: string;
 
   const careerHtml = detectCareerHtml(parsed);
   if (careerHtml) return careerHtml;
+
+  // TalentBrew/Radancy /en/job/.../{org}/{id} even when host is not yet in the directory.
+  const talentBrewJob = detectTalentBrewJobDetail(parsed);
+  if (talentBrewJob) return talentBrewJob;
 
   return null;
 }

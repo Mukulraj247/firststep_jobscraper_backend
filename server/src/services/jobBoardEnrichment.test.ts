@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildListSnapshot,
   contentHashFromFields,
+  identityCountsTowardJobsAdded,
   isListRowComplete,
   pickCanonicalJobUrl,
   resolveBoardEnqueueIdentity,
@@ -245,5 +246,38 @@ describe('jobBoardEnrichment helpers', () => {
       'startups_gallery'
     );
     expect(careersIdentity?.jobUrl).toBe('https://careers.acme.example/jobs/software-engineer');
+  });
+
+  it('identityCountsTowardJobsAdded excludes soft-gate aggregator posting URLs', () => {
+    expect(
+      identityCountsTowardJobsAdded(
+        'https://hiringcafe.com/job/software-engineer-acme-abc123'
+      )
+    ).toBe(false);
+    expect(
+      identityCountsTowardJobsAdded('https://hiring.cafe/job/another-posting-xyz')
+    ).toBe(false);
+    expect(
+      identityCountsTowardJobsAdded('https://boards.greenhouse.io/acme/jobs/999')
+    ).toBe(true);
+    expect(
+      identityCountsTowardJobsAdded(
+        'https://capitalonecareers.com/en/job/mclean/senior-data-analyst/1732/98246876496'
+      )
+    ).toBe(true);
+  });
+
+  it('HC soft-gate identity resolves to aggregator URL and must not count as Jobs Added', () => {
+    const identity = resolveBoardEnqueueIdentity(
+      {
+        jobUrl: 'https://hiringcafe.com/job/software-engineer-acme-abc123',
+        jobTitle: 'Software Engineer',
+        companyName: 'Acme',
+        jobDescription: 'short',
+      },
+      'hiring_cafe'
+    );
+    expect(identity?.jobUrl).toMatch(/hiringcafe/i);
+    expect(identityCountsTowardJobsAdded(identity!.jobUrl)).toBe(false);
   });
 });

@@ -117,8 +117,8 @@ module.exports = {
         // Scrape.do credits: Hiring Cafe only. Career/employer board enrichment stays ATS/list.
         HIRING_CAFE_SCRAPE_DO_ENABLED: 'true',
         JOB_ENRICHMENT_SCRAPE_DO_ENABLED: 'false',
-        JOB_ENRICHMENT_BATCH: '8',
-        JOB_ENRICHMENT_CONCURRENCY: '4',
+        JOB_ENRICHMENT_BATCH: '24',
+        JOB_ENRICHMENT_CONCURRENCY: '10',
       },
     },
     {

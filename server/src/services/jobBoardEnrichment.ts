@@ -165,6 +165,13 @@ function isAggregatorPostingUrl(url: string): boolean {
   return isAggregatorHostUrl(url);
 }
 
+/** Dashboard Jobs Added only counts employer/ATS inserts — never soft-gate aggregator stubs. */
+export function identityCountsTowardJobsAdded(jobUrl: string): boolean {
+  const normalized = normalizeJobUrl(jobUrl) || String(jobUrl || '').trim();
+  if (!normalized) return false;
+  return !isAggregatorPostingUrl(normalized);
+}
+
 /**
  * Prefer an ATS / company apply URL as the board identity.
  * Never key the board on an aggregator page (HC / Accel) when a real apply URL exists.
@@ -450,11 +457,13 @@ function _idStr(id: unknown): string {
 /**
  * After enqueueing an employer-keyed row, drop soft-gate orphans still keyed on
  * the same aggregator posting URL (prevents HC slug + employer URL twin cards).
+ * Returns deleted count and the orphan jobUrlKeys removed (for jobsAdded reconcile).
  */
 export async function collapseSoftGateOrphansForEmployerBatch(
   items: Array<{ jobUrl: string; applyUrl: string; snapshot: IJobBoardListSnapshot }>
-): Promise<number> {
+): Promise<{ deleted: number; deletedKeys: string[] }> {
   let deleted = 0;
+  const deletedKeys: string[] = [];
   for (const item of items) {
     if (isAggregatorPostingUrl(item.jobUrl)) continue;
     const posting = normalizeJobUrl(item.snapshot.aggregatorPostingUrl || '');
@@ -489,9 +498,10 @@ export async function collapseSoftGateOrphansForEmployerBatch(
       }
       await JobBoardListing.deleteOne({ _id: orphan._id });
       deleted += 1;
+      if (postingKey) deletedKeys.push(postingKey);
     }
   }
-  return deleted;
+  return { deleted, deletedKeys };
 }
 
 export function contentHashFromFields(fields: {
@@ -685,6 +695,14 @@ export async function enqueueJobBoardEnrichments(opts: {
   const existingByKey = new Map(existing.map((d: any) => [d.jobUrlKey, d]));
   const nowDate = new Date();
   const ops: any[] = [];
+  /**
+   * Only non-aggregator (employer/ATS) inserts count toward dashboard Jobs Added.
+   * Soft-gate HC/Accel posting stubs often collapse into older employer cards later —
+   * counting them inflates jobsAddedToBoard vs real new board docs.
+   */
+  const countsTowardJobsAdded = new Set<string>();
+  const readyFromListKeys = new Set<string>();
+  const queuedKeys = new Set<string>();
 
   const touchSeen = (key: string, extraSet?: Record<string, unknown>) => ({
     updateOne: {
@@ -698,6 +716,7 @@ export async function enqueueJobBoardEnrichments(opts: {
 
   for (const [key, item] of byKey) {
     const prev = existingByKey.get(key);
+    const softGateIdentity = !identityCountsTowardJobsAdded(item.jobUrl);
 
     if (prev?.status === 'expired') {
       stats.expiredSkipped += 1;
@@ -732,10 +751,15 @@ export async function enqueueJobBoardEnrichments(opts: {
     const isNew = !prev;
 
     if (acceptList) {
-      // Only count brand-new board docs as "jobs added" — retouching an existing
-      // ready/list row must not inflate the dashboard Jobs Added metric.
+      // Only count brand-new employer/ATS board docs as "jobs added".
       if (isNew) {
-        stats.readyFromList += 1;
+        if (!softGateIdentity) {
+          countsTowardJobsAdded.add(key);
+          readyFromListKeys.add(key);
+        } else {
+          // Soft-gate list-complete (rare for HC) — still insert, do not inflate dashboard.
+          stats.skippedDedup += 1;
+        }
       } else {
         stats.skippedDedup += 1;
       }
@@ -803,7 +827,13 @@ export async function enqueueJobBoardEnrichments(opts: {
     }
 
     if (isNew) {
-      stats.queued += 1;
+      if (!softGateIdentity) {
+        countsTowardJobsAdded.add(key);
+        queuedKeys.add(key);
+      } else {
+        // Soft-gate stub for enrichment recovery — not a dashboard "job added".
+        stats.skippedDedup += 1;
+      }
     } else {
       // Existing incomplete stub — refresh snapshot but do not double-count as added.
       stats.skippedDedup += 1;
@@ -855,10 +885,15 @@ export async function enqueueJobBoardEnrichments(opts: {
   // Employer-keyed rows collapse soft-gate twins still keyed on aggregator posting URLs.
   try {
     const collapsed = await collapseSoftGateOrphansForEmployerBatch(Array.from(byKey.values()));
-    if (collapsed > 0) {
+    if (collapsed.deleted > 0) {
+      for (const key of collapsed.deletedKeys) {
+        countsTowardJobsAdded.delete(key);
+        readyFromListKeys.delete(key);
+        queuedKeys.delete(key);
+      }
       logger.log(
         'info',
-        `job-board enqueue collapsed ${collapsed} soft-gate orphan(s) for robot=${opts.robotMetaId}`
+        `job-board enqueue collapsed ${collapsed.deleted} soft-gate orphan(s) for robot=${opts.robotMetaId}`
       );
     }
   } catch (err: any) {
@@ -868,6 +903,37 @@ export async function enqueueJobBoardEnrichments(opts: {
     );
   }
 
+  // Reconcile Jobs Added against docs actually inserted this run (createdAt = nowDate).
+  // Fixes: (1) soft-gate stubs not counted, (2) concurrent races where !prev but upsert matched.
+  const candidateKeys = Array.from(countsTowardJobsAdded);
+  if (candidateKeys.length > 0) {
+    const inserted = await JobBoardListing.find({
+      jobUrlKey: { $in: candidateKeys },
+      createdAt: { $gte: nowDate },
+    })
+      .select('jobUrlKey status')
+      .lean();
+    const insertedKeys = new Set(inserted.map((d: any) => String(d.jobUrlKey || '')));
+    let ready = 0;
+    let queued = 0;
+    for (const doc of inserted) {
+      const key = String((doc as any).jobUrlKey || '');
+      if (!key || !countsTowardJobsAdded.has(key)) continue;
+      if (String((doc as any).status || '') === 'ready' && readyFromListKeys.has(key)) ready += 1;
+      else if (queuedKeys.has(key)) queued += 1;
+      else if (String((doc as any).status || '') === 'ready') ready += 1;
+      else queued += 1;
+    }
+    // Intent keys that did not insert (matched existing) count as dedup.
+    for (const key of candidateKeys) {
+      if (!insertedKeys.has(key)) stats.skippedDedup += 1;
+    }
+    stats.readyFromList = ready;
+    stats.queued = queued;
+  } else {
+    stats.readyFromList = 0;
+    stats.queued = 0;
+  }
   stats.uniqueNew = (Number(stats.queued) || 0) + (Number(stats.readyFromList) || 0);
 
   logger.log(

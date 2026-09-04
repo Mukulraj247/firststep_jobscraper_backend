@@ -4,10 +4,12 @@
  *
  * Usage: npx ts-node server/src/scripts/demoteFalseReadyHiringCafeListings.ts
  */
-require('dotenv').config();
-const mongoose = require('mongoose');
+import * as dotenv from 'dotenv';
+import mongoose from 'mongoose';
 
-function isAggregatorApplyHost(url) {
+dotenv.config();
+
+function isAggregatorApplyHost(url: unknown): boolean {
   try {
     const host = new URL(String(url || '')).hostname.toLowerCase();
     return (
@@ -22,7 +24,7 @@ function isAggregatorApplyHost(url) {
   }
 }
 
-function isSkillsDump(text) {
+function isSkillsDump(text: unknown): boolean {
   const raw = String(text || '').replace(/\s+/g, ' ').trim();
   if (raw.length < 80) return false;
   const commaCount = (raw.match(/,/g) || []).length;
@@ -41,13 +43,22 @@ function isSkillsDump(text) {
   return false;
 }
 
+type ReadyHcRow = {
+  _id: mongoose.Types.ObjectId;
+  applyUrl?: string | null;
+  jobDescription?: string | null;
+  listSnapshot?: { jobDescription?: string | null } | null;
+  jobTitle?: string | null;
+  companyName?: string | null;
+};
+
 (async () => {
   const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DB_URL;
   if (!uri) throw new Error('MONGODB_URI missing');
   await mongoose.connect(uri, process.env.MONGODB_DATABASE ? { dbName: process.env.MONGODB_DATABASE } : undefined);
-  const coll = mongoose.connection.db.collection('maxun_job_board');
+  const coll = mongoose.connection.db!.collection('maxun_job_board');
 
-  const readyHc = await coll
+  const readyHc = (await coll
     .find({ source: 'hiring_cafe', status: 'ready' })
     .project({
       applyUrl: 1,
@@ -56,9 +67,9 @@ function isSkillsDump(text) {
       jobTitle: 1,
       companyName: 1,
     })
-    .toArray();
+    .toArray()) as ReadyHcRow[];
 
-  const toDemote = readyHc.filter((row) => {
+  const toDemote = readyHc.filter((row: ReadyHcRow) => {
     const apply = String(row.applyUrl || '').trim();
     if (!apply || isAggregatorApplyHost(apply)) return true;
     const desc = String(row.jobDescription || row.listSnapshot?.jobDescription || '');
@@ -66,7 +77,7 @@ function isSkillsDump(text) {
     return false;
   });
 
-  const ids = toDemote.map((r) => r._id);
+  const ids = toDemote.map((r: ReadyHcRow) => r._id);
   let modified = 0;
   if (ids.length) {
     const res = await coll.updateMany(

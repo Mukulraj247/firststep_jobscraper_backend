@@ -190,6 +190,7 @@ describe('skip link and main landmark', () => {
       '/scrapers/create',
       '/runs',
       '/failures',
+      '/enrichment',
       '/communication',
       '/aggregators',
       '/proxy',

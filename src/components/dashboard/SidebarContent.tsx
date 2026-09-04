@@ -14,6 +14,7 @@ import {
   ChevronRight,
   MailOutline,
   HubOutlined,
+  InsightsOutlined,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import { FIRSTSTEP, tint } from './ops/dashboardTokens';
@@ -57,6 +58,10 @@ export const SidebarContent = ({
     failures: {
       label: 'Failure Dashboard',
       icon: <ErrorOutline aria-hidden={sidebarIconAriaHidden} />,
+    },
+    enrichment: {
+      label: 'Enrichment',
+      icon: <InsightsOutlined aria-hidden={sidebarIconAriaHidden} />,
     },
     communication: {
       label: t('mainmenu.communication', 'Communication'),

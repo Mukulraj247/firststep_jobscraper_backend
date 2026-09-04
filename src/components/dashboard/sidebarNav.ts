@@ -5,6 +5,7 @@ export const SIDEBAR_NAV_VALUES = [
   'scrapers',
   'runs',
   'failures',
+  'enrichment',
   'communication',
   'aggregators',
   'proxy',
