@@ -151,7 +151,12 @@ export function RunGroupAccordion({
   }, [sortField, sortDirection]);
 
   const latest = group.latestRun || {};
-  const jobsAdded = typeof latest.jobsAddedToBoard === 'number' ? latest.jobsAddedToBoard : 0;
+  const jobsAdded =
+    typeof latest.jobsBoardReady === 'number'
+      ? latest.jobsBoardReady
+      : typeof latest.jobsAddedToBoard === 'number'
+        ? latest.jobsAddedToBoard
+        : 0;
   const durationMs = latest.durationMs ?? latest.duration ?? null;
 
   return (
