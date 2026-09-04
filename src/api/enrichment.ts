@@ -7,6 +7,7 @@ export interface EnrichmentMetrics {
     queued: number;
     dueNow: number;
     enriching: number;
+    deferred: number;
     futureBackoff: number;
     leaseStuck: number;
   };
@@ -17,9 +18,9 @@ export interface EnrichmentMetrics {
     queuedCreated6h: number;
   };
   bySourceClass: {
-    career: { queued: number; enriching: number; ready6h: number };
-    hiring_cafe: { queued: number; enriching: number; ready6h: number };
-    other: { queued: number; enriching: number; ready6h: number };
+    career: { queued: number; enriching: number; deferred: number; ready6h: number };
+    hiring_cafe: { queued: number; enriching: number; deferred: number; ready6h: number };
+    other: { queued: number; enriching: number; deferred: number; ready6h: number };
   };
   byMethod6h: Record<string, number>;
   credits: {
@@ -34,6 +35,7 @@ export interface EnrichmentMetrics {
     ready: number;
     ats_hit: number;
     failed: number;
+    deferred: number;
     credits_spent: number;
     budget_paused: boolean;
   };

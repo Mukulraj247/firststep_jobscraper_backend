@@ -122,17 +122,21 @@ PROXY_POOL=
 
 # -----------------------------------------------------------------------------
 # Job board enrichment (detail-page ATS / light HTTP → maxun_job_board)
-# Run as a separate PM2 process: npm run worker:enrichment
+# Split workers on the droplet:
+#   scoutx-enrichment     JOB_ENRICHMENT_SOURCE_MODE=career
+#   scoutx-enrichment-hc  JOB_ENRICHMENT_SOURCE_MODE=hiring_cafe
+# Career free-path misses become status=deferred (needsPaidPath) — not reclaimed.
 # Never launches Chromium on the droplet (CHROMIUM_MAX_SLOTS is for scraper/aggregators).
-# Hiring Cafe: aggregator = list HTML only (Chromium short). Detail = Scrape.do in enrichment.
+# Hiring Cafe: HTTP → proxy → Scrape.do in the HC worker only.
 # Per-aggregator token: Automations → Configure → Third-party scraper (Scrape.do).
 # Optional droplet-wide fallback when enabled on robot but token field left blank:
 # HIRING_CAFE_SCRAPE_DO_ENABLED=false
-# HIRING_CAFE_SCRAPE_DO_MAX_TIER=2   # 1=HTML test, 2=JS render, 3=super
-# SCRAPE_DO_TOKEN=your_scrape_do_token  # Career sites + HC enrichment when blank on robot
-# SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause enrichment when daily credits hit this
+# HIRING_CAFE_SCRAPE_DO_MAX_TIER=2   # 1=HTML test, 2=JS render (HC never uses tier 3)
+# SCRAPE_DO_TOKEN=your_scrape_do_token  # HC enrichment (+ optional future deferred career)
+# SCRAPE_DO_DAILY_CREDIT_BUDGET=15000   # Pause HC scrape.do when daily credits hit this
 # SCRAPE_DO_GEO=northamerica           # Used only on tier-3 (super+render) requests
 # SCRAPE_PROFILE_REPROBE_DAYS=30       # Re-try cheaper tiers after this many days
+# JOB_ENRICHMENT_SOURCE_MODE=all       # career | hiring_cafe | all (PM2 sets per process)
 # JOB_ENRICHMENT_CONCURRENCY=4         # In-flight enrichments per process
 # JOB_ENRICHMENT_BATCH=8               # Docs claimed per pass
 # JOB_ENRICHMENT_RATE_PER_MIN=12       # Token-bucket pace (~4k/day average is ~2.8/min)

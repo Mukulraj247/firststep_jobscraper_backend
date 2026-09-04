@@ -1,6 +1,14 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export type JobBoardStatus = 'queued' | 'enriching' | 'ready' | 'partial' | 'failed' | 'expired';
+export type JobBoardStatus =
+  | 'queued'
+  | 'enriching'
+  | 'ready'
+  | 'partial'
+  | 'failed'
+  | 'expired'
+  /** Career free-path miss — parked for a future paid enricher; not claimed by active workers. */
+  | 'deferred';
 
 export type EnrichmentMethod = 'list' | 'ats' | 'scrape.do' | 'browser' | 'llm' | 'none';
 
@@ -45,6 +53,8 @@ export interface IJobBoardEnrichment {
   lastError?: string;
   lastEnrichedAt?: Date | null;
   nextAttemptAt?: Date | null;
+  /** True when parked in deferred awaiting scrape.do / paid path later. */
+  needsPaidPath?: boolean;
   llmModel?: string;
   llmInputHash?: string;
   llmTokens?: number;
@@ -159,6 +169,7 @@ const EnrichmentSchema = new Schema(
     lastError: { type: String, default: '' },
     lastEnrichedAt: { type: Date, default: null },
     nextAttemptAt: { type: Date, default: null },
+    needsPaidPath: { type: Boolean, default: false },
     llmModel: { type: String, default: '' },
     llmInputHash: { type: String, default: '' },
     llmTokens: { type: Number, default: 0 },
@@ -206,7 +217,7 @@ const JobBoardListingSchema: Schema = new Schema(
     aggregatorPostingUrl: { type: String, default: '' },
     status: {
       type: String,
-      enum: ['queued', 'enriching', 'ready', 'partial', 'failed', 'expired'],
+      enum: ['queued', 'enriching', 'ready', 'partial', 'failed', 'expired', 'deferred'],
       default: 'queued',
       index: true,
     },

@@ -39,7 +39,7 @@ function sourceClassExpr() {
 }
 
 function emptyClass() {
-  return { queued: 0, enriching: 0, ready6h: 0 };
+  return { queued: 0, enriching: 0, deferred: 0, ready6h: 0 };
 }
 
 router.get('/enrichment/metrics', async (req: any, res: any) => {
@@ -58,6 +58,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
     const [
       queued,
       enriching,
+      deferred,
       dueNow,
       futureBackoff,
       leaseStuck,
@@ -74,6 +75,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
     ] = await Promise.all([
       JobBoardListing.countDocuments({ ...ownerFilter, status: 'queued' }),
       JobBoardListing.countDocuments({ ...ownerFilter, status: 'enriching' }),
+      JobBoardListing.countDocuments({ ...ownerFilter, status: 'deferred' }),
       JobBoardListing.countDocuments({
         ...ownerFilter,
         status: 'queued',
@@ -133,7 +135,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
           $match: {
             ...ownerFilter,
             createdAt: { $gte: h6 },
-            status: { $in: ['ready', 'partial', 'failed', 'queued'] },
+            status: { $in: ['ready', 'partial', 'failed', 'queued', 'deferred'] },
           },
         },
         {
@@ -148,7 +150,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
         {
           $match: {
             ...ownerFilter,
-            status: { $in: ['queued', 'failed', 'partial'] },
+            status: { $in: ['queued', 'failed', 'partial', 'deferred'] },
             'enrichment.lastError': { $nin: [null, ''] },
           },
         },
@@ -198,6 +200,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
       const n = Number(row.n) || 0;
       if (status === 'queued') bucket.queued += n;
       if (status === 'enriching') bucket.enriching += n;
+      if (status === 'deferred') bucket.deferred += n;
     }
     for (const row of ready6hByClass as any[]) {
       const cls = String(row?._id || 'career') as keyof typeof bySourceClass;
@@ -220,6 +223,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
         queued,
         dueNow,
         enriching,
+        deferred,
         futureBackoff,
         leaseStuck,
       },
@@ -249,6 +253,7 @@ router.get('/enrichment/metrics', async (req: any, res: any) => {
         ready: lastPass.ready,
         ats_hit: lastPass.ats_hit,
         failed: lastPass.failed,
+        deferred: lastPass.deferred || 0,
         credits_spent: lastPass.credits_spent,
         budget_paused: lastPass.budget_paused,
       },

@@ -5,7 +5,8 @@
  *   scout-x               — API only (no Chromium). RUN_EMBEDDED_WORKERS=false
  *   scoutx-scheduler      — Agenda schedules + catch-up + ops digest (no Chromium)
  *   scoutx-scraper        — Agenda career scrapes + Chromium (SCHEDULER_ENABLED=false)
- *   scoutx-enrichment     — scrape.do / ATS enrichment (no Chromium)
+ *   scoutx-enrichment     — career / non-HC free-path enrichment (no Chromium)
+ *   scoutx-enrichment-hc  — Hiring Cafe enrichment only (Scrape.do allowed)
  *   scoutx-aggregators    — Hiring Cafe aggregator-jobs + Chromium (SCHEDULER_ENABLED=false)
  *   scoutx-job-tagger     — Python FastAPI frozen-category classifier (localhost:8000)
  *
@@ -27,7 +28,8 @@
  *   pm2 start ecosystem.config.cjs
  *   pm2 save
  *
- * Keep exactly one scoutx-enrichment instance — rate limits and credit budget are per-process.
+ * Keep exactly one scoutx-enrichment and one scoutx-enrichment-hc —
+ * rate limits and credit budget are per-process; split keeps HC off the career queue.
  * Scale scrape throughput later by adding another droplet (or instance) running scoutx-scraper only.
  */
 const path = require('path');
@@ -111,14 +113,37 @@ module.exports = {
         NODE_ENV: 'production',
         UV_THREADPOOL_SIZE: '8',
         JOB_TAGGER_URL: 'http://127.0.0.1:8000',
-        // Enrichment is ATS + HTTP only — never Chromium (fights scraper slots on 2–3GB).
+        // Career + non-HC only — free ATS/HTML. Misses park as status=deferred.
+        JOB_ENRICHMENT_SOURCE_MODE: 'career',
         HIRING_CAFE_ENRICH_BROWSER_ENABLED: 'false',
         LOW_MEMORY_MODE: 'true',
-        // Scrape.do credits: Hiring Cafe only. Career/employer board enrichment stays ATS/list.
-        HIRING_CAFE_SCRAPE_DO_ENABLED: 'true',
+        HIRING_CAFE_SCRAPE_DO_ENABLED: 'false',
         JOB_ENRICHMENT_SCRAPE_DO_ENABLED: 'false',
         JOB_ENRICHMENT_BATCH: '24',
         JOB_ENRICHMENT_CONCURRENCY: '10',
+      },
+    },
+    {
+      name: 'scoutx-enrichment-hc',
+      script: 'node',
+      args: '--expose-gc --max-old-space-size=256 server/dist/server/src/enrichmentWorker.js',
+      cwd: __dirname,
+      instances: 1,
+      autorestart: true,
+      kill_timeout: 30000,
+      max_memory_restart: '250M',
+      env: {
+        NODE_ENV: 'production',
+        UV_THREADPOOL_SIZE: '8',
+        JOB_TAGGER_URL: 'http://127.0.0.1:8000',
+        // Hiring Cafe only — isolated from career queue thrash.
+        JOB_ENRICHMENT_SOURCE_MODE: 'hiring_cafe',
+        HIRING_CAFE_ENRICH_BROWSER_ENABLED: 'false',
+        LOW_MEMORY_MODE: 'true',
+        HIRING_CAFE_SCRAPE_DO_ENABLED: 'true',
+        JOB_ENRICHMENT_SCRAPE_DO_ENABLED: 'false',
+        JOB_ENRICHMENT_BATCH: '8',
+        JOB_ENRICHMENT_CONCURRENCY: '4',
       },
     },
     {

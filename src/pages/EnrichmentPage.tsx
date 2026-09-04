@@ -72,11 +72,16 @@ export function EnrichmentPage() {
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }} useFlexGap flexWrap="wrap">
         <Kpi label="Queued" value={data?.queue.queued ?? '—'} hint={`Due now: ${data?.queue.dueNow ?? '—'}`} />
         <Kpi label="Enriching" value={data?.queue.enriching ?? '—'} hint={`Stuck leases: ${data?.queue.leaseStuck ?? 0}`} />
+        <Kpi
+          label="Deferred"
+          value={data?.queue.deferred ?? '—'}
+          hint="Career free-path miss — parked for paid path later"
+        />
         <Kpi label="Ready 6h" value={data?.windows.ready6h ?? '—'} hint={`Ready 1h: ${data?.windows.ready1h ?? '—'}`} />
         <Kpi
           label="Scrape.do credits"
           value={creditLabel}
-          hint={credits?.pausedForScrapeDo ? 'HC scrape.do paused — career free paths keep running' : 'HC only'}
+          hint={credits?.pausedForScrapeDo ? 'HC scrape.do paused — career free paths keep running' : 'HC worker only'}
         />
       </Stack>
 
@@ -91,6 +96,7 @@ export function EnrichmentPage() {
                 <TableCell>Class</TableCell>
                 <TableCell align="right">Queued</TableCell>
                 <TableCell align="right">Enriching</TableCell>
+                <TableCell align="right">Deferred</TableCell>
                 <TableCell align="right">Ready 6h</TableCell>
               </TableRow>
             </TableHead>
@@ -102,6 +108,7 @@ export function EnrichmentPage() {
                     <TableCell>{key === 'hiring_cafe' ? 'Hiring Cafe' : key}</TableCell>
                     <TableCell align="right">{row?.queued ?? '—'}</TableCell>
                     <TableCell align="right">{row?.enriching ?? '—'}</TableCell>
+                    <TableCell align="right">{row?.deferred ?? '—'}</TableCell>
                     <TableCell align="right">{row?.ready6h ?? '—'}</TableCell>
                   </TableRow>
                 );

@@ -69,6 +69,31 @@ export const SCRAPE_DO_DAILY_CREDIT_BUDGET = parseInt(
   process.env.SCRAPE_DO_DAILY_CREDIT_BUDGET || '15000',
   10
 );
+/**
+ * Which board sources this process claims:
+ * - career — everything except hiring_cafe (default for scoutx-enrichment)
+ * - hiring_cafe — only HC (scoutx-enrichment-hc)
+ * - all — both (dev / single-process)
+ */
+export type JobEnrichmentSourceMode = 'career' | 'hiring_cafe' | 'all';
+export function resolveJobEnrichmentSourceMode(
+  raw: string | undefined = process.env.JOB_ENRICHMENT_SOURCE_MODE
+): JobEnrichmentSourceMode {
+  const v = String(raw || 'all').trim().toLowerCase();
+  if (v === 'career' || v === 'hiring_cafe' || v === 'all') return v;
+  return 'all';
+}
+export const JOB_ENRICHMENT_SOURCE_MODE = resolveJobEnrichmentSourceMode();
+
+const OTHER_AGGREGATOR_SOURCES = [
+  'accel',
+  'sequoia',
+  'capitalg',
+  'choppingblock',
+  'aidevboard',
+  'startups_gallery',
+] as const;
+
 /** Long enough for serialized browser enrichments (e.g. IBM WAF) within a batch. */
 const LEASE_MS = 15 * 60 * 1000;
 
@@ -85,6 +110,7 @@ export interface EnrichmentPassMetrics {
   ready: number;
   partial: number;
   failed: number;
+  deferred: number;
   expired: number;
   rate_limited: number;
   budget_paused: boolean;
@@ -103,6 +129,7 @@ const emptyMetrics = (): EnrichmentPassMetrics => ({
   ready: 0,
   partial: 0,
   failed: 0,
+  deferred: 0,
   expired: 0,
   rate_limited: 0,
   budget_paused: false,
@@ -322,46 +349,55 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
   const claimed: IJobBoardListing[] = [];
   const now = new Date();
   const leaseUntil = new Date(Date.now() + LEASE_MS);
+  const mode = JOB_ENRICHMENT_SOURCE_MODE;
 
-  // When Scrape.do budget is exhausted, HC enrichments mostly fail (CF + no credits).
-  // Prefer career/free-path rows so Capital One / TalentBrew / ATS queues can drain.
-  const spent = await getCreditsSpentToday();
-  const scrapeDoPaused = spent >= SCRAPE_DO_DAILY_CREDIT_BUDGET;
+  // Dedicated HC worker never mixes with career; career worker never claims HC.
+  let claimFilters: Array<Record<string, unknown>>;
+  let sort: Record<string, 1 | -1>;
 
-  const careerFirst: Array<Record<string, unknown>> = [
-    { $or: [{ source: '' }, { source: { $exists: false } }, { source: null }] },
-    {
-      source: {
-        $in: ['accel', 'sequoia', 'capitalg', 'choppingblock', 'aidevboard', 'startups_gallery'],
-      },
-    },
-    { source: 'hiring_cafe' },
-  ];
-
-  const hcFirst: Array<Record<string, unknown>> = [
-    { source: 'hiring_cafe' },
-    {
-      source: {
-        $in: ['accel', 'sequoia', 'capitalg', 'choppingblock', 'aidevboard', 'startups_gallery'],
-      },
-    },
-    {}, // anything else queued (career)
-  ];
-
-  const claimFilters = scrapeDoPaused ? careerFirst : hcFirst;
+  if (mode === 'hiring_cafe') {
+    claimFilters = [{ source: 'hiring_cafe' }];
+    sort = { priority: -1, createdAt: 1 };
+  } else if (mode === 'career') {
+    claimFilters = [
+      { $or: [{ source: '' }, { source: { $exists: false } }, { source: null }] },
+      { source: { $in: [...OTHER_AGGREGATOR_SOURCES] } },
+    ];
+    sort = { createdAt: 1 };
+  } else {
+    // all — budget-aware ordering (legacy single-process)
+    const spent = await getCreditsSpentToday();
+    const scrapeDoPaused = spent >= SCRAPE_DO_DAILY_CREDIT_BUDGET;
+    const careerFirst: Array<Record<string, unknown>> = [
+      { $or: [{ source: '' }, { source: { $exists: false } }, { source: null }] },
+      { source: { $in: [...OTHER_AGGREGATOR_SOURCES] } },
+      { source: 'hiring_cafe' },
+    ];
+    const hcFirst: Array<Record<string, unknown>> = [
+      { source: 'hiring_cafe' },
+      { source: { $in: [...OTHER_AGGREGATOR_SOURCES] } },
+      {},
+    ];
+    claimFilters = scrapeDoPaused ? careerFirst : hcFirst;
+    sort = scrapeDoPaused ? { createdAt: 1 } : { priority: -1, createdAt: 1 };
+  }
 
   for (const extra of claimFilters) {
     while (claimed.length < limit) {
+      const attemptDue = {
+        $or: [
+          { 'enrichment.nextAttemptAt': null },
+          { 'enrichment.nextAttemptAt': { $lte: now } },
+          { 'enrichment.nextAttemptAt': { $exists: false } },
+        ],
+      };
+      // Avoid clobbering source $or from filters — nest under $and.
+      const filter: Record<string, unknown> = {
+        status: 'queued',
+        $and: [extra, attemptDue],
+      };
       const doc = await JobBoardListing.findOneAndUpdate(
-        {
-          status: 'queued',
-          ...extra,
-          $or: [
-            { 'enrichment.nextAttemptAt': null },
-            { 'enrichment.nextAttemptAt': { $lte: now } },
-            { 'enrichment.nextAttemptAt': { $exists: false } },
-          ],
-        },
+        filter,
         {
           $set: {
             status: 'enriching',
@@ -370,9 +406,7 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
           },
         },
         {
-          // Career is priority 0; HC is 10. When draining career-first, sort by createdAt only
-          // within the career filter. When HC-first, keep priority so HC still wins inside {}.
-          sort: scrapeDoPaused ? { createdAt: 1 } : { priority: -1, createdAt: 1 },
+          sort,
           returnDocument: 'after',
         }
       );
@@ -382,22 +416,30 @@ async function claimBatch(limit: number): Promise<IJobBoardListing[]> {
     if (claimed.length >= limit) break;
   }
 
-  // Safety net: board-visible jobs that never got Specialty tags (readyFromList
-  // before tagger wiring, or tagger was down). Tag-only — no scrape.do spend.
-  // Once categoryClassification.classifiedAt exists we do not reclaim (even if
-  // the tagger returned zero matching specialties).
+  // Tag-only reclaim for ready/partial missing Specialty tags (no scrape.do).
+  // HC-only worker skips non-HC retags; career worker skips HC retags.
   while (claimed.length < limit) {
+    const attemptDue = {
+      $or: [
+        { 'enrichment.nextAttemptAt': null },
+        { 'enrichment.nextAttemptAt': { $lte: now } },
+        { 'enrichment.nextAttemptAt': { $exists: false } },
+      ],
+    };
+    const retagSourceFilter =
+      mode === 'hiring_cafe'
+        ? { source: 'hiring_cafe' }
+        : mode === 'career'
+          ? { source: { $ne: 'hiring_cafe' } }
+          : {};
     const doc = await JobBoardListing.findOneAndUpdate(
       {
         status: { $in: ['ready', 'partial'] },
         'categoryClassification.classifiedAt': { $exists: false },
         jobTitle: { $exists: true, $nin: [null, ''] },
         jobDescription: { $exists: true, $nin: [null, ''] },
-        $or: [
-          { 'enrichment.nextAttemptAt': null },
-          { 'enrichment.nextAttemptAt': { $lte: now } },
-          { 'enrichment.nextAttemptAt': { $exists: false } },
-        ],
+        ...retagSourceFilter,
+        ...attemptDue,
       },
       {
         $set: {
@@ -460,7 +502,7 @@ async function persistResult(
   doc: IJobBoardListing,
   fields: ParsedJobFields,
   opts: {
-    status: 'ready' | 'partial' | 'failed' | 'expired' | 'queued';
+    status: 'ready' | 'partial' | 'failed' | 'expired' | 'queued' | 'deferred';
     method: 'ats' | 'scrape.do' | 'browser' | 'llm' | 'list' | 'none';
     tier: number;
     creditsSpent: number;
@@ -473,6 +515,7 @@ async function persistResult(
     llmModel?: string;
     llmInputHash?: string;
     llmTokens?: number;
+    needsPaidPath?: boolean;
   }
 ): Promise<void> {
   const list = doc.listSnapshot || {};
@@ -559,6 +602,12 @@ async function persistResult(
     lastEnrichedAt:
       opts.status === 'ready' || opts.status === 'partial' ? new Date() : doc.enrichment?.lastEnrichedAt || null,
     nextAttemptAt: opts.nextAttemptAt ?? null,
+    needsPaidPath:
+      typeof opts.needsPaidPath === 'boolean'
+        ? opts.needsPaidPath
+        : opts.status === 'deferred'
+          ? true
+          : Boolean((doc.enrichment as any)?.needsPaidPath),
     llmModel: opts.llmModel || doc.enrichment?.llmModel || '',
     llmInputHash: opts.llmInputHash || doc.enrichment?.llmInputHash || '',
     llmTokens: opts.llmTokens ?? doc.enrichment?.llmTokens ?? 0,
@@ -1319,22 +1368,22 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
     return;
   }
 
-  // Career never uses scrape.do — resolve list/fail before any credit gate.
+  // Career never uses scrape.do — park free-path misses as deferred (not claimed again).
   if (!process.env.SCRAPE_DO_TOKEN || !isCareerBoardScrapeDoEnabled()) {
     const status = boardListingStatus(listFields, doc.jobUrl);
     const freePathMiss = status !== 'ready';
     await persistResult(doc, listFields, {
-      status: freePathMiss ? 'failed' : 'ready',
+      status: freePathMiss ? 'deferred' : 'ready',
       method: freePathMiss ? 'none' : 'list',
       tier: 0,
       creditsSpent: 0,
-      // Distinct from scrape.do — free ATS/HTML already missed; do not auto-requeue in a tight loop.
       error: freePathMiss ? 'career_free_path_miss' : undefined,
-      nextAttemptAt: freePathMiss ? new Date(Date.now() + 12 * 60 * 60 * 1000) : null,
+      nextAttemptAt: null,
+      needsPaidPath: freePathMiss,
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;
-    else metrics.failed += 1;
+    else metrics.deferred += 1;
     return;
   }
 
@@ -1399,15 +1448,17 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
   if (shouldSkipScrapeDoUrl(scrapeTargetUrl)) {
     const status = boardListingStatus(listFields, doc.jobUrl);
     await persistResult(doc, listFields, {
-      status: status === 'ready' ? 'ready' : 'failed',
+      status: status === 'ready' ? 'ready' : 'deferred',
       method: status === 'ready' ? 'list' : 'none',
       tier: 0,
       creditsSpent: 0,
-      error: 'career_host_skip_scrape_do',
+      error: status === 'ready' ? undefined : 'career_host_skip_scrape_do',
+      nextAttemptAt: null,
+      needsPaidPath: status !== 'ready',
       incrementAttempts: true,
     });
     if (status === 'ready') metrics.ready += 1;
-    else metrics.failed += 1;
+    else metrics.deferred += 1;
     circuitBreaker.recordSuccess();
     return;
   }
@@ -1698,7 +1749,10 @@ export async function startJobEnrichmentLoop(): Promise<void> {
   if (loopRunning) return;
   loopRunning = true;
   stopRequested = false;
-  logger.log('info', `job-enrichment loop started workerId=${WORKER_ID}`);
+  logger.log(
+    'info',
+    `job-enrichment loop started workerId=${WORKER_ID} sourceMode=${JOB_ENRICHMENT_SOURCE_MODE}`
+  );
 
   let idleSleepMs = 3000;
 
@@ -1715,7 +1769,7 @@ export async function startJobEnrichmentLoop(): Promise<void> {
         idleSleepMs = 3000;
         logger.log(
           'info',
-          `job-enrichment pass claimed=${metrics.claimed} ready=${metrics.ready} ats=${metrics.ats_hit} t1=${metrics.tier1} t2=${metrics.tier2} t3=${metrics.tier3} credits=${metrics.credits_spent} failed=${metrics.failed}`
+          `job-enrichment pass mode=${JOB_ENRICHMENT_SOURCE_MODE} claimed=${metrics.claimed} ready=${metrics.ready} ats=${metrics.ats_hit} deferred=${metrics.deferred} t1=${metrics.tier1} t2=${metrics.tier2} t3=${metrics.tier3} credits=${metrics.credits_spent} failed=${metrics.failed}`
         );
         // Brief pause between non-empty passes
         await new Promise((r) => setTimeout(r, 500));

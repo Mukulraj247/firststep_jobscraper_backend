@@ -25,13 +25,14 @@ async function main() {
   if (!process.env.SCRAPE_DO_TOKEN) {
     logger.log(
       'warn',
-      'SCRAPE_DO_TOKEN is not set — enrichment will mark scrape.do rows as failed until configured'
+      'SCRAPE_DO_TOKEN is not set — HC scrape.do / career paid path will stay off until configured'
     );
   }
 
+  const mode = String(process.env.JOB_ENRICHMENT_SOURCE_MODE || 'all').trim().toLowerCase();
   // Fire-and-forget loop; process stays alive until signal.
   void startJobEnrichmentLoop();
-  logger.log('info', 'Job enrichment worker runtime started');
+  logger.log('info', `Job enrichment worker runtime started sourceMode=${mode || 'all'}`);
 }
 
 async function shutdown(signal: string) {
