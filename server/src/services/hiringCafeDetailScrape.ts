@@ -213,7 +213,7 @@ export async function enrichHiringCafeListRows(
     onLog?: (message: string) => Promise<void> | void;
     /**
      * When true, skip HTTP and use Playwright only.
-     * Default false: try cheap HTTP (direct→proxy) first, then browser on this page.
+     * Default false: try cheap HTTP first, then browser on this page.
      * Aggregator already holds a Chromium slot — that is the right place for Turnstile.
      */
     browserOnly?: boolean;
