@@ -28,7 +28,9 @@ async function main() {
   }
 
   // Compact is Atlas-only / may need admin; try collStats
-  const stats = await mongoose.connection.db.command({ collStats: 'h1b_gov_employers' });
+  const db = mongoose.connection.db;
+  if (!db) throw new Error('MongoDB connection.db unavailable after connect');
+  const stats = await db.command({ collStats: 'h1b_gov_employers' });
   console.log(
     `[prune] h1b_gov_employers count=${stats.count} sizeMB=${(stats.size / 1e6).toFixed(1)} storageMB=${(stats.storageSize / 1e6).toFixed(1)}`
   );
