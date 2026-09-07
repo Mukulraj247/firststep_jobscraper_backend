@@ -191,6 +191,7 @@ describe('skip link and main landmark', () => {
       '/runs',
       '/failures',
       '/enrichment',
+      '/h1b',
       '/communication',
       '/aggregators',
       '/proxy',

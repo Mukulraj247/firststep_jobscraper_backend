@@ -75,6 +75,8 @@ export const listJobs = async (params?: {
   added?: string;
   runId?: string;
   source?: string;
+  h1bSponsorFriendly?: boolean;
+  h1bFy2026Match?: boolean;
 }): Promise<JobBoardListResponse> => {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 20;
@@ -93,6 +95,8 @@ export const listJobs = async (params?: {
       ...(params?.added && params.added !== 'all' ? { added: params.added } : {}),
       ...(params?.runId ? { runId: params.runId } : {}),
       ...(params?.source ? { source: params.source } : {}),
+      ...(params?.h1bSponsorFriendly ? { h1bSponsorFriendly: 'true' } : {}),
+      ...(params?.h1bFy2026Match ? { h1bFy2026Match: 'true' } : {}),
     },
     withCredentials: true,
   });

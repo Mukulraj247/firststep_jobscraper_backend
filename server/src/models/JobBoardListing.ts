@@ -101,6 +101,24 @@ export interface IJobBoardListing extends Document {
   roleType: string;
   educationRequirement: string;
   visaSponsorship: string;
+  /** US-looking job eligible for H-1B DOL lookup. */
+  h1bEligible: boolean;
+  h1bCompanyScore: 'high' | 'medium' | 'low' | 'unknown';
+  h1bRoleScore: 'high' | 'medium' | 'low' | 'unknown';
+  h1bCompanyConfidence: number;
+  h1bRoleConfidence: number;
+  h1bFilingCount: number;
+  h1bLastFilingYear: number;
+  h1bMatchedGovEmployer: string;
+  h1bCapExempt: boolean;
+  h1bDataAsOf: Date | null;
+  h1bMappingStatus: 'auto' | 'approved' | 'rejected' | 'none';
+  /** FY2026-only: board title matches employer certified filed title (≥0.70 Jaccard). */
+  h1bFy2026Match: boolean;
+  h1bFy2026TitleConfidence: number;
+  h1bFy2026MatchedTitle: string;
+  h1bFy2026CertifiedCount: number;
+  h1bFy2026DataAsOf: Date | null;
   companyEmployeeCount: number;
   companyFoundedYear: number;
   companyWebsite: string;
@@ -211,6 +229,35 @@ const JobBoardListingSchema: Schema = new Schema(
     roleType: { type: String, default: '' },
     educationRequirement: { type: String, default: '' },
     visaSponsorship: { type: String, default: '' },
+    h1bEligible: { type: Boolean, default: false, index: true },
+    h1bCompanyScore: {
+      type: String,
+      enum: ['high', 'medium', 'low', 'unknown'],
+      default: 'unknown',
+      index: true,
+    },
+    h1bRoleScore: {
+      type: String,
+      enum: ['high', 'medium', 'low', 'unknown'],
+      default: 'unknown',
+    },
+    h1bCompanyConfidence: { type: Number, default: 0 },
+    h1bRoleConfidence: { type: Number, default: 0 },
+    h1bFilingCount: { type: Number, default: 0 },
+    h1bLastFilingYear: { type: Number, default: 0 },
+    h1bMatchedGovEmployer: { type: String, default: '' },
+    h1bCapExempt: { type: Boolean, default: false },
+    h1bDataAsOf: { type: Date, default: null },
+    h1bMappingStatus: {
+      type: String,
+      enum: ['auto', 'approved', 'rejected', 'none'],
+      default: 'none',
+    },
+    h1bFy2026Match: { type: Boolean, default: false, index: true },
+    h1bFy2026TitleConfidence: { type: Number, default: 0 },
+    h1bFy2026MatchedTitle: { type: String, default: '' },
+    h1bFy2026CertifiedCount: { type: Number, default: 0 },
+    h1bFy2026DataAsOf: { type: Date, default: null },
     companyEmployeeCount: { type: Number, default: 0 },
     companyFoundedYear: { type: Number, default: 0 },
     companyWebsite: { type: String, default: '' },
@@ -264,6 +311,14 @@ JobBoardListingSchema.index(
   { name: 'job_board_owner_status_frozen_category_idx' }
 );
 JobBoardListingSchema.index({ ownerId: 1, source: 1, date: -1 }, { name: 'job_board_owner_source_date_idx' });
+JobBoardListingSchema.index(
+  { ownerId: 1, status: 1, h1bEligible: 1, h1bCompanyScore: 1 },
+  { name: 'job_board_owner_status_h1b_idx' }
+);
+JobBoardListingSchema.index(
+  { ownerId: 1, status: 1, h1bFy2026Match: 1 },
+  { name: 'job_board_owner_status_h1b_fy2026_idx' }
+);
 JobBoardListingSchema.index(
   { status: 1, priority: -1, createdAt: 1 },
   { name: 'job_board_claim_scan_idx' }

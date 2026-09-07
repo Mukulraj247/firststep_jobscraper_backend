@@ -25,4 +25,7 @@ chrome-extension/dist.zip
 
 /server/logs
 
+# DOL LCA Excel downloads (local only; never commit)
+/data/lca
+
 /build

@@ -10,12 +10,14 @@ import {
 } from './communicationPageBehavior';
 
 describe('sidebar Communication tab', () => {
-  it('sits after Failure Dashboard; Aggregators sits before Proxy', () => {
-    const failures = SIDEBAR_NAV_VALUES.indexOf('failures');
+  it('sits after H-1B; Aggregators sits before Proxy', () => {
+    const enrichment = SIDEBAR_NAV_VALUES.indexOf('enrichment');
+    const h1b = SIDEBAR_NAV_VALUES.indexOf('h1b');
     const communication = SIDEBAR_NAV_VALUES.indexOf('communication');
     const aggregators = SIDEBAR_NAV_VALUES.indexOf('aggregators');
     const proxy = SIDEBAR_NAV_VALUES.indexOf('proxy');
-    expect(communication).toBe(failures + 1);
+    expect(h1b).toBe(enrichment + 1);
+    expect(communication).toBe(h1b + 1);
     expect(aggregators).toBe(communication + 1);
     expect(proxy).toBe(aggregators + 1);
   });

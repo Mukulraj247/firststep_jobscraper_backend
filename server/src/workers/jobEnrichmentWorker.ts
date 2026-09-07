@@ -47,6 +47,8 @@ import {
   LLM_DAILY_TOKEN_BUDGET,
 } from '../services/geminiJobExtractor';
 import { classifyJobCategories } from '../services/jobCategoryTagger';
+import { resolveH1bSponsorship } from '../services/h1b/resolveH1bSponsorship';
+import { resolveFy2026JobMatch } from '../services/h1b/matchFy2026Role';
 import {
   isCareerBoardScrapeDoEnabled,
   resolveHiringCafeScrapeDoForListing,
@@ -682,6 +684,39 @@ async function persistResult(
       logger.log(
         'warn',
         `[jobEnrichment] category tagger failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
+      );
+    }
+
+    // Preserve HC / list visa flag; rewrite with h1b_* together so JD overrides stay fresh.
+    const visaSponsorship = String(
+      (fields as any).visaSponsorship ||
+        (doc as any).visaSponsorship ||
+        (list as any).visaSponsorship ||
+        ''
+    )
+      .trim()
+      .toLowerCase();
+    if (visaSponsorship === 'yes' || visaSponsorship === 'no') {
+      $set.visaSponsorship = visaSponsorship;
+    }
+
+    try {
+      const h1bInput = {
+        companyName: mergedCompany,
+        jobTitle: mergedTitle,
+        location: mergedLocation,
+        remoteType: mergedRemote,
+        visaSponsorship: $set.visaSponsorship || (doc as any).visaSponsorship || '',
+        jobDescription: mergedDesc,
+      };
+      const h1b = await resolveH1bSponsorship(h1bInput);
+      Object.assign($set, h1b);
+      const fy2026 = await resolveFy2026JobMatch(h1bInput);
+      Object.assign($set, fy2026);
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `[jobEnrichment] H-1B resolve failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
       );
     }
   }

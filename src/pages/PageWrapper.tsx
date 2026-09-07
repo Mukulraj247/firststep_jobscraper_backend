@@ -207,6 +207,7 @@ export const PageWrapper = () => {
                   <Route path="/runs/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="runs" />} />
                   <Route path="/failures" element={<MainPage handleEditRecording={handleEditRecording} initialContent="failures" />} />
                   <Route path="/enrichment" element={<MainPage handleEditRecording={handleEditRecording} initialContent="enrichment" />} />
+                  <Route path="/h1b" element={<MainPage handleEditRecording={handleEditRecording} initialContent="h1b" />} />
                   <Route path="/communication" element={<MainPage handleEditRecording={handleEditRecording} initialContent="communication" />} />
                   <Route path="/aggregators" element={<MainPage handleEditRecording={handleEditRecording} initialContent="aggregators" />} />
                   <Route path="/proxy" element={<MainPage handleEditRecording={handleEditRecording} initialContent="proxy" />} />

@@ -76,7 +76,78 @@ export type JobBoardFilterState = {
   workMode: string;
   jobType: string;
   source?: string;
+  h1bSponsorFriendly?: boolean;
+  h1bFy2026Match?: boolean;
 };
+
+/**
+ * Badge copy for DOL-backed H-1B signals (separate from JD visaSponsorship chip).
+ */
+export function h1bSponsorBadgeLabel(data: {
+  h1bEligible?: boolean;
+  h1bCompanyScore?: string;
+  h1bRoleScore?: string;
+  h1bMappingStatus?: string;
+}): string | null {
+  if (!data.h1bEligible) return null;
+  const status = String(data.h1bMappingStatus || 'none');
+  if (status === 'rejected' || status === 'none') return null;
+  const company = String(data.h1bCompanyScore || 'unknown');
+  const role = String(data.h1bRoleScore || 'unknown');
+  if (company === 'high' && role === 'high') return 'H-1B sponsor (role match)';
+  if (company === 'high') return 'H-1B sponsor (company)';
+  if (company === 'medium') return 'Possible H-1B sponsor';
+  return null;
+}
+
+export function h1bSponsorTooltip(data: {
+  h1bFilingCount?: number;
+  h1bDataAsOf?: string | Date | null;
+  h1bMatchedGovEmployer?: string;
+}): string {
+  const n = typeof data.h1bFilingCount === 'number' ? data.h1bFilingCount : 0;
+  const asOf = data.h1bDataAsOf
+    ? new Date(data.h1bDataAsOf).toISOString().slice(0, 10)
+    : null;
+  const gov = String(data.h1bMatchedGovEmployer || '').trim();
+  const parts = [
+    n > 0 ? `Based on ${n.toLocaleString()} DOL filings` : 'Based on DOL LCA data',
+    asOf ? `data as of ${asOf}` : null,
+    gov ? `matched ${gov}` : null,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+/** FY2026 job-level filing match chip (strict title overlap vs FY2026 certified titles). */
+export function fy2026FilingMatchBadgeLabel(data: {
+  h1bFy2026Match?: boolean;
+}): string | null {
+  return data.h1bFy2026Match ? 'FY2026 H-1B filing match' : null;
+}
+
+export function fy2026FilingMatchTooltip(data: {
+  h1bFy2026MatchedTitle?: string;
+  h1bFy2026CertifiedCount?: number;
+  h1bFy2026DataAsOf?: string | Date | null;
+  h1bFy2026TitleConfidence?: number;
+}): string {
+  const title = String(data.h1bFy2026MatchedTitle || '').trim();
+  const n = typeof data.h1bFy2026CertifiedCount === 'number' ? data.h1bFy2026CertifiedCount : 0;
+  const asOf = data.h1bFy2026DataAsOf
+    ? new Date(data.h1bFy2026DataAsOf).toISOString().slice(0, 10)
+    : null;
+  const conf =
+    typeof data.h1bFy2026TitleConfidence === 'number' && data.h1bFy2026TitleConfidence > 0
+      ? `${Math.round(data.h1bFy2026TitleConfidence * 100)}% title overlap`
+      : null;
+  const parts = [
+    title ? `Matched DOL title “${title}”` : null,
+    n > 0 ? `${n.toLocaleString()} FY2026 certified filings` : 'FY2026 DOL filings to date',
+    conf,
+    asOf ? `data as of ${asOf}` : null,
+  ].filter(Boolean);
+  return parts.join(' · ') || 'FY2026 DOL filings to date';
+}
 
 /**
  * Normalize a frozen-category selection: trim, drop blanks/duplicates, and sort by
@@ -121,7 +192,9 @@ export function hasActiveJobBoardFilters(value: JobBoardFilterState): boolean {
     || value.location
     || value.workMode
     || value.jobType
-    || value.source,
+    || value.source
+    || value.h1bSponsorFriendly
+    || value.h1bFy2026Match,
   );
 }
 

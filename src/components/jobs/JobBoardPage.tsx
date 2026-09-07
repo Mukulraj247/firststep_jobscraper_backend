@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import {
   alpha,
   Autocomplete,
@@ -15,9 +16,12 @@ import {
   Pagination,
   Stack,
   TextField,
+  Tooltip,
   Typography,
   useMediaQuery,
   useTheme,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material';
 import {
   AccessTimeOutlined,
@@ -66,6 +70,10 @@ import {
   formatJobBoardDate,
   formatJobBoardRelative,
   hasActiveJobBoardFilters,
+  h1bSponsorBadgeLabel,
+  h1bSponsorTooltip,
+  fy2026FilingMatchBadgeLabel,
+  fy2026FilingMatchTooltip,
   jobBoardFacetListboxSx,
   jobBoardFilterChipSx,
   jobBoardPageRootOverflow,
@@ -428,6 +436,10 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
       ? `${educationRequirement.slice(0, 35).trim()}…`
       : educationRequirement;
   const visaSponsorship = asText(data.visaSponsorship).toLowerCase();
+  const h1bBadge = h1bSponsorBadgeLabel(data);
+  const h1bTip = h1bBadge ? h1bSponsorTooltip(data) : '';
+  const fy2026Badge = fy2026FilingMatchBadgeLabel(data);
+  const fy2026Tip = fy2026Badge ? fy2026FilingMatchTooltip(data) : '';
   const certifications = asList(data.certifications);
   const skillChips = [
     ...highlights.skills,
@@ -655,6 +667,20 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         {salary && <SoftChip label={salary} tone="teal" />}
         {educationShort && <SoftChip label={educationShort} />}
         {visaSponsorship === 'yes' && <SoftChip label="Visa sponsorship" tone="accent" />}
+        {h1bBadge ? (
+          <Tooltip title={h1bTip} arrow>
+            <span>
+              <SoftChip label={h1bBadge} tone="teal" />
+            </span>
+          </Tooltip>
+        ) : null}
+        {fy2026Badge ? (
+          <Tooltip title={fy2026Tip} arrow>
+            <span>
+              <SoftChip label={fy2026Badge} tone="accent" />
+            </span>
+          </Tooltip>
+        ) : null}
         {asText(data.enrichmentMethod) === 'llm' && <SoftChip label="AI-parsed" tone="accent" />}
       </Stack>
 
@@ -869,6 +895,12 @@ const JobDetailModal: React.FC<{
   const visaSponsorship = asText(data.visaSponsorship).toLowerCase();
   const visaLabel =
     visaSponsorship === 'yes' ? 'Yes' : visaSponsorship === 'no' ? 'No' : '';
+  const h1bBadge = h1bSponsorBadgeLabel(data);
+  const h1bTip = h1bBadge ? h1bSponsorTooltip(data) : '';
+  const fy2026Badge = fy2026FilingMatchBadgeLabel(data);
+  const fy2026Tip = fy2026Badge ? fy2026FilingMatchTooltip(data) : '';
+  const h1bCompanyScore = asText(data.h1bCompanyScore);
+  const h1bRoleScore = asText(data.h1bRoleScore);
   const certifications = Array.isArray(data.certifications)
     ? data.certifications.map((x) => String(x || '').trim()).filter(Boolean)
     : [];
@@ -945,6 +977,20 @@ const JobDetailModal: React.FC<{
                 {remote && <SoftChip label={remote} tone="accent" />}
                 {seniorityLevel && <SoftChip label={seniorityLevel} />}
                 {visaSponsorship === 'yes' && <SoftChip label="Visa sponsorship" tone="accent" />}
+                {h1bBadge ? (
+                  <Tooltip title={h1bTip} arrow>
+                    <span>
+                      <SoftChip label={h1bBadge} tone="teal" />
+                    </span>
+                  </Tooltip>
+                ) : null}
+                {fy2026Badge ? (
+                  <Tooltip title={fy2026Tip} arrow>
+                    <span>
+                      <SoftChip label={fy2026Badge} tone="accent" />
+                    </span>
+                  </Tooltip>
+                ) : null}
               </Stack>
             </Box>
           </Stack>
@@ -1021,6 +1067,21 @@ const JobDetailModal: React.FC<{
               <FieldCell label="Role type" value={roleType} />
               <FieldCell label="Education" value={educationRequirement} />
               <FieldCell label="Visa sponsorship" value={visaLabel} />
+              <FieldCell label="H-1B company" value={h1bCompanyScore && h1bCompanyScore !== 'unknown' ? h1bCompanyScore : null} />
+              <FieldCell label="H-1B role" value={h1bRoleScore && h1bRoleScore !== 'unknown' ? h1bRoleScore : null} />
+              <FieldCell label="H-1B filings" value={typeof data.h1bFilingCount === 'number' && data.h1bFilingCount > 0 ? String(data.h1bFilingCount) : null} />
+              <FieldCell
+                label="FY2026 matched title"
+                value={fy2026Badge ? asText(data.h1bFy2026MatchedTitle) || 'Yes' : null}
+              />
+              <FieldCell
+                label="FY2026 certified filings"
+                value={
+                  typeof data.h1bFy2026CertifiedCount === 'number' && data.h1bFy2026CertifiedCount > 0
+                    ? String(data.h1bFy2026CertifiedCount)
+                    : null
+                }
+              />
               <FieldCell label="Company size" value={companySizeLabel} />
               <FieldCell label="Founded" value={foundedLabel} />
               <FieldCell label={t('jobboard.industry')} value={industry} />
@@ -1224,6 +1285,8 @@ export const JobBoardPage: React.FC = () => {
   const { t } = useTranslation();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
+  const [searchParams] = useSearchParams();
+  const initialQ = String(searchParams.get('q') || '').trim();
 
   const [jobs, setJobs] = useState<JobBoardJob[]>([]);
   const [filters, setFilters] = useState<JobBoardFilters>({
@@ -1233,8 +1296,8 @@ export const JobBoardPage: React.FC = () => {
   });
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 });
   const [page, setPage] = useState(1);
-  const [q, setQ] = useState('');
-  const [qDraft, setQDraft] = useState('');
+  const [q, setQ] = useState(initialQ);
+  const [qDraft, setQDraft] = useState(initialQ);
   const [added, setAdded] = useState<JobBoardAddedPreset>('all');
   const [category, setCategory] = useState('');
   const [frozenCategories, setFrozenCategories] = useState<string[]>([]);
@@ -1242,6 +1305,8 @@ export const JobBoardPage: React.FC = () => {
   const [workMode, setWorkMode] = useState('');
   const [jobType, setJobType] = useState('');
   const [source, setSource] = useState('');
+  const [h1bSponsorFriendly, setH1bSponsorFriendly] = useState(false);
+  const [h1bFy2026Match, setH1bFy2026Match] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1264,6 +1329,8 @@ export const JobBoardPage: React.FC = () => {
         jobType: jobType || undefined,
         added,
         source: source || undefined,
+        h1bSponsorFriendly: h1bSponsorFriendly || undefined,
+        h1bFy2026Match: h1bFy2026Match || undefined,
       });
       setJobs(res.jobs);
       setPagination(res.pagination);
@@ -1278,7 +1345,7 @@ export const JobBoardPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, q, category, frozenCategories, location, workMode, jobType, added, source, t]);
+  }, [page, q, category, frozenCategories, location, workMode, jobType, added, source, h1bSponsorFriendly, h1bFy2026Match, t]);
 
   useEffect(() => {
     void loadJobs();
@@ -1344,6 +1411,8 @@ export const JobBoardPage: React.FC = () => {
     setWorkMode('');
     setJobType('');
     setSource('');
+    setH1bSponsorFriendly(false);
+    setH1bFy2026Match(false);
     setPage(1);
   };
 
@@ -1356,6 +1425,8 @@ export const JobBoardPage: React.FC = () => {
     workMode,
     jobType,
     source,
+    h1bSponsorFriendly,
+    h1bFy2026Match,
   });
 
   const limit = pagination.limit || PAGE_SIZE;
@@ -1529,6 +1600,46 @@ export const JobBoardPage: React.FC = () => {
                   }}
                 />
               </Box>
+              <FormControlLabel
+                sx={{ alignSelf: 'center', ml: 0.5 }}
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={h1bSponsorFriendly}
+                    onChange={(e) => {
+                      setH1bSponsorFriendly(e.target.checked);
+                      setPage(1);
+                    }}
+                  />
+                }
+                label={
+                  <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>
+                    H-1B sponsor-friendly
+                  </Typography>
+                }
+              />
+              <FormControlLabel
+                sx={{ alignSelf: 'center', ml: 0.5 }}
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={h1bFy2026Match}
+                    onChange={(e) => {
+                      setH1bFy2026Match(e.target.checked);
+                      setPage(1);
+                    }}
+                  />
+                }
+                label={
+                  <Typography
+                    variant="body2"
+                    sx={{ fontWeight: 600, fontSize: '0.8rem' }}
+                    title="Board job title matches a certified FY2026 DOL filed title for this employer (≥70% overlap). FY2026 filings to date."
+                  >
+                    FY2026 H-1B filing match
+                  </Typography>
+                }
+              />
             </Stack>
           </Stack>
         </Stack>

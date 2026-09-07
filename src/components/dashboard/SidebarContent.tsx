@@ -15,6 +15,7 @@ import {
   MailOutline,
   HubOutlined,
   InsightsOutlined,
+  BadgeOutlined,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import { FIRSTSTEP, tint } from './ops/dashboardTokens';
@@ -62,6 +63,10 @@ export const SidebarContent = ({
     enrichment: {
       label: 'Enrichment',
       icon: <InsightsOutlined aria-hidden={sidebarIconAriaHidden} />,
+    },
+    h1b: {
+      label: 'H-1B',
+      icon: <BadgeOutlined aria-hidden={sidebarIconAriaHidden} />,
     },
     communication: {
       label: t('mainmenu.communication', 'Communication'),

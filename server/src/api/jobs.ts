@@ -255,6 +255,25 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
   const frozenCategories = Array.isArray(row.frozenCategories)
     ? row.frozenCategories.map((x: unknown) => String(x || '').trim()).filter(Boolean)
     : [];
+  const h1bEligible = Boolean(row.h1bEligible);
+  const h1bCompanyScore = String(row.h1bCompanyScore || 'unknown');
+  const h1bRoleScore = String(row.h1bRoleScore || 'unknown');
+  const h1bCompanyConfidence =
+    typeof row.h1bCompanyConfidence === 'number' ? row.h1bCompanyConfidence : 0;
+  const h1bRoleConfidence = typeof row.h1bRoleConfidence === 'number' ? row.h1bRoleConfidence : 0;
+  const h1bFilingCount = typeof row.h1bFilingCount === 'number' ? row.h1bFilingCount : 0;
+  const h1bLastFilingYear = typeof row.h1bLastFilingYear === 'number' ? row.h1bLastFilingYear : 0;
+  const h1bMatchedGovEmployer = String(row.h1bMatchedGovEmployer || '').trim();
+  const h1bCapExempt = Boolean(row.h1bCapExempt);
+  const h1bDataAsOf = row.h1bDataAsOf || null;
+  const h1bMappingStatus = String(row.h1bMappingStatus || 'none');
+  const h1bFy2026Match = Boolean(row.h1bFy2026Match);
+  const h1bFy2026TitleConfidence =
+    typeof row.h1bFy2026TitleConfidence === 'number' ? row.h1bFy2026TitleConfidence : 0;
+  const h1bFy2026MatchedTitle = String(row.h1bFy2026MatchedTitle || '').trim();
+  const h1bFy2026CertifiedCount =
+    typeof row.h1bFy2026CertifiedCount === 'number' ? row.h1bFy2026CertifiedCount : 0;
+  const h1bFy2026DataAsOf = row.h1bFy2026DataAsOf || null;
 
   return {
     id: row._id?.toString?.() || String(row.id),
@@ -297,6 +316,30 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
       ...(companyWebsite ? { companyWebsite } : {}),
       ...(aggregatorPostingUrl ? { aggregatorPostingUrl } : {}),
       ...(frozenCategories.length ? { frozenCategories } : {}),
+      ...(h1bEligible
+        ? {
+            h1bEligible,
+            h1bCompanyScore,
+            h1bRoleScore,
+            h1bCompanyConfidence,
+            h1bRoleConfidence,
+            h1bFilingCount,
+            h1bLastFilingYear,
+            ...(h1bMatchedGovEmployer ? { h1bMatchedGovEmployer } : {}),
+            h1bCapExempt,
+            ...(h1bDataAsOf ? { h1bDataAsOf } : {}),
+            h1bMappingStatus,
+          }
+        : {}),
+      ...(h1bFy2026Match
+        ? {
+            h1bFy2026Match: true,
+            h1bFy2026TitleConfidence,
+            ...(h1bFy2026MatchedTitle ? { h1bFy2026MatchedTitle } : {}),
+            h1bFy2026CertifiedCount,
+            ...(h1bFy2026DataAsOf ? { h1bFy2026DataAsOf } : {}),
+          }
+        : {}),
     },
   };
 }
@@ -439,6 +482,12 @@ router.get('/jobs', async (req: any, res: any) => {
     const jobType = String(req.query.jobType || '').trim();
     const added = String(req.query.added || 'all').trim();
     const runId = String(req.query.runId || '').trim();
+    const h1bSponsorFriendly =
+      String(req.query.h1bSponsorFriendly || '').trim().toLowerCase() === 'true' ||
+      String(req.query.h1bSponsorFriendly || '').trim() === '1';
+    const h1bFy2026Match =
+      String(req.query.h1bFy2026Match || '').trim().toLowerCase() === 'true' ||
+      String(req.query.h1bFy2026Match || '').trim() === '1';
     const ownerId = normalizeOwnerIdForWrite(req.user.id);
 
     // When filtering by run, include listings this run touched (may still be queued/enriching).
@@ -467,6 +516,25 @@ router.get('/jobs', async (req: any, res: any) => {
     // indexed `$in` (match any selected category) is enough — no regex needed.
     if (frozenCategories.length) {
       match.$and = [...(match.$and || []), { frozenCategories: { $in: frozenCategories } }];
+    }
+    if (h1bSponsorFriendly) {
+      match.$and = [
+        ...(match.$and || []),
+        {
+          h1bEligible: true,
+          h1bCompanyScore: 'high',
+          h1bMappingStatus: { $in: ['auto', 'approved'] },
+        },
+      ];
+    }
+    if (h1bFy2026Match) {
+      match.$and = [
+        ...(match.$and || []),
+        {
+          h1bEligible: true,
+          h1bFy2026Match: true,
+        },
+      ];
     }
 
     if (q) {
@@ -509,7 +577,9 @@ router.get('/jobs', async (req: any, res: any) => {
       jobType,
       added,
       source: req.query.source != null ? String(req.query.source).trim() : '',
-      v: 12,
+      h1bSponsorFriendly,
+      h1bFy2026Match,
+      v: 14,
     });
     const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {
@@ -544,6 +614,22 @@ router.get('/jobs', async (req: any, res: any) => {
       roleType: 1,
       educationRequirement: 1,
       visaSponsorship: 1,
+      h1bEligible: 1,
+      h1bCompanyScore: 1,
+      h1bRoleScore: 1,
+      h1bCompanyConfidence: 1,
+      h1bRoleConfidence: 1,
+      h1bFilingCount: 1,
+      h1bLastFilingYear: 1,
+      h1bMatchedGovEmployer: 1,
+      h1bCapExempt: 1,
+      h1bDataAsOf: 1,
+      h1bMappingStatus: 1,
+      h1bFy2026Match: 1,
+      h1bFy2026TitleConfidence: 1,
+      h1bFy2026MatchedTitle: 1,
+      h1bFy2026CertifiedCount: 1,
+      h1bFy2026DataAsOf: 1,
       companyEmployeeCount: 1,
       companyFoundedYear: 1,
       companyWebsite: 1,
@@ -717,7 +803,7 @@ router.get('/jobs/:id', async (req: any, res: any) => {
       status: 'ready',
     })
       .select(
-        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship h1bEligible h1bCompanyScore h1bRoleScore h1bCompanyConfidence h1bRoleConfidence h1bFilingCount h1bLastFilingYear h1bMatchedGovEmployer h1bCapExempt h1bDataAsOf h1bMappingStatus h1bFy2026Match h1bFy2026TitleConfidence h1bFy2026MatchedTitle h1bFy2026CertifiedCount h1bFy2026DataAsOf companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
       )
       .lean();
 

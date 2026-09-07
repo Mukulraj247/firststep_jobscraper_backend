@@ -8,6 +8,7 @@ import { DashboardPage } from './DashboardPage';
 import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
 import { EnrichmentPage } from './EnrichmentPage';
+import { H1bPage } from './H1bPage';
 import { CommunicationPage } from './CommunicationPage';
 import { AggregatorsPage } from './AggregatorsPage';
 import { JobBoardPage } from '../components/jobs/JobBoardPage';
@@ -333,6 +334,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
         return <FailureDashboardPage />;
       case 'enrichment':
         return <EnrichmentPage />;
+      case 'h1b':
+        return <H1bPage />;
       case 'communication':
         return <CommunicationPage />;
       case 'aggregators':

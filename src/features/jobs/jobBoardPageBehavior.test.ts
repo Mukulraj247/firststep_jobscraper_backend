@@ -92,6 +92,36 @@ describe('job board filters', () => {
     expect(hasActiveJobBoardFilters({ ...base, frozenCategories: [] })).toBe(false);
     expect(hasActiveJobBoardFilters({ ...base, frozenCategories: ['DevOps'] })).toBe(true);
   });
+
+  it('treats H-1B sponsor filter as active', () => {
+    const base = {
+      q: '',
+      added: 'all' as const,
+      category: '',
+      frozenCategories: [] as string[],
+      location: '',
+      workMode: '',
+      jobType: '',
+      source: '',
+    };
+    expect(hasActiveJobBoardFilters({ ...base, h1bSponsorFriendly: false })).toBe(false);
+    expect(hasActiveJobBoardFilters({ ...base, h1bSponsorFriendly: true })).toBe(true);
+  });
+
+  it('treats FY2026 H-1B filing match filter as active', () => {
+    const base = {
+      q: '',
+      added: 'all' as const,
+      category: '',
+      frozenCategories: [] as string[],
+      location: '',
+      workMode: '',
+      jobType: '',
+      source: '',
+    };
+    expect(hasActiveJobBoardFilters({ ...base, h1bFy2026Match: false })).toBe(false);
+    expect(hasActiveJobBoardFilters({ ...base, h1bFy2026Match: true })).toBe(true);
+  });
 });
 
 describe('orderFrozenCategories', () => {
