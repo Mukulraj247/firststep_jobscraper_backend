@@ -30,6 +30,8 @@ import {
   experienceContentHashParts,
   resolveFrozenExperience,
 } from '../../../src/shared/frozenExperience';
+import { resolveH1bSponsorship } from './h1b/resolveH1bSponsorship';
+import { resolveFy2026JobMatch } from './h1b/matchFy2026Role';
 import logger from '../logger';
 
 export const JOB_BOARD_STALE_DAYS = parseInt(process.env.JOB_BOARD_STALE_DAYS || '14', 10);
@@ -773,7 +775,9 @@ export async function enqueueJobBoardEnrichments(opts: {
       }
       stats.skippedComplete += 1;
 
-      // List-complete rows never hit the enrichment worker — tag Specialty + industry here.
+      // List-complete rows never hit the enrichment worker — stamp Specialty,
+      // industry, experience, and H-1B here so aggregator inserts (choppingblock,
+      // accel, etc.) are not left untagged until a manual backfill.
       const tagFields: Record<string, unknown> = {};
       try {
         const tagResult = await classifyJobCategories({
@@ -860,6 +864,29 @@ export async function enqueueJobBoardEnrichments(opts: {
         logger.log(
           'warn',
           `enqueueJobBoardEnrichments experience resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+        );
+      }
+
+      try {
+        const snap = item.snapshot || {};
+        const h1bInput = {
+          companyName: String(fields.companyName || snap.companyName || ''),
+          jobTitle: String(fields.jobTitle || snap.jobTitle || ''),
+          location: String(fields.location || snap.location || ''),
+          remoteType: String(fields.remoteType || snap.remoteType || ''),
+          visaSponsorship: String(
+            (fields as any).visaSponsorship || (snap as any).visaSponsorship || ''
+          ),
+          jobDescription: String(fields.jobDescription || snap.jobDescription || ''),
+        };
+        const h1b = await resolveH1bSponsorship(h1bInput);
+        Object.assign(tagFields, h1b);
+        const fy2026 = await resolveFy2026JobMatch(h1bInput);
+        Object.assign(tagFields, fy2026);
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `enqueueJobBoardEnrichments H-1B resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
         );
       }
 
