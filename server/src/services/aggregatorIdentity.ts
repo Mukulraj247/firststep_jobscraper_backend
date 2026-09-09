@@ -505,6 +505,28 @@ export function aggregatorSourceForRobot(robot: any): string | null {
   return provider;
 }
 
+const AGGREGATOR_LISTING_SOURCES = new Set(
+  [
+    AGGREGATOR_SOURCE_HIRING_CAFE,
+    AGGREGATOR_SOURCE_LINKEDIN,
+    AGGREGATOR_SOURCE_ACCEL,
+    AGGREGATOR_SOURCE_SEQUOIA,
+    AGGREGATOR_SOURCE_CAPITALG,
+    AGGREGATOR_SOURCE_CHOPPINGBLOCK,
+    AGGREGATOR_SOURCE_AIDEVBOARD,
+    AGGREGATOR_SOURCE_STARTUPS_GALLERY,
+  ].map((s) => s.toLowerCase())
+);
+
+/** True when a job-board listing `source` is an aggregator (not a company career site). */
+export function isAggregatorListingSource(source: string | null | undefined): boolean {
+  const s = String(source || '').trim().toLowerCase();
+  if (!s) return false;
+  if (AGGREGATOR_LISTING_SOURCES.has(s)) return true;
+  if (s === 'aggregator') return true;
+  return false;
+}
+
 /** Mongo filter: company career robots only (hide from Aggregators). */
 export function careerRobotsOnlyMongoClause(): Record<string, unknown> {
   return {

@@ -6,6 +6,7 @@ import {
   buildReconfigureMovesCsv,
   buildScheduleFiresCsv,
   buildScheduleFiresCsvFilename,
+  canReconfigureOnHeatmapDate,
   formatHeatmapDateChip,
   formatIsoAsIstClock,
   formatScraperLastRunRelative,
@@ -119,6 +120,12 @@ describe('schedule heatmap presentation', () => {
   it('names an hour cell for screen readers', () => {
     expect(heatmapHourAriaLabel(18, 12)).toBe('6 PM, 12 scheduled');
     expect(heatmapHourAriaLabel(0, 1)).toBe('12 AM, 1 scheduled');
+  });
+
+  it('allows reconfigure only for today or a future IST heatmap day', () => {
+    expect(canReconfigureOnHeatmapDate('2026-09-07', '2026-09-08')).toBe(false);
+    expect(canReconfigureOnHeatmapDate('2026-09-08', '2026-09-08')).toBe(true);
+    expect(canReconfigureOnHeatmapDate('2026-09-09', '2026-09-08')).toBe(true);
   });
 
   it('is the scrapers page: heatmap only, no scraper list or create table', () => {

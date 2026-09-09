@@ -83,20 +83,75 @@ export function H1bPage() {
     enabled: tab === 1,
   });
 
+  type PendingCache = Awaited<ReturnType<typeof listH1bPendingMappings>>;
+  type StatsCache = Awaited<ReturnType<typeof getH1bStats>>;
+
+  const removePendingFromCache = (id: string, opts?: { bumpApproved?: boolean }) => {
+    queryClient.setQueryData<PendingCache>(['h1b-pending'], (old) => {
+      if (!old) return old;
+      const mappings = (old.mappings || []).filter((m) => m.id !== id);
+      const total = Math.max(0, (old.pagination?.total ?? mappings.length) - 1);
+      return {
+        ...old,
+        mappings,
+        pagination: {
+          ...old.pagination,
+          total,
+          totalPages: total === 0 ? 1 : Math.ceil(total / (old.pagination?.limit || 40)),
+        },
+      };
+    });
+    queryClient.setQueryData<StatsCache>(['h1b-stats'], (old) => {
+      if (!old || typeof old.pendingReview !== 'number') return old;
+      return {
+        ...old,
+        pendingReview: Math.max(0, old.pendingReview - 1),
+        approved:
+          opts?.bumpApproved && typeof old.approved === 'number' ? old.approved + 1 : old.approved,
+      };
+    });
+  };
+
   const approveMut = useMutation({
     mutationFn: (id: string) => approveH1bMapping(id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['h1b-pending'] });
-      await queryClient.invalidateQueries({ queryKey: ['h1b-stats'] });
-      await queryClient.invalidateQueries({ queryKey: ['h1b-employers'] });
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['h1b-pending'] });
+      const previousPending = queryClient.getQueryData<PendingCache>(['h1b-pending']);
+      const previousStats = queryClient.getQueryData<StatsCache>(['h1b-stats']);
+      removePendingFromCache(id, { bumpApproved: true });
+      return { previousPending, previousStats };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.previousPending) queryClient.setQueryData(['h1b-pending'], ctx.previousPending);
+      if (ctx?.previousStats) queryClient.setQueryData(['h1b-stats'], ctx.previousStats);
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['h1b-pending'] }),
+        queryClient.invalidateQueries({ queryKey: ['h1b-stats'] }),
+        queryClient.invalidateQueries({ queryKey: ['h1b-employers'] }),
+      ]);
     },
   });
 
   const rejectMut = useMutation({
     mutationFn: (id: string) => rejectH1bMapping(id, 'manual_reject'),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['h1b-pending'] });
-      await queryClient.invalidateQueries({ queryKey: ['h1b-stats'] });
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['h1b-pending'] });
+      const previousPending = queryClient.getQueryData<PendingCache>(['h1b-pending']);
+      const previousStats = queryClient.getQueryData<StatsCache>(['h1b-stats']);
+      removePendingFromCache(id);
+      return { previousPending, previousStats };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.previousPending) queryClient.setQueryData(['h1b-pending'], ctx.previousPending);
+      if (ctx?.previousStats) queryClient.setQueryData(['h1b-stats'], ctx.previousStats);
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['h1b-pending'] }),
+        queryClient.invalidateQueries({ queryKey: ['h1b-stats'] }),
+      ]);
     },
   });
 
@@ -255,7 +310,11 @@ export function H1bPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {(pendingQuery.data?.mappings || []).map((m) => (
+                {(pendingQuery.data?.mappings || []).map((m) => {
+                  const rowBusy =
+                    (approveMut.isPending && approveMut.variables === m.id) ||
+                    (rejectMut.isPending && rejectMut.variables === m.id);
+                  return (
                   <TableRow key={m.id} hover>
                     <TableCell>
                       <Typography variant="body2" fontWeight={600}>
@@ -273,7 +332,7 @@ export function H1bPage() {
                         <Button
                           size="small"
                           variant="contained"
-                          disabled={approveMut.isPending}
+                          disabled={rowBusy}
                           onClick={() => approveMut.mutate(m.id)}
                         >
                           Approve
@@ -281,7 +340,7 @@ export function H1bPage() {
                         <Button
                           size="small"
                           color="error"
-                          disabled={rejectMut.isPending}
+                          disabled={rowBusy}
                           onClick={() => rejectMut.mutate(m.id)}
                         >
                           Reject
@@ -289,7 +348,8 @@ export function H1bPage() {
                       </Stack>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
                 {!pendingQuery.isFetching && !(pendingQuery.data?.mappings || []).length ? (
                   <TableRow>
                     <TableCell colSpan={5}>

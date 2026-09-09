@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { extractExperienceYears } from '../../../src/shared/frozenExperience';
 import { parseAppleJobsHydration, parsePhenomJobDdo } from './spaEmbeddedJobJson';
 
 export const MAX_PARSE_BYTES = parseInt(process.env.MAX_PARSE_BYTES || String(1.5 * 1024 * 1024), 10);
@@ -61,8 +62,12 @@ export interface ParsedJobFields {
   companyLogoUrl: string;
   jobCategory: string;
   source: 'jsonld' | 'meta' | 'html' | 'none';
+  /** Industry from rowContext / aggregator scrape (optional). */
+  sectorIndustry?: string;
   /** Minimum years inferred from a structured ATS field. */
   _jobExperience?: number;
+  /** Max years from HC max_industry_and_role_yoe when present. */
+  _jobExperienceMax?: number;
 }
 
 const emptyFields = (): ParsedJobFields => ({
@@ -132,11 +137,10 @@ export function deriveFieldsFromDescription(text: string): {
 } {
   const raw = normalizeJobDescription(text);
   const head = raw.slice(0, 3500);
-  let jobExperience = 0;
-  const years = [...head.matchAll(/(\d+)\+?\s*(?:\+|plus\s+)?years?\s+of\s+experience/gi)].map((m) =>
-    parseInt(m[1], 10)
-  );
-  if (years.length) jobExperience = Math.max(...years.filter((n) => n > 0 && n <= 30));
+  const extracted = extractExperienceYears(head);
+  const jobExperience = extracted.years.length
+    ? Math.min(30, Math.floor(Math.max(...extracted.years)))
+    : 0;
 
   let employmentType = '';
   if (/\bintern(ship)?\b/i.test(head)) employmentType = 'Internship';
@@ -1068,6 +1072,7 @@ export function mergeParsedFields(
     companyLogoUrl: pick(a.companyLogoUrl, b.companyLogoUrl),
     jobCategory: pick(a.jobCategory, b.jobCategory),
     source: a.source !== 'none' ? a.source : b.source,
+    sectorIndustry: pick(a.sectorIndustry || '', b.sectorIndustry || '') || undefined,
   };
   const jobExperience = Math.max(
     Number(a._jobExperience) || 0,
@@ -1075,6 +1080,13 @@ export function mergeParsedFields(
   );
   if (jobExperience > 0) {
     merged._jobExperience = jobExperience;
+  }
+  const jobExperienceMax = Math.max(
+    Number(a._jobExperienceMax) || 0,
+    Number(b._jobExperienceMax) || 0
+  );
+  if (jobExperienceMax > 0) {
+    merged._jobExperienceMax = jobExperienceMax;
   }
   return merged;
 }

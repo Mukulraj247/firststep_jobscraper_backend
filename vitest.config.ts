@@ -14,6 +14,7 @@ export default defineConfig({
       'src/components/**/*.test.tsx',
       'src/features/**/*.test.ts',
       'src/features/**/*.test.tsx',
+      'src/user-dashboard/**/*.test.ts',
     ],
     environmentMatchGlobs: [
       ['**/*.test.tsx', 'jsdom'],

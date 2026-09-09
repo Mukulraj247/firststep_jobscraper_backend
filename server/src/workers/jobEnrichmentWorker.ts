@@ -8,9 +8,16 @@ import {
   isConsiderBoardUrl,
   isConsiderJobPostingUrl,
   isAggregatorHostUrl,
+  isAggregatorListingSource,
   usesAggregatorHtmlOnlyEnrichment,
   usesConsiderApplyThenAtsEnrichment,
 } from '../services/aggregatorIdentity';
+import { resolveFrozenIndustries } from '../../../src/shared/frozenIndustries';
+import {
+  EXPERIENCE_RULES_VERSION,
+  experienceContentHashParts,
+  resolveFrozenExperience,
+} from '../../../src/shared/frozenExperience';
 import {
   fetchBrowserJobFallback,
   shouldTryBrowserJobFallback,
@@ -478,6 +485,7 @@ function snapshotAsFields(doc: IJobBoardListing): ParsedJobFields {
     companyLogoUrl: '',
     jobCategory: decodeHtmlEntities(s.jobCategory || ''),
     source: 'none',
+    sectorIndustry: decodeHtmlEntities(s.sectorIndustry || doc.sectorIndustry || ''),
   };
 }
 
@@ -637,7 +645,11 @@ async function persistResult(
       jobId,
       contentHash: hash,
       date: date instanceof Date && !Number.isNaN(date.getTime()) ? date : doc.date,
-      sectorIndustry: doc.sectorIndustry || list.sectorIndustry || '',
+      sectorIndustry:
+        decodeHtmlEntities(fields.sectorIndustry || '') ||
+        doc.sectorIndustry ||
+        list.sectorIndustry ||
+        '',
       f500: doc.f500 || list.f500 || '',
       jobCategory,
       jobExperience,
@@ -684,6 +696,100 @@ async function persistResult(
       logger.log(
         'warn',
         `[jobEnrichment] category tagger failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
+      );
+    }
+
+    // Career: normalize rowContext sectorIndustry. Aggregator: scrape + light hints.
+    const mergedSectorIndustry =
+      decodeHtmlEntities(String($set.sectorIndustry || fields.sectorIndustry || '')) ||
+      decodeHtmlEntities(String(doc.sectorIndustry || list.sectorIndustry || '')) ||
+      '';
+    if (mergedSectorIndustry && !$set.sectorIndustry) {
+      $set.sectorIndustry = mergedSectorIndustry;
+    }
+    if (
+      mergedSectorIndustry &&
+      !decodeHtmlEntities(String(list.sectorIndustry || ''))
+    ) {
+      $set['listSnapshot.sectorIndustry'] = mergedSectorIndustry;
+    }
+    try {
+      const listingSource = String(doc.source || '').trim();
+      const industryResult = resolveFrozenIndustries({
+        sectorIndustry: mergedSectorIndustry,
+        title: mergedTitle,
+        companyName: mergedCompany,
+        source: listingSource,
+        isAggregator: isAggregatorListingSource(listingSource),
+      });
+      $set.frozenIndustries = industryResult.frozenIndustries;
+      $set.industryClassification = {
+        method: industryResult.method,
+        rulesVersion: industryResult.rulesVersion,
+        classifiedAt: new Date(),
+        contentHash: hash || '',
+      };
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `[jobEnrichment] industry resolve failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
+      );
+    }
+
+    try {
+      const quals = [
+        ...((fields as any).minimumQualifications || doc.minimumQualifications || []),
+        ...((fields as any).preferredQualifications || doc.preferredQualifications || []),
+      ]
+        .map((x: unknown) => String(x || '').trim())
+        .filter(Boolean);
+      const seniorityLevel = String(
+        (fields as any).seniorityLevel || doc.seniorityLevel || list.seniorityLevel || ''
+      ).trim();
+      // Prefer YOE from the current parse only — never re-inject stored jobExperience
+      // (can be polluted by "18 years of age" / company-history false positives).
+      const minYoe =
+        Number((fields as any)._jobExperience) || Number((fields as any).jobExperience) || 0;
+      const maxYoe =
+        Number((fields as any)._jobExperienceMax) || Number((fields as any).jobExperienceMax) || 0;
+      const expInput = {
+        title: mergedTitle,
+        description: String(
+          (fields as any).jobDescription || doc.jobDescription || list.jobDescription || ''
+        ),
+        qualifications: quals,
+        seniorityLevel,
+        minYoe: minYoe > 0 ? minYoe : null,
+        maxYoe: maxYoe > 0 ? maxYoe : null,
+        isAggregator: isAggregatorListingSource(String(doc.source || '').trim()),
+      };
+      const expHash = createHash('sha1')
+        .update(experienceContentHashParts(expInput))
+        .digest('hex')
+        .slice(0, 16);
+      const existingExp = (doc as any).experienceClassification || {};
+      const alreadyCurrent =
+        existingExp.contentHash === expHash &&
+        existingExp.rulesVersion === EXPERIENCE_RULES_VERSION &&
+        Array.isArray((doc as any).frozenExperienceLevels);
+      const expResult = resolveFrozenExperience(expInput);
+      if (!alreadyCurrent) {
+        $set.frozenExperienceLevels = expResult.frozenExperienceLevels;
+        $set.frozenExperienceYears = expResult.frozenExperienceYears;
+        $set.experienceClassification = {
+          method: expResult.method,
+          rulesVersion: expResult.rulesVersion,
+          classifiedAt: new Date(),
+          contentHash: expHash,
+          matchedSignals: expResult.matchedSignals.slice(0, 40),
+        };
+      }
+      // Always write so inflated / min-only values can clear even when tags are current.
+      $set.jobExperience = expResult.jobExperience;
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `[jobEnrichment] experience resolve failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
       );
     }
 
@@ -1096,6 +1202,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
             companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
             jobCategory: String(mergedRow.jobCategory || ''),
             source: 'html',
+            sectorIndustry: String((mergedRow as any).sectorIndustry || ''),
           };
           const merged = mergeParsedFields(fields, listFields);
           const status = boardListingStatus(merged, doc.jobUrl);
@@ -1218,6 +1325,7 @@ async function processOne(doc: IJobBoardListing, metrics: EnrichmentPassMetrics)
           companyLogoUrl: String(mergedRow.companyLogoUrl || ''),
           jobCategory: String(mergedRow.jobCategory || ''),
           source: 'html',
+          sectorIndustry: String(mergedRow.sectorIndustry || ''),
         };
         const merged = mergeParsedFields(fields, listFields);
         const employerApply =

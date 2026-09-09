@@ -19,6 +19,20 @@ const interactiveFocusVisible = (color: string) => ({
 });
 
 const baselineA11y = (ringColor: string) => ({
+  'a:not(.MuiButtonBase-root):not(.MuiButton-root)': {
+    color: FIRSTSTEP.tealDark,
+    textDecoration: 'none',
+    '&:hover': {
+      color: FIRSTSTEP.navy,
+    },
+    '&:visited': {
+      color: FIRSTSTEP.tealDeep,
+    },
+    '&:focus-visible': {
+      color: FIRSTSTEP.navy,
+      ...focusVisibleFor(FIRSTSTEP.teal),
+    },
+  },
   '.skip-link': {
     position: 'absolute',
     left: 16,
@@ -140,10 +154,21 @@ const lightTheme = createTheme({
     MuiLink: {
       styleOverrides: {
         root: {
+          color: FIRSTSTEP.tealDark,
+          textDecoration: 'none',
           "&:hover": {
-            color: "#0e7490",
+            color: FIRSTSTEP.navy,
           },
           ...lightFocus,
+        },
+      },
+    },
+    MuiButtonBase: {
+      styleOverrides: {
+        root: {
+          '&[href]': {
+            textDecoration: 'none',
+          },
         },
       },
     },
@@ -344,10 +369,20 @@ const darkTheme = createTheme({
       styleOverrides: {
         root: {
           color: '#22d3ee',
+          textDecoration: 'none',
           "&:hover": {
             color: "#67e8f9",
           },
           ...darkFocus,
+        },
+      },
+    },
+    MuiButtonBase: {
+      styleOverrides: {
+        root: {
+          '&[href]': {
+            textDecoration: 'none',
+          },
         },
       },
     },

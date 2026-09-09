@@ -197,7 +197,24 @@ export async function saveConfigToBackend(payload: {
 
   const companyName =
     typeof payload.companyName === 'string' ? payload.companyName.trim() : undefined;
-  const tags = Array.isArray(payload.tags) ? payload.tags : undefined;
+  const isAggregatorUrl =
+    hiringCafe ||
+    accelJobs ||
+    sequoiaJobs ||
+    capitalGJobs ||
+    choppingBlockJobs ||
+    aidevboardJobs ||
+    startupsGalleryJobs ||
+    linkedInJobs;
+  const SOURCE_AGGREGATOR = 'source:Aggregator';
+  let tags = Array.isArray(payload.tags) ? [...payload.tags] : undefined;
+  if (isAggregatorUrl) {
+    const next = tags ? [...tags] : [];
+    if (!next.includes(SOURCE_AGGREGATOR) && next.length < 5) {
+      next.push(SOURCE_AGGREGATOR);
+    }
+    tags = next;
+  }
 
   const body: Record<string, unknown> = {
     name: (payload.automationName && String(payload.automationName).trim()) || defaultName,

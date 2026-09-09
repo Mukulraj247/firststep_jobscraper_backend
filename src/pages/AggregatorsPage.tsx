@@ -422,7 +422,7 @@ export const AggregatorsPage = () => {
         name: trimmedName,
         startUrl: trimmedUrl,
         companyName: 'Aggregator',
-        tags: ['aggregator'],
+        tags: ['source:Aggregator'],
         config: {
           preferAtsCollection: false,
           schedule: {

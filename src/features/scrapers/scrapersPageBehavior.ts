@@ -263,6 +263,11 @@ export function formatHeatmapDateChip(ymd: string, todayYmd: string): string {
   return `${Number(match[3])} ${HEATMAP_MONTHS[Number(match[2]) - 1]}`;
 }
 
+/** Reconfigure only for today or a future IST day on the strip — never a past day. */
+export function canReconfigureOnHeatmapDate(heatmapDate: string, todayYmd: string): boolean {
+  return heatmapDate >= todayYmd;
+}
+
 export function heatmapHourLabel(hour: number): string {
   const h = ((hour % 24) + 24) % 24;
   const period = h >= 12 ? 'PM' : 'AM';

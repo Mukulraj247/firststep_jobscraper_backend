@@ -32,6 +32,7 @@ export function ScrapersHero({
   onDownloadSchedules,
   onReconfigure,
   canDownloadSchedules = false,
+  canReconfigure = true,
 }: {
   scheduledCount: number;
   isRefreshing: boolean;
@@ -41,6 +42,7 @@ export function ScrapersHero({
   onDownloadSchedules: () => void;
   onReconfigure: () => void;
   canDownloadSchedules?: boolean;
+  canReconfigure?: boolean;
 }) {
   const refreshBusy = isLoading || isRefreshing || isReconfiguring;
   const noun = scheduledCount === 1 ? 'scheduled fire' : 'scheduled fires';
@@ -105,7 +107,12 @@ export function ScrapersHero({
               isReconfiguring ? <CircularProgress size={16} color="inherit" /> : <TuneIcon />
             }
             onClick={onReconfigure}
-            disabled={refreshBusy}
+            disabled={refreshBusy || !canReconfigure}
+            title={
+              canReconfigure
+                ? undefined
+                : 'Reconfigure is only available for today or a future day in IST'
+            }
             sx={heroGlassGhostButtonSx}
           >
             {isReconfiguring ? 'Reconfiguring…' : 'Reconfigure'}

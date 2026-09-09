@@ -10,6 +10,16 @@ import {
   normalizeFrozenCategoryFilter,
 } from '../../../src/shared/frozenJobCategories';
 import {
+  FROZEN_INDUSTRIES,
+  normalizeFrozenIndustryFilter,
+} from '../../../src/shared/frozenIndustries';
+import {
+  FROZEN_EXPERIENCE_LEVELS,
+  FROZEN_EXPERIENCE_YEARS,
+  normalizeExperienceLevelFilter,
+  normalizeExperienceYearFilter,
+} from '../../../src/shared/frozenExperience';
+import {
   decodeHtmlEntities,
   pickBestDescription,
   sanitizeCompanyName,
@@ -41,6 +51,9 @@ type FacetCacheEntry = {
   companies: string[];
   categories: string[];
   frozenCategories: string[];
+  frozenIndustries: string[];
+  frozenExperienceLevels: string[];
+  frozenExperienceYears: string[];
   locations: string[];
 };
 
@@ -255,6 +268,15 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
   const frozenCategories = Array.isArray(row.frozenCategories)
     ? row.frozenCategories.map((x: unknown) => String(x || '').trim()).filter(Boolean)
     : [];
+  const frozenIndustries = Array.isArray(row.frozenIndustries)
+    ? row.frozenIndustries.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const frozenExperienceLevels = Array.isArray(row.frozenExperienceLevels)
+    ? row.frozenExperienceLevels.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const frozenExperienceYears = Array.isArray(row.frozenExperienceYears)
+    ? row.frozenExperienceYears.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : [];
   const h1bEligible = Boolean(row.h1bEligible);
   const h1bCompanyScore = String(row.h1bCompanyScore || 'unknown');
   const h1bRoleScore = String(row.h1bRoleScore || 'unknown');
@@ -316,6 +338,9 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
       ...(companyWebsite ? { companyWebsite } : {}),
       ...(aggregatorPostingUrl ? { aggregatorPostingUrl } : {}),
       ...(frozenCategories.length ? { frozenCategories } : {}),
+      ...(frozenIndustries.length ? { frozenIndustries } : {}),
+      ...(frozenExperienceLevels.length ? { frozenExperienceLevels } : {}),
+      ...(frozenExperienceYears.length ? { frozenExperienceYears } : {}),
       ...(h1bEligible
         ? {
             h1bEligible,
@@ -350,6 +375,9 @@ async function getFacets(
   companies: string[];
   categories: string[];
   frozenCategories: string[];
+  frozenIndustries: string[];
+  frozenExperienceLevels: string[];
+  frozenExperienceYears: string[];
   locations: string[];
 }> {
   const cached = facetCache.get(ownerId);
@@ -358,13 +386,25 @@ async function getFacets(
       companies: cached.companies,
       categories: cached.categories,
       frozenCategories: cached.frozenCategories || [],
+      frozenIndustries: cached.frozenIndustries || [],
+      frozenExperienceLevels: cached.frozenExperienceLevels || [],
+      frozenExperienceYears: cached.frozenExperienceYears || [],
       locations: cached.locations || [],
     };
   }
 
   const match = boardMatch(ownerId);
 
-  const [companyFacets, categoryFacets, frozenCategoryFacets, locationFacets] = await Promise.all([
+  const [
+    companyFacets,
+    categoryFacets,
+    frozenCategoryFacets,
+    frozenIndustryFacets,
+    frozenExperienceLevelFacets,
+    frozenExperienceYearFacets,
+    locationFacets,
+  ] =
+    await Promise.all([
     JobBoardListing.aggregate([
       { $match: match },
       {
@@ -412,6 +452,33 @@ async function getFacets(
       { $limit: FROZEN_JOB_CATEGORIES.length },
     ]),
     JobBoardListing.aggregate([
+      { $match: { ...match, frozenIndustries: { $nin: [null, []] } } },
+      { $project: { frozenIndustries: 1 } },
+      { $unwind: '$frozenIndustries' },
+      { $group: { _id: '$frozenIndustries', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: FROZEN_INDUSTRIES.length },
+    ]),
+    JobBoardListing.aggregate([
+      { $match: { ...match, frozenExperienceLevels: { $nin: [null, []] } } },
+      { $project: { frozenExperienceLevels: 1 } },
+      { $unwind: '$frozenExperienceLevels' },
+      { $group: { _id: '$frozenExperienceLevels', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: FROZEN_EXPERIENCE_LEVELS.length },
+    ]),
+    JobBoardListing.aggregate([
+      { $match: { ...match, frozenExperienceYears: { $nin: [null, []] } } },
+      { $project: { frozenExperienceYears: 1 } },
+      { $unwind: '$frozenExperienceYears' },
+      { $group: { _id: '$frozenExperienceYears', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: FROZEN_EXPERIENCE_YEARS.length },
+    ]),
+    JobBoardListing.aggregate([
       { $match: match },
       {
         $project: {
@@ -446,6 +513,20 @@ async function getFacets(
     frozenCategoryFacets.map((f: any) => String(f._id || '').trim()).filter(Boolean)
   );
   const frozenCategories = FROZEN_JOB_CATEGORIES.filter((name) => presentFrozen.has(name));
+  const presentIndustry = new Set(
+    frozenIndustryFacets.map((f: any) => String(f._id || '').trim()).filter(Boolean)
+  );
+  const frozenIndustries = FROZEN_INDUSTRIES.filter((name) => presentIndustry.has(name));
+  const presentExpLevels = new Set(
+    frozenExperienceLevelFacets.map((f: any) => String(f._id || '').trim()).filter(Boolean)
+  );
+  const frozenExperienceLevels = FROZEN_EXPERIENCE_LEVELS.filter((name) =>
+    presentExpLevels.has(name)
+  );
+  const presentExpYears = new Set(
+    frozenExperienceYearFacets.map((f: any) => String(f._id || '').trim()).filter(Boolean)
+  );
+  const frozenExperienceYears = FROZEN_EXPERIENCE_YEARS.filter((name) => presentExpYears.has(name));
   const locations = locationFacets
     .map((f: any) => normalizeLocation(decodeHtmlEntities(String(f._id || ''))))
     .filter(Boolean);
@@ -455,9 +536,20 @@ async function getFacets(
     companies,
     categories,
     frozenCategories,
+    frozenIndustries,
+    frozenExperienceLevels,
+    frozenExperienceYears,
     locations: uniqueLocations,
   });
-  return { companies, categories, frozenCategories, locations: uniqueLocations };
+  return {
+    companies,
+    categories,
+    frozenCategories,
+    frozenIndustries,
+    frozenExperienceLevels,
+    frozenExperienceYears,
+    locations: uniqueLocations,
+  };
 }
 
 async function getCachedCount(cacheKey: string, match: Record<string, any>): Promise<number> {
@@ -477,6 +569,9 @@ router.get('/jobs', async (req: any, res: any) => {
     const company = String(req.query.company || '').trim();
     const category = String(req.query.category || '').trim();
     const frozenCategories = normalizeFrozenCategoryFilter(req.query.frozenCategory);
+    const frozenIndustries = normalizeFrozenIndustryFilter(req.query.frozenIndustry);
+    const frozenExperienceLevels = normalizeExperienceLevelFilter(req.query.frozenExperienceLevel);
+    const frozenExperienceYears = normalizeExperienceYearFilter(req.query.frozenExperienceYear);
     const location = String(req.query.location || '').trim();
     const workMode = String(req.query.workMode || '').trim();
     const jobType = String(req.query.jobType || '').trim();
@@ -516,6 +611,21 @@ router.get('/jobs', async (req: any, res: any) => {
     // indexed `$in` (match any selected category) is enough — no regex needed.
     if (frozenCategories.length) {
       match.$and = [...(match.$and || []), { frozenCategories: { $in: frozenCategories } }];
+    }
+    if (frozenIndustries.length) {
+      match.$and = [...(match.$and || []), { frozenIndustries: { $in: frozenIndustries } }];
+    }
+    if (frozenExperienceLevels.length) {
+      match.$and = [
+        ...(match.$and || []),
+        { frozenExperienceLevels: { $in: frozenExperienceLevels } },
+      ];
+    }
+    if (frozenExperienceYears.length) {
+      match.$and = [
+        ...(match.$and || []),
+        { frozenExperienceYears: { $in: frozenExperienceYears } },
+      ];
     }
     if (h1bSponsorFriendly) {
       match.$and = [
@@ -570,6 +680,9 @@ router.get('/jobs', async (req: any, res: any) => {
       company,
       category,
       frozenCategories,
+      frozenIndustries,
+      frozenExperienceLevels,
+      frozenExperienceYears,
       q,
       runId,
       location,
@@ -579,7 +692,7 @@ router.get('/jobs', async (req: any, res: any) => {
       source: req.query.source != null ? String(req.query.source).trim() : '',
       h1bSponsorFriendly,
       h1bFy2026Match,
-      v: 14,
+      v: 22,
     });
     const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {
@@ -592,6 +705,9 @@ router.get('/jobs', async (req: any, res: any) => {
       descriptionSnippet: 1,
       jobCategory: 1,
       frozenCategories: 1,
+      frozenIndustries: 1,
+      frozenExperienceLevels: 1,
+      frozenExperienceYears: 1,
       location: 1,
       salaryRange: 1,
       employmentType: 1,
@@ -671,6 +787,9 @@ router.get('/jobs', async (req: any, res: any) => {
       filters: {
         categories: facets.categories,
         frozenCategories: facets.frozenCategories,
+        frozenIndustries: facets.frozenIndustries,
+        frozenExperienceLevels: facets.frozenExperienceLevels,
+        frozenExperienceYears: facets.frozenExperienceYears,
         locations: facets.locations,
       },
     });
@@ -803,7 +922,7 @@ router.get('/jobs/:id', async (req: any, res: any) => {
       status: 'ready',
     })
       .select(
-        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship h1bEligible h1bCompanyScore h1bRoleScore h1bCompanyConfidence h1bRoleConfidence h1bFilingCount h1bLastFilingYear h1bMatchedGovEmployer h1bCapExempt h1bDataAsOf h1bMappingStatus h1bFy2026Match h1bFy2026TitleConfidence h1bFy2026MatchedTitle h1bFy2026CertifiedCount h1bFy2026DataAsOf companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories frozenIndustries frozenExperienceLevels frozenExperienceYears location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship h1bEligible h1bCompanyScore h1bRoleScore h1bCompanyConfidence h1bRoleConfidence h1bFilingCount h1bLastFilingYear h1bMatchedGovEmployer h1bCapExempt h1bDataAsOf h1bMappingStatus h1bFy2026Match h1bFy2026TitleConfidence h1bFy2026MatchedTitle h1bFy2026CertifiedCount h1bFy2026DataAsOf companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
       )
       .lean();
 

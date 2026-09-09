@@ -19,12 +19,15 @@ import {
 const NOW = Date.parse('2026-08-18T12:00:00.000Z');
 
 describe('job board filters', () => {
-  it('exposes search, added date, category, frozen category, location, work mode, and job type — not company', () => {
+  it('exposes search, added date, category, frozen category, industry, experience, location, work mode, and job type — not company', () => {
     expect([...JOB_BOARD_FILTER_CONTROLS]).toEqual([
       'search',
       'added',
       'category',
       'frozenCategory',
+      'frozenIndustry',
+      'frozenExperienceLevel',
+      'frozenExperienceYear',
       'location',
       'workMode',
       'jobType',
@@ -91,6 +94,19 @@ describe('job board filters', () => {
     };
     expect(hasActiveJobBoardFilters({ ...base, frozenCategories: [] })).toBe(false);
     expect(hasActiveJobBoardFilters({ ...base, frozenCategories: ['DevOps'] })).toBe(true);
+  });
+
+  it('counts a frozen industry selection as an active filter', () => {
+    const base = {
+      q: '',
+      added: 'all' as const,
+      category: '',
+      location: '',
+      workMode: '',
+      jobType: '',
+    };
+    expect(hasActiveJobBoardFilters({ ...base, frozenIndustries: [] })).toBe(false);
+    expect(hasActiveJobBoardFilters({ ...base, frozenIndustries: ['Banking'] })).toBe(true);
   });
 
   it('treats H-1B sponsor filter as active', () => {

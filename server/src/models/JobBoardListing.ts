@@ -22,6 +22,8 @@ export interface IJobBoardListSnapshot {
   employmentType?: string;
   remoteType?: string;
   jobExperience?: number;
+  /** HC max YOE when present. */
+  jobExperienceMax?: number;
   sectorIndustry?: string;
   f500?: string;
   date?: Date | string | null;
@@ -131,6 +133,25 @@ export interface IJobBoardListing extends Document {
   /** Up to 2 frozen categories from job-tagger sidecar. */
   frozenCategories: string[];
   categoryClassification?: IJobBoardCategoryClassification;
+  /** Controlled industry labels (career rowContext + aggregator classify). */
+  frozenIndustries: string[];
+  industryClassification?: {
+    method: 'row_context' | 'scrape_alias' | 'aggregator_hint' | 'none';
+    rulesVersion: string;
+    classifiedAt?: Date | null;
+    contentHash?: string;
+  };
+  /** Career level tags (at most one). */
+  frozenExperienceLevels: string[];
+  /** Year-band tags (0–2). */
+  frozenExperienceYears: string[];
+  experienceClassification?: {
+    method: 'hc_structured' | 'scrape_badge' | 'rules' | 'title_only' | 'none';
+    rulesVersion: string;
+    classifiedAt?: Date | null;
+    contentHash?: string;
+    matchedSignals?: string[];
+  };
   listSnapshot: IJobBoardListSnapshot;
   enrichment: IJobBoardEnrichment;
   /** Origin of the listing, e.g. hiring_cafe for Aggregators. Empty for company scrapers. */
@@ -151,6 +172,7 @@ const ListSnapshotSchema = new Schema(
     employmentType: { type: String, default: '' },
     remoteType: { type: String, default: '' },
     jobExperience: { type: Number, default: 0 },
+    jobExperienceMax: { type: Number, default: 0 },
     sectorIndustry: { type: String, default: '' },
     f500: { type: String, default: '' },
     date: { type: Date, default: null },
@@ -280,6 +302,30 @@ const JobBoardListingSchema: Schema = new Schema(
       classifiedAt: { type: Date, default: null },
       contentHash: { type: String, default: '' },
     },
+    frozenIndustries: { type: [String], default: [] },
+    industryClassification: {
+      method: {
+        type: String,
+        enum: ['row_context', 'scrape_alias', 'aggregator_hint', 'none'],
+        default: 'none',
+      },
+      rulesVersion: { type: String, default: '' },
+      classifiedAt: { type: Date, default: null },
+      contentHash: { type: String, default: '' },
+    },
+    frozenExperienceLevels: { type: [String], default: [] },
+    frozenExperienceYears: { type: [String], default: [] },
+    experienceClassification: {
+      method: {
+        type: String,
+        enum: ['hc_structured', 'scrape_badge', 'rules', 'title_only', 'none'],
+        default: 'none',
+      },
+      rulesVersion: { type: String, default: '' },
+      classifiedAt: { type: Date, default: null },
+      contentHash: { type: String, default: '' },
+      matchedSignals: { type: [String], default: [] },
+    },
     listSnapshot: { type: ListSnapshotSchema, default: () => ({}) },
     enrichment: { type: EnrichmentSchema, default: () => ({}) },
     source: { type: String, default: '', index: true },
@@ -309,6 +355,18 @@ JobBoardListingSchema.index({ ownerId: 1, jobCategory: 1 }, { name: 'job_board_o
 JobBoardListingSchema.index(
   { ownerId: 1, status: 1, frozenCategories: 1 },
   { name: 'job_board_owner_status_frozen_category_idx' }
+);
+JobBoardListingSchema.index(
+  { ownerId: 1, status: 1, frozenIndustries: 1 },
+  { name: 'job_board_owner_status_frozen_industry_idx' }
+);
+JobBoardListingSchema.index(
+  { frozenExperienceLevels: 1, lastSeenAt: -1 },
+  { name: 'job_board_exp_level_last_seen_idx' }
+);
+JobBoardListingSchema.index(
+  { frozenExperienceYears: 1, lastSeenAt: -1 },
+  { name: 'job_board_exp_years_last_seen_idx' }
 );
 JobBoardListingSchema.index({ ownerId: 1, source: 1, date: -1 }, { name: 'job_board_owner_source_date_idx' });
 JobBoardListingSchema.index(

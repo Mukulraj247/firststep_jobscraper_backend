@@ -23,6 +23,8 @@ export type HiringCafeStructuredFields = ParsedJobFields & {
   f500?: string;
   companyWebsite?: string;
   jobExperience?: number;
+  /** HC max_industry_and_role_yoe when present. */
+  jobExperienceMax?: number;
   seniorityLevel?: string;
   roleType?: string;
   educationRequirement?: string;
@@ -249,9 +251,12 @@ function companyLogoFromWebsite(website: string): string {
   }
 }
 
-function yoeFromV5(v5: Record<string, unknown>): number {
-  const n = money(v5.min_industry_and_role_yoe);
-  return n != null ? Math.max(0, Math.floor(n)) : 0;
+function yoeFromV5(v5: Record<string, unknown>): { min: number; max: number } {
+  const minRaw = money(v5.min_industry_and_role_yoe);
+  const maxRaw = money(v5.max_industry_and_role_yoe);
+  const min = minRaw != null ? Math.max(0, Math.floor(minRaw)) : 0;
+  const max = maxRaw != null ? Math.max(0, Math.floor(maxRaw)) : 0;
+  return { min, max };
 }
 
 function isTruthyFlag(value: unknown): boolean {
@@ -401,6 +406,7 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
   const seniorityLevel = firstString(v5.seniority_level);
   const roleType = firstString(v5.role_type);
 
+  const yoe = yoeFromV5(v5);
   const fields: HiringCafeStructuredFields = {
     jobTitle: firstString(
       info.title,
@@ -436,7 +442,9 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
         ? homepage
         : `https://${homepage.replace(/^\/+/, '')}`
       : '',
-    jobExperience: yoeFromV5(v5),
+    // Prefer max for the board numeric field (UI / year-bands); keep min on _jobExperience.
+    jobExperience: yoe.max || yoe.min,
+    ...(yoe.max > 0 ? { jobExperienceMax: yoe.max } : {}),
     seniorityLevel,
     roleType,
     educationRequirement: education.educationRequirement,
@@ -447,9 +455,11 @@ export function normalizeHiringCafeJobRecord(rec: Record<string, unknown>): Hiri
       : {}),
   };
 
-  const yoe = Number(fields.jobExperience || 0);
-  if (yoe > 0) {
-    fields._jobExperience = yoe;
+  if (yoe.min > 0) {
+    fields._jobExperience = yoe.min;
+  }
+  if (yoe.max > 0) {
+    fields._jobExperienceMax = yoe.max;
   }
 
   return fields;

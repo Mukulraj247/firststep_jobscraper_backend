@@ -40,6 +40,11 @@ import {
 import { getJob, listJobs, JobBoardJob, JobBoardFilters } from '../../api/jobs';
 import { FrozenCategoryBadge, frozenCategoriesFromJob } from './FrozenCategoryBadge';
 import { FROZEN_JOB_CATEGORIES } from '../../shared/frozenJobCategories';
+import { FROZEN_INDUSTRIES } from '../../shared/frozenIndustries';
+import {
+  FROZEN_EXPERIENCE_LEVELS,
+  FROZEN_EXPERIENCE_YEARS,
+} from '../../shared/frozenExperience';
 import { resolveJobBoardCompany, resolveJobBoardLocation } from '../../utils/jobBoardDisplay';
 import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
 import {
@@ -396,6 +401,12 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
   const salary = asText(data.salaryRange);
   const category = asText(data.jobCategory);
   const frozenCategories = frozenCategoriesFromJob(data as Record<string, unknown>);
+  const frozenExperienceLevels = Array.isArray(data.frozenExperienceLevels)
+    ? data.frozenExperienceLevels.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const frozenExperienceYears = Array.isArray(data.frozenExperienceYears)
+    ? data.frozenExperienceYears.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
   const employment = asText(data.employmentType);
   const remote = asText(data.remoteType);
   const asList = (v: unknown): string[] =>
@@ -629,6 +640,17 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75} sx={{ minWidth: 0 }}>
           {frozenCategories.map((cat) => (
             <FrozenCategoryBadge key={cat} name={cat} />
+          ))}
+        </Stack>
+      )}
+
+      {(frozenExperienceLevels.length > 0 || frozenExperienceYears.length > 0) && (
+        <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75} sx={{ minWidth: 0 }}>
+          {frozenExperienceLevels.map((lvl) => (
+            <SoftChip key={`lvl-${lvl}`} label={lvl} />
+          ))}
+          {frozenExperienceYears.map((band) => (
+            <SoftChip key={`yoe-${band}`} label={band === '15+' ? '15+ yrs' : `${band} yrs`} />
           ))}
         </Stack>
       )}
@@ -878,6 +900,12 @@ const JobDetailModal: React.FC<{
   const remote = asText(data.remoteType);
   const category = asText(data.jobCategory);
   const frozenCategories = frozenCategoriesFromJob(data as Record<string, unknown>);
+  const frozenExperienceLevels = Array.isArray(data.frozenExperienceLevels)
+    ? data.frozenExperienceLevels.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const frozenExperienceYears = Array.isArray(data.frozenExperienceYears)
+    ? data.frozenExperienceYears.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
   const industry = asText(data.sectorIndustry);
   const jobId = asText(data.jobId);
   const jobUrl = asText(data.jobUrl);
@@ -966,6 +994,16 @@ const JobDetailModal: React.FC<{
                 <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75}>
                   {frozenCategories.map((cat) => (
                     <FrozenCategoryBadge key={cat} name={cat} />
+                  ))}
+                </Stack>
+              )}
+              {(frozenExperienceLevels.length > 0 || frozenExperienceYears.length > 0) && (
+                <Stack direction="row" flexWrap="wrap" gap={0.5} mb={0.75}>
+                  {frozenExperienceLevels.map((lvl) => (
+                    <SoftChip key={`lvl-${lvl}`} label={lvl} />
+                  ))}
+                  {frozenExperienceYears.map((band) => (
+                    <SoftChip key={`yoe-${band}`} label={band === '15+' ? '15+ yrs' : `${band} yrs`} />
                   ))}
                 </Stack>
               )}
@@ -1251,6 +1289,193 @@ const JobBoardSpecialtyFilter: React.FC<{
   );
 };
 
+/**
+ * Industry filter = frozenIndustries taxonomy (career rowContext + aggregator classify).
+ */
+const JobBoardIndustryFilter: React.FC<{
+  value: string[];
+  facetOptions: string[];
+  onChange: (next: string[]) => void;
+}> = ({ value, facetOptions, onChange }) => {
+  const options = useMemo(() => {
+    const present = new Set(facetOptions);
+    const withJobs = FROZEN_INDUSTRIES.filter((name) => present.has(name));
+    const withoutJobs = FROZEN_INDUSTRIES.filter((name) => !present.has(name));
+    const ordered = [...withJobs, ...withoutJobs];
+    const missing = value.filter((item) => !ordered.includes(item as (typeof FROZEN_INDUSTRIES)[number]));
+    return missing.length ? [...missing, ...ordered] : ordered;
+  }, [facetOptions, value]);
+
+  return (
+    <Autocomplete
+      multiple
+      disableCloseOnSelect
+      size="small"
+      options={options}
+      value={value}
+      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], facetOptions))}
+      getOptionLabel={(option) => option}
+      isOptionEqualToValue={(a, b) => a === b}
+      autoHighlight
+      clearOnEscape
+      ListboxProps={{ sx: jobBoardFacetListboxSx() }}
+      renderOption={(props, option) => (
+        <li {...props} key={option} title={option}>
+          {option}
+        </li>
+      )}
+      renderTags={(selected, getTagProps) =>
+        selected.map((option, index) => {
+          const { key, onDelete } = getTagProps({ index });
+          return (
+            <Chip
+              key={key}
+              size="small"
+              label={option}
+              onDelete={onDelete}
+              sx={{ m: 0.25 }}
+            />
+          );
+        })
+      }
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="Industry"
+          placeholder={value.length ? '' : 'e.g. Banking'}
+        />
+      )}
+      sx={{ minWidth: 0, flex: '1 1 260px', maxWidth: '100%', ...heroGlassFormControlSx() }}
+    />
+  );
+};
+
+/**
+ * Experience level filter = frozenExperienceLevels taxonomy.
+ */
+const JobBoardExperienceLevelFilter: React.FC<{
+  value: string[];
+  facetOptions: string[];
+  onChange: (next: string[]) => void;
+}> = ({ value, facetOptions, onChange }) => {
+  const options = useMemo(() => {
+    const present = new Set(facetOptions);
+    const withJobs = FROZEN_EXPERIENCE_LEVELS.filter((name) => present.has(name));
+    const withoutJobs = FROZEN_EXPERIENCE_LEVELS.filter((name) => !present.has(name));
+    const ordered = [...withJobs, ...withoutJobs];
+    const missing = value.filter(
+      (item) => !ordered.includes(item as (typeof FROZEN_EXPERIENCE_LEVELS)[number])
+    );
+    return missing.length ? [...missing, ...ordered] : ordered;
+  }, [facetOptions, value]);
+
+  return (
+    <Autocomplete
+      multiple
+      disableCloseOnSelect
+      size="small"
+      options={options}
+      value={value}
+      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], facetOptions))}
+      getOptionLabel={(option) => option}
+      isOptionEqualToValue={(a, b) => a === b}
+      autoHighlight
+      clearOnEscape
+      ListboxProps={{ sx: jobBoardFacetListboxSx() }}
+      renderOption={(props, option) => (
+        <li {...props} key={option} title={option}>
+          {option}
+        </li>
+      )}
+      renderTags={(selected, getTagProps) =>
+        selected.map((option, index) => {
+          const { key, onDelete } = getTagProps({ index });
+          return (
+            <Chip
+              key={key}
+              size="small"
+              label={option}
+              onDelete={onDelete}
+              sx={{ m: 0.25 }}
+            />
+          );
+        })
+      }
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="Experience level"
+          placeholder={value.length ? '' : 'e.g. Mid-Senior Level'}
+        />
+      )}
+      sx={{ minWidth: 0, flex: '1 1 220px', maxWidth: '100%', ...heroGlassFormControlSx() }}
+    />
+  );
+};
+
+/**
+ * Experience years filter = frozenExperienceYears bands.
+ */
+const JobBoardExperienceYearsFilter: React.FC<{
+  value: string[];
+  facetOptions: string[];
+  onChange: (next: string[]) => void;
+}> = ({ value, facetOptions, onChange }) => {
+  const options = useMemo(() => {
+    const present = new Set(facetOptions);
+    const withJobs = FROZEN_EXPERIENCE_YEARS.filter((name) => present.has(name));
+    const withoutJobs = FROZEN_EXPERIENCE_YEARS.filter((name) => !present.has(name));
+    const ordered = [...withJobs, ...withoutJobs];
+    const missing = value.filter(
+      (item) => !ordered.includes(item as (typeof FROZEN_EXPERIENCE_YEARS)[number])
+    );
+    return missing.length ? [...missing, ...ordered] : ordered;
+  }, [facetOptions, value]);
+
+  return (
+    <Autocomplete
+      multiple
+      disableCloseOnSelect
+      size="small"
+      options={options}
+      value={value}
+      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], facetOptions))}
+      getOptionLabel={(option) => (option === '15+' ? '15+ years' : `${option} years`)}
+      isOptionEqualToValue={(a, b) => a === b}
+      autoHighlight
+      clearOnEscape
+      ListboxProps={{ sx: jobBoardFacetListboxSx() }}
+      renderOption={(props, option) => (
+        <li {...props} key={option} title={option}>
+          {option === '15+' ? '15+ years' : `${option} years`}
+        </li>
+      )}
+      renderTags={(selected, getTagProps) =>
+        selected.map((option, index) => {
+          const { key, onDelete } = getTagProps({ index });
+          return (
+            <Chip
+              key={key}
+              size="small"
+              label={option === '15+' ? '15+' : option}
+              onDelete={onDelete}
+              sx={{ m: 0.25 }}
+            />
+          );
+        })
+      }
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="Years of experience"
+          placeholder={value.length ? '' : 'e.g. 5-7'}
+        />
+      )}
+      sx={{ minWidth: 0, flex: '1 1 200px', maxWidth: '100%', ...heroGlassFormControlSx() }}
+    />
+  );
+};
+
 const JobBoardChipFilter: React.FC<{
   caption: string;
   value: string;
@@ -1292,6 +1517,9 @@ export const JobBoardPage: React.FC = () => {
   const [filters, setFilters] = useState<JobBoardFilters>({
     categories: [],
     frozenCategories: [],
+    frozenIndustries: [],
+    frozenExperienceLevels: [],
+    frozenExperienceYears: [],
     locations: [],
   });
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 });
@@ -1301,6 +1529,9 @@ export const JobBoardPage: React.FC = () => {
   const [added, setAdded] = useState<JobBoardAddedPreset>('all');
   const [category, setCategory] = useState('');
   const [frozenCategories, setFrozenCategories] = useState<string[]>([]);
+  const [frozenIndustries, setFrozenIndustries] = useState<string[]>([]);
+  const [frozenExperienceLevels, setFrozenExperienceLevels] = useState<string[]>([]);
+  const [frozenExperienceYears, setFrozenExperienceYears] = useState<string[]>([]);
   const [location, setLocation] = useState('');
   const [workMode, setWorkMode] = useState('');
   const [jobType, setJobType] = useState('');
@@ -1324,6 +1555,9 @@ export const JobBoardPage: React.FC = () => {
         q: q || undefined,
         category: category || undefined,
         frozenCategories: frozenCategories.length ? frozenCategories : undefined,
+        frozenIndustries: frozenIndustries.length ? frozenIndustries : undefined,
+        frozenExperienceLevels: frozenExperienceLevels.length ? frozenExperienceLevels : undefined,
+        frozenExperienceYears: frozenExperienceYears.length ? frozenExperienceYears : undefined,
         location: location || undefined,
         workMode: workMode || undefined,
         jobType: jobType || undefined,
@@ -1337,6 +1571,9 @@ export const JobBoardPage: React.FC = () => {
       setFilters({
         categories: res.filters?.categories || [],
         frozenCategories: res.filters?.frozenCategories || [],
+        frozenIndustries: res.filters?.frozenIndustries || [],
+        frozenExperienceLevels: res.filters?.frozenExperienceLevels || [],
+        frozenExperienceYears: res.filters?.frozenExperienceYears || [],
         locations: res.filters?.locations || [],
       });
     } catch {
@@ -1345,7 +1582,7 @@ export const JobBoardPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, q, category, frozenCategories, location, workMode, jobType, added, source, h1bSponsorFriendly, h1bFy2026Match, t]);
+  }, [page, q, category, frozenCategories, frozenIndustries, frozenExperienceLevels, frozenExperienceYears, location, workMode, jobType, added, source, h1bSponsorFriendly, h1bFy2026Match, t]);
 
   useEffect(() => {
     void loadJobs();
@@ -1407,6 +1644,9 @@ export const JobBoardPage: React.FC = () => {
     setAdded('all');
     setCategory('');
     setFrozenCategories([]);
+    setFrozenIndustries([]);
+    setFrozenExperienceLevels([]);
+    setFrozenExperienceYears([]);
     setLocation('');
     setWorkMode('');
     setJobType('');
@@ -1421,6 +1661,9 @@ export const JobBoardPage: React.FC = () => {
     added,
     category,
     frozenCategories,
+    frozenIndustries,
+    frozenExperienceLevels,
+    frozenExperienceYears,
     location,
     workMode,
     jobType,
@@ -1538,6 +1781,30 @@ export const JobBoardPage: React.FC = () => {
                 facetOptions={filters.frozenCategories}
                 onChange={(next) => {
                   setFrozenCategories(next);
+                  setPage(1);
+                }}
+              />
+              <JobBoardIndustryFilter
+                value={frozenIndustries}
+                facetOptions={filters.frozenIndustries}
+                onChange={(next) => {
+                  setFrozenIndustries(next);
+                  setPage(1);
+                }}
+              />
+              <JobBoardExperienceLevelFilter
+                value={frozenExperienceLevels}
+                facetOptions={filters.frozenExperienceLevels}
+                onChange={(next) => {
+                  setFrozenExperienceLevels(next);
+                  setPage(1);
+                }}
+              />
+              <JobBoardExperienceYearsFilter
+                value={frozenExperienceYears}
+                facetOptions={filters.frozenExperienceYears}
+                onChange={(next) => {
+                  setFrozenExperienceYears(next);
                   setPage(1);
                 }}
               />

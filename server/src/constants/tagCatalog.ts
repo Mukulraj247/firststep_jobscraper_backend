@@ -20,7 +20,8 @@ export type TagNamespace =
   | 'size'
   | 'comp'
   | 'perk'
-  | 'function';
+  | 'function'
+  | 'source';
 
 export interface TagNamespaceDef {
   namespace: TagNamespace;
@@ -444,6 +445,11 @@ export const TAG_CATALOG: TagNamespaceDef[] = [
       'Consulting',
       'Program / Project Management',
     ],
+  },
+  {
+    namespace: 'source',
+    label: 'Source',
+    values: ['Aggregator', 'Direct Company'],
   },
 ];
 

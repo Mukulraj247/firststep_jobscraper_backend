@@ -34,18 +34,30 @@ select:-webkit-autofill:focus {
   transition: background-color 5000s ease-in-out 0s !important;
 }
 
-a {
-  color: #ff00c3;
+/* ScoutText link colors — do not use legacy #ff00c3 on anchors */
+a:not(.MuiButtonBase-root):not(.MuiButton-root) {
+  color: #2a8e9e;
+  text-decoration: none;
 }
 
-a:hover {
-  color: #ff00c3;
+a:not(.MuiButtonBase-root):not(.MuiButton-root):hover {
+  color: #023345;
+}
+
+a:not(.MuiButtonBase-root):not(.MuiButton-root):visited {
+  color: #357a7a;
+}
+
+a:not(.MuiButtonBase-root):not(.MuiButton-root):focus-visible {
+  color: #023345;
+  outline: 2px solid #4fb3a9;
+  outline-offset: 2px;
 }
 
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
-  color: #ff00c3;
+  color: #023345;
 }
 
 /* Browser-specific elements */

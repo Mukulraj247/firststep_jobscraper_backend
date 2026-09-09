@@ -29,6 +29,8 @@ import { AutomationDataPage } from './AutomationDataPage';
 import { AutomationConfigPage } from './AutomationConfigPage';
 import { RunDetailsPage } from './RunDetailsPage';
 import { AdminPage } from './AdminPage';
+import { UserDashboardShell } from '../user-dashboard/UserDashboardShell';
+import { isUserDashboardPath } from '../user-dashboard/routeHelpers';
 
 function SkipToMain() {
   const location = useLocation();
@@ -130,10 +132,11 @@ export const PageWrapper = () => {
   }, [notify, t, navigate]);
 
   const isAuthPage = location.pathname === '/login' || location.pathname === '/register';
+  const isUserDashboard = isUserDashboardPath(location.pathname);
   const isRecordingPage = location.pathname === '/recording';
   const isAdminPage = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
   const usesAppShellViewport =
-    !isAuthPage && !isAdminPage && !isRecordingPage && location.pathname !== '/recording-setup';
+    !isAuthPage && !isAdminPage && !isRecordingPage && !isUserDashboard && location.pathname !== '/recording-setup';
 
   useEffect(() => {
     if (!usesAppShellViewport) return undefined;
@@ -169,7 +172,7 @@ export const PageWrapper = () => {
             {/* Skip link is first in the DOM, before NavBar, so it is the first tab stop. */}
             <SkipToMain />
             {/* Show NavBar only for main app pages, not for recording or admin pages */}
-            {!isRecordingPage && !isAdminPage && (
+            {!isRecordingPage && !isAdminPage && !isUserDashboard && (
               <Box sx={{
                 flexShrink: 0,
                 zIndex: 1100,
@@ -182,16 +185,18 @@ export const PageWrapper = () => {
               flex: viewportLocked ? 1 : undefined,
               display: 'flex',
               flexDirection: 'column',
-              height: viewportLocked ? undefined : (isAuthPage || isAdminPage || isRecordingPage ? '100vh' : 'calc(100vh - 64px)'),
-              maxHeight: viewportLocked ? undefined : (isAuthPage || isAdminPage || isRecordingPage ? '100vh' : 'calc(100vh - 64px)'),
-              minHeight: viewportLocked ? 0 : undefined,
+              height: viewportLocked ? undefined : (isAuthPage || isAdminPage || isRecordingPage ? '100vh' : isUserDashboard ? undefined : 'calc(100vh - 64px)'),
+              maxHeight: viewportLocked ? undefined : (isAuthPage || isAdminPage || isRecordingPage ? '100vh' : isUserDashboard ? undefined : 'calc(100vh - 64px)'),
+              minHeight: viewportLocked ? 0 : isUserDashboard ? '100dvh' : undefined,
               minWidth: 0,
               width: '100%',
               maxWidth: '100%',
-              overflow: 'auto',
-              ...hiddenScrollbarSx,
+              // User portal manages its own scroll with a fixed sidebar — don't nest overflow here.
+              overflow: isUserDashboard ? 'visible' : 'auto',
+              ...(!isUserDashboard ? hiddenScrollbarSx : {}),
             }}>
               <Routes>
+                <Route path="/user/*" element={<UserDashboardShell />} />
                 <Route element={<UserRoute />}>
                   <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/dashboard" element={<MainPage handleEditRecording={handleEditRecording} initialContent="dashboard" />} />

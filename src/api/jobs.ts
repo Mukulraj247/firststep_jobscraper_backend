@@ -36,10 +36,27 @@ export interface JobBoardJob {
     educationRequirement?: string;
     visaSponsorship?: string;
     frozenCategories?: string[];
+    frozenIndustries?: string[];
+    frozenExperienceLevels?: string[];
+    frozenExperienceYears?: string[];
     companyEmployeeCount?: number;
     companyFoundedYear?: number;
     companyWebsite?: string;
     aggregatorPostingUrl?: string;
+    // DOL-backed H-1B sponsorship signals, distinct from the JD's visaSponsorship text.
+    h1bEligible?: boolean;
+    h1bCompanyScore?: string;
+    h1bRoleScore?: string;
+    h1bMappingStatus?: string;
+    h1bFilingCount?: number;
+    h1bDataAsOf?: string | Date | null;
+    h1bMatchedGovEmployer?: string;
+    // FY2026 job-level filing match.
+    h1bFy2026Match?: boolean;
+    h1bFy2026MatchedTitle?: string;
+    h1bFy2026CertifiedCount?: number;
+    h1bFy2026DataAsOf?: string | Date | null;
+    h1bFy2026TitleConfidence?: number;
     [key: string]: any;
   };
 }
@@ -48,6 +65,12 @@ export interface JobBoardFilters {
   categories: string[];
   /** Frozen taxonomy categories that currently have jobs, in taxonomy order. */
   frozenCategories: string[];
+  /** Controlled industry labels that currently have jobs. */
+  frozenIndustries: string[];
+  /** Experience level tags that currently have jobs. */
+  frozenExperienceLevels: string[];
+  /** Experience year bands that currently have jobs. */
+  frozenExperienceYears: string[];
   locations: string[];
 }
 
@@ -69,6 +92,10 @@ export const listJobs = async (params?: {
   category?: string;
   /** Frozen taxonomy names; a job matches when it carries any of them. */
   frozenCategories?: string[];
+  /** Controlled industry names; a job matches when it carries any of them. */
+  frozenIndustries?: string[];
+  frozenExperienceLevels?: string[];
+  frozenExperienceYears?: string[];
   location?: string;
   workMode?: string;
   jobType?: string;
@@ -89,6 +116,15 @@ export const listJobs = async (params?: {
       ...(params?.frozenCategories?.length
         ? { frozenCategory: params.frozenCategories.join(',') }
         : {}),
+      ...(params?.frozenIndustries?.length
+        ? { frozenIndustry: params.frozenIndustries.join(',') }
+        : {}),
+      ...(params?.frozenExperienceLevels?.length
+        ? { frozenExperienceLevel: params.frozenExperienceLevels.join(',') }
+        : {}),
+      ...(params?.frozenExperienceYears?.length
+        ? { frozenExperienceYear: params.frozenExperienceYears.join(',') }
+        : {}),
       ...(params?.location ? { location: params.location } : {}),
       ...(params?.workMode ? { workMode: params.workMode } : {}),
       ...(params?.jobType ? { jobType: params.jobType } : {}),
@@ -107,6 +143,9 @@ export const listJobs = async (params?: {
     filters: {
       categories: data.filters?.categories || [],
       frozenCategories: data.filters?.frozenCategories || [],
+      frozenIndustries: data.filters?.frozenIndustries || [],
+      frozenExperienceLevels: data.filters?.frozenExperienceLevels || [],
+      frozenExperienceYears: data.filters?.frozenExperienceYears || [],
       locations: data.filters?.locations || [],
     },
   };

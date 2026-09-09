@@ -14,6 +14,7 @@ import {
   isAidevboardJobPostingUrl,
   isAggregatorHostUrl,
   isAggregatorJobPostingUrl,
+  isAggregatorListingSource,
   usesAggregatorHtmlOnlyEnrichment,
 } from './aggregatorIdentity';
 import { pickHiringCafeJobUrl, isHiringCafeJobPostingUrl } from './hiringCafeDetail';
@@ -23,6 +24,12 @@ import { pickChoppingBlockJobUrl } from './choppingblockDetail';
 import { pickAidevboardJobUrl } from './aidevboardDetail';
 import { normalizeOwnerIdForWrite } from '../utils/ownerId';
 import { classifyJobCategories } from './jobCategoryTagger';
+import { resolveFrozenIndustries } from '../../../src/shared/frozenIndustries';
+import {
+  EXPERIENCE_RULES_VERSION,
+  experienceContentHashParts,
+  resolveFrozenExperience,
+} from '../../../src/shared/frozenExperience';
 import logger from '../logger';
 
 export const JOB_BOARD_STALE_DAYS = parseInt(process.env.JOB_BOARD_STALE_DAYS || '14', 10);
@@ -94,6 +101,7 @@ export function buildListSnapshot(data: Record<string, any>): IJobBoardListSnaps
     employmentType: decodeHtmlEntities(asText(data.employmentType)),
     remoteType: decodeHtmlEntities(asText(data.remoteType)),
     jobExperience: asExperience(data.jobExperience),
+    jobExperienceMax: asExperience(data.jobExperienceMax ?? data._jobExperienceMax),
     sectorIndustry: decodeHtmlEntities(asText(data.sectorIndustry)),
     f500: asText(data.f500),
     date: parseDate(data.date),
@@ -765,8 +773,7 @@ export async function enqueueJobBoardEnrichments(opts: {
       }
       stats.skippedComplete += 1;
 
-      // List-complete rows never hit the enrichment worker — tag here so Specialty
-      // badges appear for every source (career scrapers, HC list-complete, etc.).
+      // List-complete rows never hit the enrichment worker — tag Specialty + industry here.
       const tagFields: Record<string, unknown> = {};
       try {
         const tagResult = await classifyJobCategories({
@@ -785,6 +792,74 @@ export async function enqueueJobBoardEnrichments(opts: {
         logger.log(
           'warn',
           `enqueueJobBoardEnrichments tagger failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+        );
+      }
+
+      try {
+        const sectorIndustry = String(
+          fields.sectorIndustry || item.snapshot?.sectorIndustry || ''
+        ).trim();
+        const industryResult = resolveFrozenIndustries({
+          sectorIndustry,
+          title: String(fields.jobTitle || ''),
+          companyName: String(fields.companyName || ''),
+          source: listingSource,
+          isAggregator: isAggregatorListingSource(listingSource),
+        });
+        tagFields.frozenIndustries = industryResult.frozenIndustries;
+        tagFields.industryClassification = {
+          method: industryResult.method,
+          rulesVersion: industryResult.rulesVersion,
+          classifiedAt: nowDate,
+          contentHash: String(fields.contentHash || ''),
+        };
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `enqueueJobBoardEnrichments industry resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+        );
+      }
+
+      try {
+        const snap = item.snapshot || {};
+        const quals = [
+          ...(Array.isArray(snap.minimumQualifications) ? snap.minimumQualifications : []),
+          ...(Array.isArray(snap.preferredQualifications) ? snap.preferredQualifications : []),
+        ]
+          .map((x: unknown) => String(x || '').trim())
+          .filter(Boolean);
+        const expInput = {
+          title: String(fields.jobTitle || snap.jobTitle || ''),
+          description: String(fields.jobDescription || snap.jobDescription || ''),
+          qualifications: quals,
+          seniorityLevel: String(snap.seniorityLevel || ''),
+          minYoe: Number(snap.jobExperience) > 0 ? Number(snap.jobExperience) : null,
+          maxYoe:
+            Number((snap as any).jobExperienceMax) > 0
+              ? Number((snap as any).jobExperienceMax)
+              : null,
+          isAggregator: isAggregatorListingSource(listingSource),
+        };
+        const expHash = createHash('sha1')
+          .update(experienceContentHashParts(expInput))
+          .digest('hex')
+          .slice(0, 16);
+        const expResult = resolveFrozenExperience(expInput);
+        tagFields.frozenExperienceLevels = expResult.frozenExperienceLevels;
+        tagFields.frozenExperienceYears = expResult.frozenExperienceYears;
+        tagFields.experienceClassification = {
+          method: expResult.method,
+          rulesVersion: EXPERIENCE_RULES_VERSION,
+          classifiedAt: nowDate,
+          contentHash: expHash,
+          matchedSignals: expResult.matchedSignals.slice(0, 40),
+        };
+        // Always write so a higher resolved YOE can replace a stale min, and pollution can clear.
+        tagFields.jobExperience = expResult.jobExperience;
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `enqueueJobBoardEnrichments experience resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
         );
       }
 

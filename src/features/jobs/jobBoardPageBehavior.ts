@@ -6,6 +6,9 @@ export const JOB_BOARD_FILTER_CONTROLS = [
   'added',
   'category',
   'frozenCategory',
+  'frozenIndustry',
+  'frozenExperienceLevel',
+  'frozenExperienceYear',
   'location',
   'workMode',
   'jobType',
@@ -72,6 +75,9 @@ export type JobBoardFilterState = {
   category: string;
   /** Frozen taxonomy multi-select; a job matches when it carries any selected name. */
   frozenCategories?: string[];
+  frozenIndustries?: string[];
+  frozenExperienceLevels?: string[];
+  frozenExperienceYears?: string[];
   location: string;
   workMode: string;
   jobType: string;
@@ -189,6 +195,9 @@ export function hasActiveJobBoardFilters(value: JobBoardFilterState): boolean {
     || (value.added && value.added !== 'all')
     || value.category
     || value.frozenCategories?.length
+    || value.frozenIndustries?.length
+    || value.frozenExperienceLevels?.length
+    || value.frozenExperienceYears?.length
     || value.location
     || value.workMode
     || value.jobType

@@ -22,6 +22,7 @@ import {
   buildReconfigureMovesCsvFilename,
   buildScheduleFiresCsv,
   buildScheduleFiresCsvFilename,
+  canReconfigureOnHeatmapDate,
   downloadTextFile,
   heatmapScheduledTotal,
   reconfigureApiMovesToCsvRows,
@@ -85,6 +86,7 @@ export function ScrapersPage() {
   }, [heatmapDate, heatmapQuery.data?.fires]);
 
   const handleReconfigure = useCallback(async () => {
+    if (!canReconfigureOnHeatmapDate(heatmapDate, formatIstYmd(Date.now()))) return;
     setConfirmOpen(false);
     setIsReconfiguring(true);
     try {
@@ -112,6 +114,8 @@ export function ScrapersPage() {
   }, [heatmapDate, notify, queryClient]);
 
   const scheduledCount = heatmapScheduledTotal(heatmapQuery.data?.hours ?? []);
+  const todayYmd = formatIstYmd(nowMs);
+  const canReconfigure = canReconfigureOnHeatmapDate(heatmapDate, todayYmd);
 
   return (
     <Box
@@ -132,11 +136,15 @@ export function ScrapersPage() {
         isLoading={heatmapQuery.isLoading}
         isReconfiguring={isReconfiguring}
         canDownloadSchedules={!heatmapQuery.isLoading && !heatmapQuery.isError}
+        canReconfigure={canReconfigure}
         onRefresh={() => {
           void handleManualRefresh();
         }}
         onDownloadSchedules={handleDownloadSchedules}
-        onReconfigure={() => setConfirmOpen(true)}
+        onReconfigure={() => {
+          if (!canReconfigure) return;
+          setConfirmOpen(true);
+        }}
       />
 
       <ScheduleHeatmap
