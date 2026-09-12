@@ -1,5 +1,5 @@
 import { useState, useContext, useEffect, useRef } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { AuthContext } from '../context/auth';
 import { Box, Typography, Button, CircularProgress, Alert } from '@mui/material';
@@ -175,7 +175,8 @@ function LoginAuth0Only() {
           {t('login.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Sign in with the same Auth0 account as First Step.
+          One Auth0 sign-in for ScoutX. <strong>ScoutX_Admin</strong> opens ops;
+          <strong> ScoutX_User</strong> opens the customer portal.
         </Typography>
 
         {authError && (
@@ -269,9 +270,6 @@ function LoginAuth0Missing() {
           Set <code>VITE_AUTH0_DOMAIN</code> and <code>VITE_AUTH0_CLIENT_ID</code> in ScoutX{' '}
           <code>.env</code> (same values as First Step development). Password login is disabled.
         </Typography>
-        <Button component={Link} to="/user/login" variant="outlined">
-          Customer portal login
-        </Button>
       </Box>
     </Box>
   );

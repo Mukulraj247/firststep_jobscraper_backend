@@ -9,9 +9,7 @@ import { ClustersPage } from './pages/ClustersPage';
 import { FeedPage } from './pages/FeedPage';
 import { HomePage } from './pages/HomePage';
 import { JobDetailPage } from './pages/JobDetailPage';
-import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
-import { RegisterPage } from './pages/RegisterPage';
 import { RequestNewPage } from './pages/RequestNewPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { SavedPage } from './pages/SavedPage';
@@ -40,7 +38,7 @@ function PortalGate({ children }: { children: React.ReactNode }) {
   }
 
   if (!user && !isPublicUserRoute(location.pathname)) {
-    return <Navigate to="/user/login" replace state={{ from: location.pathname }} />;
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
   return <>{children}</>;
@@ -86,8 +84,9 @@ export function UserDashboardShell() {
     <PortalGate>
       <AuthenticatedLayout>
         <Routes>
-          <Route path="login" element={<LoginPage />} />
-          <Route path="register" element={<RegisterPage />} />
+          {/* Unified Auth0 entry is /login — legacy portal URLs redirect there. */}
+          <Route path="login" element={<Navigate to="/login" replace />} />
+          <Route path="register" element={<Navigate to="/register" replace />} />
           <Route index element={<HomePage />} />
           <Route path="clusters" element={<ClustersPage />} />
           <Route path="clusters/:slug" element={<ClusterDetailPage />} />

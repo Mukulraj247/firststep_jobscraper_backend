@@ -75,7 +75,7 @@ function RegisterWithAuth0({
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           ScoutX uses the First Step Auth0 tenant. Password registration is disabled. After Auth0
-          signup you will land on the customer portal unless you have the ScoutX_Admin role.
+          signup, ScoutX_Admin opens ops and ScoutX_User opens the customer portal.
         </Typography>
         <Button
           fullWidth

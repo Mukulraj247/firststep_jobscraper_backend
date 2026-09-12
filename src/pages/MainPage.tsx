@@ -343,42 +343,58 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
     };
   }, [user?.id, connectToQueueSocket, disconnectQueueSocket]);
 
-  const DisplayContent = () => {
-    switch (content) {
-      case 'scrapers':
-        return <Recordings
+  // Keep each section mounted only when selected — avoid remounting JobBoard via
+  // an inner render function that recreates element trees on every MainPage render.
+  let body: React.ReactNode = null;
+  switch (content) {
+    case 'scrapers':
+      body = (
+        <Recordings
           handleRunRecording={handleRunRecording}
           setRecordingInfo={setRecordingInfo}
           handleScheduleRecording={handleScheduleRecording}
-        />;
-      case 'jobs':
-        return <JobBoardPage />;
-      case 'runs':
-        return <RunsPage
+        />
+      );
+      break;
+    case 'jobs':
+      body = <JobBoardPage />;
+      break;
+    case 'runs':
+      body = (
+        <RunsPage
           currentInterpretationLog={currentInterpretationLog}
           abortRunHandler={abortRunHandler}
           runId={ids.runId}
           runningRecordingName={runningRecordingName}
-        />;
-      case 'failures':
-        return <FailureDashboardPage />;
-      case 'enrichment':
-        return <EnrichmentPage />;
-      case 'h1b':
-        return <H1bPage />;
-      case 'communication':
-        return <CommunicationPage />;
-      case 'aggregators':
-        return <AggregatorsPage />;
-      case 'proxy':
-        return <ProxyForm />;
-      case 'dashboard':
-        return <DashboardPage />;
-      case 'automations':
-        return <AutomationsPage />;
-      default:
-        return null;
-    }
+        />
+      );
+      break;
+    case 'failures':
+      body = <FailureDashboardPage />;
+      break;
+    case 'enrichment':
+      body = <EnrichmentPage />;
+      break;
+    case 'h1b':
+      body = <H1bPage />;
+      break;
+    case 'communication':
+      body = <CommunicationPage />;
+      break;
+    case 'aggregators':
+      body = <AggregatorsPage />;
+      break;
+    case 'proxy':
+      body = <ProxyForm />;
+      break;
+    case 'dashboard':
+      body = <DashboardPage />;
+      break;
+    case 'automations':
+      body = <AutomationsPage />;
+      break;
+    default:
+      body = null;
   }
 
   return (
@@ -395,7 +411,7 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
             : { overflow: 'auto' }),
         }}
       >
-        {DisplayContent()}
+        {body}
       </Box>
     </AppShell>
   );

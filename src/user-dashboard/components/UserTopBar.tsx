@@ -14,7 +14,6 @@ import {
   Typography,
 } from '@mui/material';
 import CloseRounded from '@mui/icons-material/CloseRounded';
-import LaunchOutlined from '@mui/icons-material/LaunchOutlined';
 import MenuRounded from '@mui/icons-material/MenuRounded';
 import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutlined';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -359,10 +358,6 @@ export function UserTopBar() {
           </Box>
         )}
         {showDemoPersonas && <Divider />}
-        <MenuItem component={Link} to="/login" onClick={() => setMenuAnchor(null)}>
-          <LaunchOutlined sx={{ fontSize: 16, mr: 1 }} />
-          Ops Login
-        </MenuItem>
       </Menu>
 
       <Drawer

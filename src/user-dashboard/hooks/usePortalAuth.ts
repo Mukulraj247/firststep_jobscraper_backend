@@ -50,7 +50,7 @@ function usePortalAuthUnavailable() {
       navigate('/login');
     },
     logout: async () => {
-      navigate('/user/login');
+      navigate('/login');
     },
     switchDemoPersona: async () => undefined,
     refresh: async () => null,
@@ -62,7 +62,6 @@ function usePortalAuthAuth0() {
   const {
     isAuthenticated,
     isLoading: auth0Loading,
-    loginWithRedirect,
     logout: auth0Logout,
     getAccessTokenSilently,
     user: auth0User,
@@ -131,7 +130,7 @@ function usePortalAuthAuth0() {
         }
 
         // ScoutX_Admin always lands on the shared ops console (same scrapers as ops owner).
-        // Keep loading=true so PortalGate does not bounce to /user/login before navigate.
+        // Keep loading=true so PortalGate does not bounce to /login before navigate.
         if (hasScoutXAdmin(data.scoutxRoles)) {
           writePortalUser(null);
           window.localStorage.setItem('user', JSON.stringify(data));
@@ -189,20 +188,16 @@ function usePortalAuthAuth0() {
   }, [auth0Loading]);
 
   const login = async () => {
+    // Single Auth0 entry — role landing happens after exchange on /login.
     clearSkipAuth0AutoExchange();
-    await loginWithRedirect({
-      appState: { returnTo: '/user' },
-      authorizationParams: {
-        audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-        scope: 'openid profile email',
-      },
-    });
+    navigate('/login');
   };
 
   const logout = async () => {
     writePortalUser(null);
+    window.localStorage.removeItem('user');
     setUser(null);
-    await auth0Logout({ logoutParams: { returnTo: `${window.location.origin}/user/login` } });
+    await auth0Logout({ logoutParams: { returnTo: `${window.location.origin}/login` } });
   };
 
   const switchDemoPersona = async () => {
@@ -220,7 +215,7 @@ export function useRequirePortalAuth() {
     if (loading) return;
     const path = window.location.pathname;
     if (!user && !isPublicUserRoute(path)) {
-      navigate('/user/login', { replace: true });
+      navigate('/login', { replace: true });
     }
   }, [user, loading, navigate]);
 

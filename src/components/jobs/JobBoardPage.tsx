@@ -89,6 +89,7 @@ import {
   jobBoardScrollSx,
   orderFrozenCategories,
   resolveJobDisplayInstant,
+  sameStringArray,
   type JobBoardAddedPreset,
 } from '../../features/jobs/jobBoardPageBehavior';
 
@@ -1573,7 +1574,7 @@ const JobBoardChipFilter: React.FC<{
   </Stack>
 );
 
-export const JobBoardPage: React.FC = () => {
+export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
   const { t } = useTranslation();
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -1609,23 +1610,43 @@ export const JobBoardPage: React.FC = () => {
   const [h1bFy2026Match, setH1bFy2026Match] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobBoardJob | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const hasLoadedOnceRef = useRef(false);
   const loadSeqRef = useRef(0);
+  const tRef = useRef(t);
+  tRef.current = t;
 
-  // Fetch when filter/page inputs change. Do not depend on `t` (unstable across re-renders).
-  // Soft-refresh after the first load so the grid (and scroll) are not wiped.
+  // Primitive fetch key — avoids array-identity churn retriggering loads.
+  const fetchKey = [
+    page,
+    q,
+    category,
+    frozenCategories.join('\u0001'),
+    frozenIndustries.join('\u0001'),
+    frozenExperienceLevels.join('\u0001'),
+    frozenExperienceYears.join('\u0001'),
+    frozenStates.join('\u0001'),
+    location,
+    workMode,
+    jobType,
+    added,
+    source,
+    h1bSponsorFriendly ? '1' : '0',
+    h1bFy2026Match ? '1' : '0',
+  ].join('\u0002');
+
   useEffect(() => {
     const seq = ++loadSeqRef.current;
     let cancelled = false;
 
     const run = async () => {
       setError('');
-      if (hasLoadedOnceRef.current) {
+      // Only blank the grid on the true first load. After that, keep cards + scroll.
+      if (hasLoadedOnce || jobs.length > 0) {
         setRefreshing(true);
       } else {
         setLoading(true);
@@ -1655,26 +1676,46 @@ export const JobBoardPage: React.FC = () => {
           h1bFy2026Match: h1bFy2026Match || undefined,
         });
         if (cancelled || seq !== loadSeqRef.current) return;
+
         setJobs(res.jobs);
         setPagination(res.pagination);
-        setFilters({
-          categories: res.filters?.categories || [],
-          frozenCategories: res.filters?.frozenCategories || [],
-          frozenIndustries: res.filters?.frozenIndustries || [],
-          frozenExperienceLevels: res.filters?.frozenExperienceLevels || [],
-          frozenExperienceYears: res.filters?.frozenExperienceYears || [],
-          frozenStates: res.filters?.frozenStates || [],
-          locations: res.filters?.locations || [],
+        setFilters((prev) => {
+          const next: JobBoardFilters = {
+            categories: res.filters?.categories || [],
+            frozenCategories: res.filters?.frozenCategories || [],
+            frozenIndustries: res.filters?.frozenIndustries || [],
+            frozenExperienceLevels: res.filters?.frozenExperienceLevels || [],
+            frozenExperienceYears: res.filters?.frozenExperienceYears || [],
+            frozenStates: res.filters?.frozenStates || [],
+            locations: res.filters?.locations || [],
+          };
+          if (
+            sameStringArray(prev.categories, next.categories) &&
+            sameStringArray(prev.frozenCategories, next.frozenCategories) &&
+            sameStringArray(prev.frozenIndustries, next.frozenIndustries) &&
+            sameStringArray(prev.frozenExperienceLevels, next.frozenExperienceLevels) &&
+            sameStringArray(prev.frozenExperienceYears, next.frozenExperienceYears) &&
+            sameStringArray(prev.frozenStates, next.frozenStates) &&
+            sameStringArray(prev.locations, next.locations)
+          ) {
+            return prev;
+          }
+          return next;
         });
-        hasLoadedOnceRef.current = true;
+        setHasLoadedOnce(true);
       } catch {
         if (cancelled || seq !== loadSeqRef.current) return;
-        setError(t('jobboard.load_error', { defaultValue: 'Could not load jobs.' }));
-        setJobs([]);
+        setError(
+          tRef.current('jobboard.load_error', { defaultValue: 'Could not load jobs.' })
+        );
+        // Keep prior jobs on refresh failure; only clear when we had nothing.
+        setJobs((prev) => (hasLoadedOnce || prev.length ? prev : []));
       } finally {
-        if (cancelled || seq !== loadSeqRef.current) return;
-        setLoading(false);
-        setRefreshing(false);
+        // Always clear flags for the latest in-flight request.
+        if (seq === loadSeqRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     };
 
@@ -1682,24 +1723,9 @@ export const JobBoardPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `t` intentionally omitted (error string only)
-  }, [
-    page,
-    q,
-    category,
-    frozenCategories,
-    frozenIndustries,
-    frozenExperienceLevels,
-    frozenExperienceYears,
-    frozenStates,
-    location,
-    workMode,
-    jobType,
-    added,
-    source,
-    h1bSponsorFriendly,
-    h1bFy2026Match,
-  ]);
+    // fetchKey encodes every filter input used above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchKey]);
 
   useEffect(() => {
     if (!selectedId || !modalOpen) {
@@ -1727,12 +1753,26 @@ export const JobBoardPage: React.FC = () => {
     const handle = window.setTimeout(() => {
       const next = qDraft.trim();
       setQ((prev) => {
-        if (prev !== next) setPage(1);
+        if (prev === next) return prev;
+        setPage(1);
         return next;
       });
     }, 320);
     return () => window.clearTimeout(handle);
   }, [qDraft]);
+
+  const patchFrozenSelection = (
+    setter: React.Dispatch<React.SetStateAction<string[]>>,
+    next: string[]
+  ) => {
+    let changed = false;
+    setter((prev) => {
+      if (sameStringArray(prev, next)) return prev;
+      changed = true;
+      return [...next];
+    });
+    if (changed) setPage(1);
+  };
 
   const openJob = (id: string) => {
     setSelectedId(id);
@@ -1895,40 +1935,35 @@ export const JobBoardPage: React.FC = () => {
                 value={frozenCategories}
                 facetOptions={filters.frozenCategories}
                 onChange={(next) => {
-                  setFrozenCategories(next);
-                  setPage(1);
+                  patchFrozenSelection(setFrozenCategories, next);
                 }}
               />
               <JobBoardIndustryFilter
                 value={frozenIndustries}
                 facetOptions={filters.frozenIndustries}
                 onChange={(next) => {
-                  setFrozenIndustries(next);
-                  setPage(1);
+                  patchFrozenSelection(setFrozenIndustries, next);
                 }}
               />
               <JobBoardExperienceLevelFilter
                 value={frozenExperienceLevels}
                 facetOptions={filters.frozenExperienceLevels}
                 onChange={(next) => {
-                  setFrozenExperienceLevels(next);
-                  setPage(1);
+                  patchFrozenSelection(setFrozenExperienceLevels, next);
                 }}
               />
               <JobBoardExperienceYearsFilter
                 value={frozenExperienceYears}
                 facetOptions={filters.frozenExperienceYears}
                 onChange={(next) => {
-                  setFrozenExperienceYears(next);
-                  setPage(1);
+                  patchFrozenSelection(setFrozenExperienceYears, next);
                 }}
               />
               <JobBoardStateFilter
                 value={frozenStates}
                 facetOptions={filters.frozenStates}
                 onChange={(next) => {
-                  setFrozenStates(next);
-                  setPage(1);
+                  patchFrozenSelection(setFrozenStates, next);
                 }}
               />
               <JobBoardFacetAutocomplete
@@ -1937,6 +1972,7 @@ export const JobBoardPage: React.FC = () => {
                 value={category}
                 options={filters.categories}
                 onChange={(next) => {
+                  if (next === category) return;
                   setCategory(next);
                   setPage(1);
                 }}
@@ -1947,6 +1983,7 @@ export const JobBoardPage: React.FC = () => {
                 value={location}
                 options={filters.locations}
                 onChange={(next) => {
+                  if (next === location) return;
                   setLocation(next);
                   setPage(1);
                 }}
@@ -2041,7 +2078,7 @@ export const JobBoardPage: React.FC = () => {
         </Typography>
       )}
 
-      {loading ? (
+      {loading && !hasLoadedOnce ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
           <CircularProgress size={36} sx={{ color: FIRSTSTEP.tealDark }} />
         </Box>
@@ -2143,6 +2180,6 @@ export const JobBoardPage: React.FC = () => {
       <JobDetailModal open={modalOpen} job={detail} loading={detailLoading} onClose={closeModal} />
     </Box>
   );
-};
+});
 
 export default JobBoardPage;

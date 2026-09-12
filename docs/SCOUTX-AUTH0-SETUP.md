@@ -53,7 +53,7 @@ Ignore Auth0’s sample Node snippet (`jwtCheck` Express demo) — ScoutX alread
 
 1. Open **FIRSTSTEP (Test Application)** (`x2ginS1tSrJizlvIdyQLzeEfWfGFFbd9`).
 2. Keep First Step URLs (`http://localhost:5174`, …).
-3. Add ScoutX Allowed Callback / Logout / Web Origins: `http://localhost:5173`, `/login`, `/user/login`.
+3. Add ScoutX Allowed Callback / Logout / Web Origins: app origin (e.g. `http://localhost:5173`, `https://scoutx-dev.firststepjob.com`). Logout return uses `/login` only.
 4. **Authorize** that SPA against API `https://scoutx.app/api` (see above).
 5. Roles: `ScoutX_Admin`, `ScoutX_User`.
 6. **Required for ops:** Post-Login Action copies RBAC roles onto the access token:
@@ -74,17 +74,17 @@ exports.onExecutePostLogin = async (event, api) => {
    - After assigning the role: log out fully, log in again (old tokens lack the claim).
    - Confirm Action is under **Actions → Triggers → Login / Post Login** (between Start and Complete).
    - Server log `[auth0/exchange]` should show `roles: ['ScoutX_Admin', …]` and `rolesClaim: ['ScoutX_Admin']`.
-   - Login via `/user/login` or `/login`: `ScoutX_Admin` is redirected to `/dashboard` (shared ops owner). UI shows the Auth0 actor email; scrapers stay owned by `SCOUTX_OPS_USER_ID`.
+   - Login via `/login` (unified): `ScoutX_Admin` → `/dashboard` (shared ops owner); `ScoutX_User` → `/user`. UI shows the Auth0 actor email; scrapers stay owned by `SCOUTX_OPS_USER_ID`.
 8. Do **not** change First Step `user_metadata.role`.
 
 ## Login flow
 
-1. SPA: Auth0 Universal Login only.
+1. SPA: **one** Auth0 entry at `/login` (legacy `/user/login` and `/user/register` redirect here).
 2. `POST /auth/auth0/exchange` with Bearer access token (+ email from ID token).
 3. Fetch First Step plan: `GET {FIRSTSTEP_API_BASE_URL}/firstStep/subscription/getByUserId?user_id={auth0Sub}` — stored on `scoutx_portal_users.firstStepPlan` (login still succeeds if First Step is down).
-4. Admin → cookie JWT `{ id: <ops Mongo id> }` → `/dashboard`.
-5. Everyone else → portal JSON + profile upsert → `/user`.
-6. Logout clears ScoutX cookie **and** Auth0 (see `scoutxLogout.ts`).
+4. `ScoutX_Admin` → cookie JWT `{ id: <ops Mongo id> }` → `/dashboard`.
+5. `ScoutX_User` (default) → portal profile upsert → `/user`.
+6. Logout clears ScoutX cookie **and** Auth0; return to `/login`.
 
 ## Hostname
 

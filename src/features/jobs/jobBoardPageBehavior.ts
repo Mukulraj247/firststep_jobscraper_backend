@@ -183,6 +183,28 @@ export function orderFrozenCategories(
   return cleaned.sort((a, b) => rank(a) - rank(b));
 }
 
+/** True when both string arrays have the same length and items in order. */
+export function sameStringArray(
+  a: readonly string[] | null | undefined,
+  b: readonly string[] | null | undefined,
+): boolean {
+  const left = a || [];
+  const right = b || [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+/** Keep previous selection reference when the next selection is identical. */
+export function stableStringArraySelection(
+  prev: readonly string[],
+  next: readonly string[],
+): string[] {
+  return sameStringArray(prev, next) ? (prev as string[]) : [...next];
+}
+
 export function addedSinceMs(
   preset: JobBoardAddedPreset,
   nowMs: number = Date.now(),

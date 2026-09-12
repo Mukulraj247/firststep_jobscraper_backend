@@ -14,6 +14,8 @@ import {
   JOB_BOARD_HERO_LAYOUT,
   orderFrozenCategories,
   resolveJobDisplayInstant,
+  sameStringArray,
+  stableStringArraySelection,
 } from './jobBoardPageBehavior';
 
 const NOW = Date.parse('2026-08-18T12:00:00.000Z');
@@ -186,6 +188,21 @@ describe('orderFrozenCategories', () => {
         'Hyderabad, Telangana, India, Multiple cities across the metro region',
       ),
     ).toBe('Hyderabad, Telangana, India, Multiple cit…');
+  });
+});
+
+describe('sameStringArray / stableStringArraySelection', () => {
+  it('compares arrays by value', () => {
+    expect(sameStringArray(['a', 'b'], ['a', 'b'])).toBe(true);
+    expect(sameStringArray(['a', 'b'], ['b', 'a'])).toBe(false);
+    expect(sameStringArray([], [])).toBe(true);
+    expect(sameStringArray(undefined, [])).toBe(true);
+  });
+
+  it('returns previous reference when selection is unchanged', () => {
+    const prev = ['Banking', 'FinTech'];
+    expect(stableStringArraySelection(prev, ['Banking', 'FinTech'])).toBe(prev);
+    expect(stableStringArraySelection(prev, ['FinTech'])).not.toBe(prev);
   });
 });
 

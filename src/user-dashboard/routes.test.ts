@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isUserDashboardPath, userLoginRedirect } from './routeHelpers';
+import {
+  isUserDashboardPath,
+  SCOUTX_LOGIN_PATH,
+  userLoginRedirect,
+} from './routeHelpers';
 
 describe('user dashboard routes', () => {
   it('recognizes /user prefix paths', () => {
@@ -8,13 +12,13 @@ describe('user dashboard routes', () => {
     expect(isUserDashboardPath('/dashboard')).toBe(false);
   });
 
-  it('allows login and register without redirect', () => {
+  it('allows legacy login/register paths without forcing another redirect helper', () => {
     expect(userLoginRedirect('/user/login')).toBeNull();
     expect(userLoginRedirect('/user/register')).toBeNull();
   });
 
-  it('redirects protected user routes to portal login not ops /login', () => {
-    expect(userLoginRedirect('/user/feed')).toBe('/user/login');
-    expect(userLoginRedirect('/user/feed')).not.toBe('/login');
+  it('sends unauthenticated portal routes to unified /login', () => {
+    expect(userLoginRedirect('/user/feed')).toBe(SCOUTX_LOGIN_PATH);
+    expect(userLoginRedirect('/user/feed')).toBe('/login');
   });
 });
