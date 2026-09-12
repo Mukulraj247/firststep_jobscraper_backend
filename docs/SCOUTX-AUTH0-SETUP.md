@@ -74,6 +74,7 @@ exports.onExecutePostLogin = async (event, api) => {
    - After assigning the role: log out fully, log in again (old tokens lack the claim).
    - Confirm Action is under **Actions → Triggers → Login / Post Login** (between Start and Complete).
    - Server log `[auth0/exchange]` should show `roles: ['ScoutX_Admin', …]` and `rolesClaim: ['ScoutX_Admin']`.
+   - Login via `/user/login` or `/login`: `ScoutX_Admin` is redirected to `/dashboard` (shared ops owner). UI shows the Auth0 actor email; scrapers stay owned by `SCOUTX_OPS_USER_ID`.
 8. Do **not** change First Step `user_metadata.role`.
 
 ## Login flow

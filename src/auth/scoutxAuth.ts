@@ -17,6 +17,8 @@ export type Auth0ExchangeResult = {
   email: string;
   name?: string;
   auth0Sub?: string | null;
+  /** Pinned ops Mongo owner email (ownership); UI email is the Auth0 actor. */
+  opsOwnerEmail?: string | null;
   scoutxRoles: ScoutXRole[];
   authSource: 'auth0';
   landing: '/dashboard' | '/user';

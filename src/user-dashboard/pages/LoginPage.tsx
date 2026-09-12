@@ -44,7 +44,7 @@ export function LoginPage() {
       </Button>
       <Typography sx={{ display: 'block', textAlign: 'center', color: STITCH.muted, mt: 1.25, fontSize: '0.75rem' }}>
         {auth0On
-          ? 'Same Auth0 tenant as First Step. Any signed-in user gets the portal; ScoutX_Admin opens ops.'
+          ? 'Same Auth0 tenant as First Step. ScoutX_User opens the portal; ScoutX_Admin is sent to ops.'
           : 'Auth0 env is missing — set VITE_AUTH0_* in ScoutX .env'}
       </Typography>
 

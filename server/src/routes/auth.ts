@@ -151,8 +151,12 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       const token = jwt.sign({ id: opsUser.id }, process.env.JWT_SECRET as string);
       res.cookie('token', token, jwtCookieOptions);
 
+      // Session identity = Auth0 actor; ownership cookie stays pinned ops Mongo id.
+      const sessionEmail = email || opsUser.email;
+      const sessionName = name || sessionEmail;
+
       capture('maxun-oss-user-login', {
-        email: opsUser.email,
+        email: sessionEmail,
         userId: opsUser.id,
         authSource: 'auth0',
         loggedInAt: new Date().toISOString(),
@@ -160,9 +164,10 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
 
       return res.json({
         id: opsUser.id,
-        email: opsUser.email,
-        name: name || opsUser.email,
-        auth0Sub: opsUser.auth0Sub || auth0Sub,
+        email: sessionEmail,
+        name: sessionName,
+        auth0Sub: auth0Sub || opsUser.auth0Sub || null,
+        opsOwnerEmail: opsUser.email,
         scoutxRoles: roles,
         authSource: 'auth0',
         landing: '/dashboard',

@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect } from 'react';
+import React, { useCallback, useContext, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AppShell } from "../components/dashboard/AppShell";
 import { Recordings } from "../components/robot/Recordings";
@@ -69,6 +69,24 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
   const { user } = state;
 
   const { connectToQueueSocket, disconnectQueueSocket } = useSocketStore();
+
+  // Keep socket handlers stable so we don't reconnect on every queuedRuns / t change.
+  const queueHandlersRef = useRef({
+    t,
+    notify,
+    invalidateRuns,
+    setRerenderRuns,
+    setQueuedRuns,
+  });
+  queueHandlersRef.current = {
+    t,
+    notify,
+    invalidateRuns,
+    setRerenderRuns,
+    setQueuedRuns,
+  };
+  const queuedRunsRef = useRef(queuedRuns);
+  queuedRunsRef.current = queuedRuns;
 
   const abortRunHandler = (runId: string, robotName: string, browserId: string) => {
     notify('info', t('main_page.notifications.abort_initiated', { name: robotName }));
@@ -251,67 +269,79 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
   }
 
   useEffect(() => {
-    if (user?.id) {
-      const handleRunStarted = (startedData: any) => {
-        setRerenderRuns(true);
-        invalidateRuns();
-        
-        const robotName = startedData.robotName || 'Unknown Robot';
-        notify('info', t('main_page.notifications.run_started', { name: robotName }));
-      };
+    if (!user?.id) return;
 
-      const handleRunCompleted = (completionData: any) => {
-        setRerenderRuns(true);
-        invalidateRuns(); // Invalidate cache to show completed run status
-        
-        if (queuedRuns.has(completionData.runId)) {
-          setQueuedRuns(prev => {
-            const newSet = new Set(prev);
-            newSet.delete(completionData.runId);
-            return newSet;
-          });
-        }
-        
-        const robotName = completionData.robotName || 'Unknown Robot';
-        
-        if (completionData.status === 'success') {
-          notify('success', t('main_page.notifications.interpretation_success', { name: robotName }));
-        } else if (completionData.status === 'anomaly') {
-          notify('warning', `${robotName}: run finished with anomaly (${completionData.anomaly || 'row_drop'})`);
-        } else {
-          notify('error', t('main_page.notifications.interpretation_failed', { name: robotName }));
-        }
-      };
+    const handleRunStarted = (startedData: any) => {
+      const h = queueHandlersRef.current;
+      h.setRerenderRuns(true);
+      h.invalidateRuns();
+      const robotName = startedData.robotName || 'Unknown Robot';
+      h.notify('info', h.t('main_page.notifications.run_started', { name: robotName }));
+    };
 
-      const handleRunRecovered = (recoveredData: any) => {
-        setRerenderRuns(true);
-        invalidateRuns();
-        
-        if (queuedRuns.has(recoveredData.runId)) {
-          setQueuedRuns(prev => {
-            const newSet = new Set(prev);
-            newSet.delete(recoveredData.runId);
-            return newSet;
-          });
-        }
-        
-        const robotName = recoveredData.robotName || 'Unknown Robot';
-        notify('error', t('main_page.notifications.interpretation_failed', { name: robotName }));
-      };
+    const handleRunCompleted = (completionData: any) => {
+      const h = queueHandlersRef.current;
+      h.setRerenderRuns(true);
+      h.invalidateRuns();
 
-      const handleRunScheduled = (scheduledData: any) => {
-        setRerenderRuns(true);
-        invalidateRuns();
-      };
-      
-      connectToQueueSocket(user.id, handleRunCompleted, handleRunStarted, handleRunRecovered, handleRunScheduled);
-      
-      return () => {
-        console.log('Disconnecting persistent queue socket for user:', user.id);
-        disconnectQueueSocket();
-      };
-    }
-  }, [user?.id, connectToQueueSocket, disconnectQueueSocket, t, setRerenderRuns, queuedRuns, setQueuedRuns]);
+      if (queuedRunsRef.current.has(completionData.runId)) {
+        h.setQueuedRuns((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(completionData.runId);
+          return newSet;
+        });
+      }
+
+      const robotName = completionData.robotName || 'Unknown Robot';
+
+      if (completionData.status === 'success') {
+        h.notify('success', h.t('main_page.notifications.interpretation_success', { name: robotName }));
+      } else if (completionData.status === 'anomaly') {
+        h.notify(
+          'warning',
+          `${robotName}: run finished with anomaly (${completionData.anomaly || 'row_drop'})`
+        );
+      } else {
+        h.notify('error', h.t('main_page.notifications.interpretation_failed', { name: robotName }));
+      }
+    };
+
+    const handleRunRecovered = (recoveredData: any) => {
+      const h = queueHandlersRef.current;
+      h.setRerenderRuns(true);
+      h.invalidateRuns();
+
+      if (queuedRunsRef.current.has(recoveredData.runId)) {
+        h.setQueuedRuns((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(recoveredData.runId);
+          return newSet;
+        });
+      }
+
+      const robotName = recoveredData.robotName || 'Unknown Robot';
+      h.notify('error', h.t('main_page.notifications.interpretation_failed', { name: robotName }));
+    };
+
+    const handleRunScheduled = (_scheduledData: any) => {
+      const h = queueHandlersRef.current;
+      h.setRerenderRuns(true);
+      h.invalidateRuns();
+    };
+
+    connectToQueueSocket(
+      user.id,
+      handleRunCompleted,
+      handleRunStarted,
+      handleRunRecovered,
+      handleRunScheduled
+    );
+
+    return () => {
+      console.log('Disconnecting persistent queue socket for user:', user.id);
+      disconnectQueueSocket();
+    };
+  }, [user?.id, connectToQueueSocket, disconnectQueueSocket]);
 
   const DisplayContent = () => {
     switch (content) {

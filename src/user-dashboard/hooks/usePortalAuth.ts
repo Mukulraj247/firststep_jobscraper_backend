@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import type { PortalUser } from '../types';
 import { isPublicUserRoute } from '../routeHelpers';
 import { isScoutXAuth0Configured } from '../../auth/ScoutXAuth0Provider';
-import { exchangeAuth0Token, hasScoutXUser } from '../../auth/scoutxAuth';
+import { exchangeAuth0Token, hasScoutXAdmin, hasScoutXUser } from '../../auth/scoutxAuth';
 import {
   clearSkipAuth0AutoExchange,
   shouldSkipAuth0AutoExchange,
 } from '../../auth/scoutxLogout';
+import { AuthContext } from '../../context/auth';
 
 const PORTAL_AUTH_KEY = 'scouttext.portal.auth';
 const AUTH0_ENABLED = isScoutXAuth0Configured();
@@ -66,6 +67,7 @@ function usePortalAuthAuth0() {
     getAccessTokenSilently,
     user: auth0User,
   } = useAuth0();
+  const { dispatch } = useContext(AuthContext);
   const [user, setUser] = useState<PortalUser | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
@@ -128,7 +130,18 @@ function usePortalAuthAuth0() {
           return;
         }
 
-        // Admins who open /user still get a portal profile view.
+        // ScoutX_Admin always lands on the shared ops console (same scrapers as ops owner).
+        // Keep loading=true so PortalGate does not bounce to /user/login before navigate.
+        if (hasScoutXAdmin(data.scoutxRoles)) {
+          writePortalUser(null);
+          window.localStorage.setItem('user', JSON.stringify(data));
+          dispatch({ type: 'LOGIN', payload: data });
+          if (!cancelled) {
+            navigate('/dashboard', { replace: true });
+          }
+          return;
+        }
+
         const portalUser: PortalUser = {
           id: String(data.id),
           name: data.name || data.email.split('@')[0],
@@ -167,7 +180,7 @@ function usePortalAuthAuth0() {
     return () => {
       cancelled = true;
     };
-  }, [auth0Loading, isAuthenticated, getAccessTokenSilently, auth0User, navigate]);
+  }, [auth0Loading, isAuthenticated, getAccessTokenSilently, auth0User, navigate, dispatch]);
 
   useEffect(() => {
     if (!auth0Loading) return undefined;

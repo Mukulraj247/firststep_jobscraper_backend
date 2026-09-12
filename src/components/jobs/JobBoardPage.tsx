@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -1608,56 +1608,98 @@ export const JobBoardPage: React.FC = () => {
   const [h1bSponsorFriendly, setH1bSponsorFriendly] = useState(false);
   const [h1bFy2026Match, setH1bFy2026Match] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobBoardJob | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
+  const loadSeqRef = useRef(0);
 
-  const loadJobs = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await listJobs({
-        page,
-        limit: PAGE_SIZE,
-        q: q || undefined,
-        category: category || undefined,
-        frozenCategories: frozenCategories.length ? frozenCategories : undefined,
-        frozenIndustries: frozenIndustries.length ? frozenIndustries : undefined,
-        frozenExperienceLevels: frozenExperienceLevels.length ? frozenExperienceLevels : undefined,
-        frozenExperienceYears: frozenExperienceYears.length ? frozenExperienceYears : undefined,
-        frozenStates: frozenStates.length ? frozenStates : undefined,
-        location: location || undefined,
-        workMode: workMode || undefined,
-        jobType: jobType || undefined,
-        added,
-        source: source || undefined,
-        h1bSponsorFriendly: h1bSponsorFriendly || undefined,
-        h1bFy2026Match: h1bFy2026Match || undefined,
-      });
-      setJobs(res.jobs);
-      setPagination(res.pagination);
-      setFilters({
-        categories: res.filters?.categories || [],
-        frozenCategories: res.filters?.frozenCategories || [],
-        frozenIndustries: res.filters?.frozenIndustries || [],
-        frozenExperienceLevels: res.filters?.frozenExperienceLevels || [],
-        frozenExperienceYears: res.filters?.frozenExperienceYears || [],
-        frozenStates: res.filters?.frozenStates || [],
-        locations: res.filters?.locations || [],
-      });
-    } catch {
-      setError(t('jobboard.load_error', { defaultValue: 'Could not load jobs.' }));
-      setJobs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, q, category, frozenCategories, frozenIndustries, frozenExperienceLevels, frozenExperienceYears, frozenStates, location, workMode, jobType, added, source, h1bSponsorFriendly, h1bFy2026Match, t]);
-
+  // Fetch when filter/page inputs change. Do not depend on `t` (unstable across re-renders).
+  // Soft-refresh after the first load so the grid (and scroll) are not wiped.
   useEffect(() => {
-    void loadJobs();
-  }, [loadJobs]);
+    const seq = ++loadSeqRef.current;
+    let cancelled = false;
+
+    const run = async () => {
+      setError('');
+      if (hasLoadedOnceRef.current) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const res = await listJobs({
+          page,
+          limit: PAGE_SIZE,
+          q: q || undefined,
+          category: category || undefined,
+          frozenCategories: frozenCategories.length ? frozenCategories : undefined,
+          frozenIndustries: frozenIndustries.length ? frozenIndustries : undefined,
+          frozenExperienceLevels: frozenExperienceLevels.length
+            ? frozenExperienceLevels
+            : undefined,
+          frozenExperienceYears: frozenExperienceYears.length
+            ? frozenExperienceYears
+            : undefined,
+          frozenStates: frozenStates.length ? frozenStates : undefined,
+          location: location || undefined,
+          workMode: workMode || undefined,
+          jobType: jobType || undefined,
+          added,
+          source: source || undefined,
+          h1bSponsorFriendly: h1bSponsorFriendly || undefined,
+          h1bFy2026Match: h1bFy2026Match || undefined,
+        });
+        if (cancelled || seq !== loadSeqRef.current) return;
+        setJobs(res.jobs);
+        setPagination(res.pagination);
+        setFilters({
+          categories: res.filters?.categories || [],
+          frozenCategories: res.filters?.frozenCategories || [],
+          frozenIndustries: res.filters?.frozenIndustries || [],
+          frozenExperienceLevels: res.filters?.frozenExperienceLevels || [],
+          frozenExperienceYears: res.filters?.frozenExperienceYears || [],
+          frozenStates: res.filters?.frozenStates || [],
+          locations: res.filters?.locations || [],
+        });
+        hasLoadedOnceRef.current = true;
+      } catch {
+        if (cancelled || seq !== loadSeqRef.current) return;
+        setError(t('jobboard.load_error', { defaultValue: 'Could not load jobs.' }));
+        setJobs([]);
+      } finally {
+        if (cancelled || seq !== loadSeqRef.current) return;
+        setLoading(false);
+        setRefreshing(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `t` intentionally omitted (error string only)
+  }, [
+    page,
+    q,
+    category,
+    frozenCategories,
+    frozenIndustries,
+    frozenExperienceLevels,
+    frozenExperienceYears,
+    frozenStates,
+    location,
+    workMode,
+    jobType,
+    added,
+    source,
+    h1bSponsorFriendly,
+    h1bFy2026Match,
+  ]);
 
   useEffect(() => {
     if (!selectedId || !modalOpen) {
@@ -2025,7 +2067,32 @@ export const JobBoardPage: React.FC = () => {
           ) : null}
         </Box>
       ) : (
-        <>
+        <Box sx={{ position: 'relative' }}>
+          {refreshing ? (
+            <Box
+              aria-hidden
+              sx={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                zIndex: 2,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                px: 1.25,
+                py: 0.5,
+                borderRadius: RADIUS.pill,
+                bgcolor: alpha('#ffffff', 0.92),
+                border: `1px solid ${FIRSTSTEP.border}`,
+                boxShadow: '0 4px 14px rgba(15, 23, 42, 0.08)',
+              }}
+            >
+              <CircularProgress size={14} sx={{ color: FIRSTSTEP.tealDark }} />
+              <Typography variant="caption" sx={{ fontWeight: 700, color: FIRSTSTEP.navy }}>
+                Updating…
+              </Typography>
+            </Box>
+          ) : null}
           <Box
             sx={{
               display: 'grid',
@@ -2037,6 +2104,8 @@ export const JobBoardPage: React.FC = () => {
               },
               gap: 1.75,
               alignItems: 'stretch',
+              opacity: refreshing ? 0.85 : 1,
+              transition: 'opacity 160ms ease',
             }}
           >
             {jobs.map((job) => (
@@ -2068,7 +2137,7 @@ export const JobBoardPage: React.FC = () => {
               />
             )}
           </Stack>
-        </>
+        </Box>
       )}
 
       <JobDetailModal open={modalOpen} job={detail} loading={detailLoading} onClose={closeModal} />
