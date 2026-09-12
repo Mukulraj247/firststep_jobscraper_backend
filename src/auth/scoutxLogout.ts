@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useAuth0 } from '@auth0/auth0-react';
+import { useCallback } from 'react';
 import { apiUrl } from '../apiConfig';
 import { isScoutXAuth0Configured } from './ScoutXAuth0Provider';
 
@@ -31,6 +32,8 @@ export function clearSkipAuth0AutoExchange(): void {
 
 /**
  * Ops NavBar / AuthProvider logout. Must run under Auth0Provider when Auth0 is on.
+ *
+ * Note: Auth0 env is fixed at build time, so the hook branch never flips mid-session.
  */
 export function useScoutXLogout() {
   const auth0Configured = isScoutXAuth0Configured();
@@ -43,16 +46,16 @@ export function useScoutXLogout() {
 }
 
 function useScoutXLogoutLocalOnly() {
-  return async () => {
+  return useCallback(async () => {
     await clearScoutXLocalSession();
     window.location.assign('/login');
-  };
+  }, []);
 }
 
 function useScoutXLogoutWithAuth0() {
   const { logout: auth0Logout, isAuthenticated } = useAuth0();
 
-  return async () => {
+  return useCallback(async () => {
     await clearScoutXLocalSession();
     if (isAuthenticated) {
       await auth0Logout({
@@ -63,5 +66,5 @@ function useScoutXLogoutWithAuth0() {
       return;
     }
     window.location.assign('/login');
-  };
+  }, [auth0Logout, isAuthenticated]);
 }

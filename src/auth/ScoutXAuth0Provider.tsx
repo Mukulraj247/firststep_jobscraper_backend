@@ -1,6 +1,5 @@
 import { Auth0Provider } from '@auth0/auth0-react';
-import { useNavigate } from 'react-router-dom';
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 
 const domain = import.meta.env.VITE_AUTH0_DOMAIN as string | undefined;
 const clientId = import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined;
@@ -13,32 +12,64 @@ export function isScoutXAuth0Configured(): boolean {
   return !!(domain && clientId);
 }
 
+function urlLooksLikeAuth0Callback(): boolean {
+  if (typeof window === 'undefined') return false;
+  const q = window.location.search;
+  return q.includes('code=') && q.includes('state=');
+}
+
+function resolvePostLoginPath(appState?: { returnTo?: string }): string {
+  const raw = appState?.returnTo || '/dashboard';
+  try {
+    const u = new URL(raw, window.location.origin);
+    let path = `${u.pathname}${u.search}${u.hash}` || '/dashboard';
+    if (path.includes('code=') || path.includes('state=')) {
+      path = u.pathname || '/dashboard';
+    }
+    return path.startsWith('/') ? path : '/dashboard';
+  } catch {
+    return typeof raw === 'string' && raw.startsWith('/') ? raw.split('?')[0] : '/dashboard';
+  }
+}
+
 /**
- * Mirrors First Step Auth0Provider. Only mounts when Auth0 env is present
- * so password-only local runs still work.
+ * Auth0 wrapper. Intentionally does NOT call useNavigate() — subscribing the
+ * provider to the router re-rendered the entire app on every route change and
+ * amplified job-board / Auth0 startup jank.
+ *
+ * Post-login navigation uses history.replaceState + popstate so React Router
+ * picks up the clean URL without this provider re-rendering on location.
  */
 export function ScoutXAuth0Provider({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate();
+  const onRedirectCallback = useCallback((appState?: { returnTo?: string }) => {
+    const path = resolvePostLoginPath(appState);
+    window.history.replaceState({}, document.title, path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, []);
+
+  const authorizationParams = useMemo(
+    () => ({
+      redirect_uri: redirectUri,
+      audience: audience || undefined,
+      scope: 'openid profile email',
+    }),
+    []
+  );
 
   if (!isScoutXAuth0Configured()) {
     return <>{children}</>;
   }
 
-  const onRedirectCallback = (appState?: { returnTo?: string }) => {
-    navigate(appState?.returnTo || window.location.pathname);
-  };
-
   return (
     <Auth0Provider
       domain={domain!}
       clientId={clientId!}
-      authorizationParams={{
-        redirect_uri: redirectUri,
-        audience: audience || undefined,
-        scope: 'openid profile email',
-      }}
+      authorizationParams={authorizationParams}
       useRefreshTokens
+      useRefreshTokensFallback
       cacheLocation="localstorage"
+      // Only handle Auth0 code/state when present; ignore unrelated query params.
+      skipRedirectCallback={!urlLooksLikeAuth0Callback()}
       onRedirectCallback={onRedirectCallback}
     >
       {children}

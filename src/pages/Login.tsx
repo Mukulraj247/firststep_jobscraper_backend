@@ -48,6 +48,23 @@ function LoginAuth0Only() {
     return () => clearTimeout(tmr);
   }, [isLoading]);
 
+  // Hydrate ScoutX session from localStorage before Auth0 auto-exchange.
+  // Without this, a brief AuthContext miss + Auth0 isAuthenticated causes
+  // exchange → navigate → remount loops that look like job-board refresh.
+  useEffect(() => {
+    if (sessionUser) return;
+    try {
+      const raw = window.localStorage.getItem('user');
+      if (!raw) return;
+      const stored = JSON.parse(raw);
+      if (stored && (stored.id || stored.email)) {
+        dispatch({ type: 'LOGIN', payload: stored });
+      }
+    } catch {
+      window.localStorage.removeItem('user');
+    }
+  }, [sessionUser, dispatch]);
+
   useEffect(() => {
     if (!sessionUser) return;
     if (Array.isArray(sessionUser.scoutxRoles)) {

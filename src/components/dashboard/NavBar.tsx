@@ -38,31 +38,20 @@ interface NavBarProps {
   isRecording: boolean;
 }
 
-export const NavBar: React.FC<NavBarProps> = ({
-  recordingName,
-  isRecording,
-}) => {
-  const { notify, browserId, setBrowserId } = useGlobalInfoStore();
-  const { state, dispatch } = useContext(AuthContext);
-  const { user } = state;
-  const navigate = useNavigate();
-  const { darkMode, toggleTheme } = useThemeMode();
+/** Isolated so Auth0 checkSession / token refresh does not re-render the whole NavBar. */
+function NavBarUserMenu({
+  email,
+  themeToggle,
+}: {
+  email: string;
+  themeToggle: React.ReactNode;
+}) {
+  const { dispatch } = useContext(AuthContext);
+  const { notify } = useGlobalInfoStore();
   const { t } = useTranslation();
-  const { isMobile, shellMounted, drawerOpen, openDrawer } = useAppShellNav();
-  const showHamburger = shouldShowHamburger(isMobile, shellMounted);
   const scoutXLogout = useScoutXLogout();
-
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setAnchorEl(null);
-  };
-
-  /** Clears ScoutX cookie + Auth0 session (see scoutxLogout). */
   const logout = async () => {
     try {
       dispatch({ type: 'LOGOUT' });
@@ -77,6 +66,65 @@ export const NavBar: React.FC<NavBarProps> = ({
       window.location.assign('/login');
     }
   };
+
+  return (
+    <NavBarEnd>
+      <IconButton
+        onClick={(event) => setAnchorEl(event.currentTarget)}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          borderRadius: '5px',
+          padding: '8px',
+          marginRight: '10px',
+          '&:hover': {
+            background: 'inherit',
+          },
+        }}
+      >
+        <AccountCircle sx={{ marginRight: '5px' }} />
+        <Typography variant="body1">{email}</Typography>
+      </IconButton>
+      <Menu
+        anchorEl={anchorEl}
+        open={Boolean(anchorEl)}
+        onClose={() => setAnchorEl(null)}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'center',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'center',
+        }}
+        PaperProps={{ sx: { width: '180px' } }}
+      >
+        <MenuItem
+          onClick={() => {
+            setAnchorEl(null);
+            void logout();
+          }}
+        >
+          <Logout sx={{ marginRight: '5px' }} /> Logout
+        </MenuItem>
+      </Menu>
+      {themeToggle}
+    </NavBarEnd>
+  );
+}
+
+export const NavBar: React.FC<NavBarProps> = ({
+  recordingName,
+  isRecording,
+}) => {
+  const { notify, browserId, setBrowserId } = useGlobalInfoStore();
+  const { state } = useContext(AuthContext);
+  const { user } = state;
+  const navigate = useNavigate();
+  const { darkMode, toggleTheme } = useThemeMode();
+  const { t } = useTranslation();
+  const { isMobile, shellMounted, drawerOpen, openDrawer } = useAppShellNav();
+  const showHamburger = shouldShowHamburger(isMobile, shellMounted);
 
   const goToMainMenu = async () => {
     if (browserId) {
@@ -144,59 +192,27 @@ export const NavBar: React.FC<NavBarProps> = ({
         </NavBarLogoCenter>
         {
           user ? (
-            <NavBarEnd>
-              {!isRecording ? (
-                <>
-                  <IconButton onClick={handleMenuOpen} sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    borderRadius: '5px',
-                    padding: '8px',
-                    marginRight: '10px',
-                    '&:hover': {
-                      background: 'inherit'
-                    }
-                  }}>
-                    <AccountCircle sx={{ marginRight: '5px' }} />
-                    <Typography variant="body1">{user.email}</Typography>
-                  </IconButton>
-                  <Menu
-                    anchorEl={anchorEl}
-                    open={Boolean(anchorEl)}
-                    onClose={handleMenuClose}
-                    anchorOrigin={{
-                      vertical: 'bottom',
-                      horizontal: 'center',
-                    }}
-                    transformOrigin={{
-                      vertical: 'top',
-                      horizontal: 'center',
-                    }}
-                    PaperProps={{ sx: { width: '180px' } }}
-                  >
-                    <MenuItem onClick={() => { handleMenuClose(); logout(); }}>
-                      <Logout sx={{ marginRight: '5px' }} /> Logout
-                    </MenuItem>
-                  </Menu>
-                  {renderThemeToggle()}
-                </>
-              ) : (
-                <>
-                  <IconButton onClick={goToMainMenu} sx={{
-                    borderRadius: '5px',
-                    padding: '8px',
-                    background: 'red',
-                    color: 'white',
-                    marginRight: '10px',
-                    '&:hover': { color: 'white', backgroundColor: 'red' }
-                  }}>
-                    <Clear sx={{ marginRight: '5px' }} />
-                    {t('navbar.recording.discard')}
-                  </IconButton>
-                  <SaveRecording fileName={recordingName} />
-                </>
-              )}
-            </NavBarEnd>
+            !isRecording ? (
+              <NavBarUserMenu
+                email={user.email}
+                themeToggle={renderThemeToggle()}
+              />
+            ) : (
+              <NavBarEnd>
+                <IconButton onClick={goToMainMenu} sx={{
+                  borderRadius: '5px',
+                  padding: '8px',
+                  background: 'red',
+                  color: 'white',
+                  marginRight: '10px',
+                  '&:hover': { color: 'white', backgroundColor: 'red' }
+                }}>
+                  <Clear sx={{ marginRight: '5px' }} />
+                  {t('navbar.recording.discard')}
+                </IconButton>
+                <SaveRecording fileName={recordingName} />
+              </NavBarEnd>
+            )
           ) : (
             <NavBarEnd>
               {renderThemeToggle()}

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useState, useRef, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useState, useRef, useEffect, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { apiUrl } from "../apiConfig";
 
@@ -121,26 +121,29 @@ export const SocketProvider = ({ children }: { children: JSX.Element }) => {
     runScheduledCallbackRef.current = null;
   }, []);
 
-  // Cleanup on unmount
+  // Disconnect only when the provider unmounts — not on every queueSocket identity
+  // change (that raced MainPage reconnect and caused socket/context thrash).
   useEffect(() => {
     return () => {
-      if (queueSocket) {
-        queueSocket.disconnect();
-      }
+      socketStore.queueSocket?.disconnect();
+      socketStore.queueSocket = null;
     };
-  }, [queueSocket]);
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      socket,
+      queueSocket,
+      id,
+      setId,
+      connectToQueueSocket,
+      disconnectQueueSocket,
+    }),
+    [socket, queueSocket, id, setId, connectToQueueSocket, disconnectQueueSocket]
+  );
 
   return (
-    <socketStoreContext.Provider
-      value={{
-        socket,
-        queueSocket,
-        id,
-        setId,
-        connectToQueueSocket,
-        disconnectQueueSocket,
-      }}
-    >
+    <socketStoreContext.Provider value={value}>
       {children}
     </socketStoreContext.Provider>
   );

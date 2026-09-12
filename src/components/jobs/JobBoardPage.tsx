@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -385,7 +385,13 @@ const DescriptionSections: React.FC<{
 };
 
 /** HiringCafe-style portrait job card for the grid. */
-const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, onOpen }) => {
+const JobGridCard = React.memo(function JobGridCard({
+  job,
+  onOpen,
+}: {
+  job: JobBoardJob;
+  onOpen: (id: string) => void;
+}) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const data = job.data || {};
@@ -540,13 +546,13 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
 
   return (
     <Box
-      onClick={onOpen}
+      onClick={() => onOpen(job.id)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onOpen();
+          onOpen(job.id);
         }
       }}
       sx={{
@@ -846,14 +852,17 @@ const JobGridCard: React.FC<{ job: JobBoardJob; onOpen: () => void }> = ({ job, 
         <Typography
           variant="caption"
           sx={{ fontWeight: 650, color: 'text.secondary', cursor: 'pointer', fontSize: '0.75rem' }}
-          onClick={onOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen(job.id);
+          }}
         >
           View details →
         </Typography>
       </Box>
     </Box>
   );
-};
+});
 
 
 const applyButtonSx = {
@@ -1620,6 +1629,13 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
   const tRef = useRef(t);
   tRef.current = t;
 
+  // Never blank the grid once we have shown jobs — even across soft remounts
+  // within the same MainPage (jobsMounted keep-alive). Ref avoids stale closure
+  // flipping loading=true after the first successful response.
+  const hasLoadedOnceRef = useRef(false);
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+
   // Primitive fetch key — avoids array-identity churn retriggering loads.
   const fetchKey = [
     page,
@@ -1645,8 +1661,8 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
 
     const run = async () => {
       setError('');
-      // Only blank the grid on the true first load. After that, keep cards + scroll.
-      if (hasLoadedOnce || jobs.length > 0) {
+      const soft = hasLoadedOnceRef.current || jobsRef.current.length > 0;
+      if (soft) {
         setRefreshing(true);
       } else {
         setLoading(true);
@@ -1702,16 +1718,15 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
           }
           return next;
         });
+        hasLoadedOnceRef.current = true;
         setHasLoadedOnce(true);
       } catch {
         if (cancelled || seq !== loadSeqRef.current) return;
         setError(
           tRef.current('jobboard.load_error', { defaultValue: 'Could not load jobs.' })
         );
-        // Keep prior jobs on refresh failure; only clear when we had nothing.
-        setJobs((prev) => (hasLoadedOnce || prev.length ? prev : []));
+        setJobs((prev) => (hasLoadedOnceRef.current || prev.length ? prev : []));
       } finally {
-        // Always clear flags for the latest in-flight request.
         if (seq === loadSeqRef.current) {
           setLoading(false);
           setRefreshing(false);
@@ -1774,10 +1789,10 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
     if (changed) setPage(1);
   };
 
-  const openJob = (id: string) => {
+  const openJob = useCallback((id: string) => {
     setSelectedId(id);
     setModalOpen(true);
-  };
+  }, []);
 
   const closeModal = () => {
     setModalOpen(false);
@@ -2146,18 +2161,13 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
             }}
           >
             {jobs.map((job) => (
-              <JobGridCard key={job.id} job={job} onOpen={() => openJob(job.id)} />
+              <JobGridCard key={job.id} job={job} onOpen={openJob} />
             ))}
           </Box>
 
           <Stack alignItems="center" spacing={1} sx={{ mt: 3 }}>
             <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-              {t('jobboard.showing_range', {
-                from: rangeFrom,
-                to: rangeTo,
-                total,
-                defaultValue: 'Showing {{from}}–{{to}} of {{total}}',
-              })}
+              {`Showing ${rangeFrom.toLocaleString('en-IN')}–${rangeTo.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')}`}
             </Typography>
             {pagination.totalPages > 1 && (
               <Pagination

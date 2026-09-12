@@ -343,8 +343,14 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
     };
   }, [user?.id, connectToQueueSocket, disconnectQueueSocket]);
 
-  // Keep each section mounted only when selected — avoid remounting JobBoard via
-  // an inner render function that recreates element trees on every MainPage render.
+  // Keep JobBoard mounted after first visit. Auth0/NavBar/socket re-renders of
+  // MainPage used to recreate <JobBoardPage /> via the switch — combined with
+  // route flaps that looked like a continuous full-grid refresh.
+  const [jobsMounted, setJobsMounted] = React.useState(content === 'jobs');
+  React.useEffect(() => {
+    if (content === 'jobs') setJobsMounted(true);
+  }, [content]);
+
   let body: React.ReactNode = null;
   switch (content) {
     case 'scrapers':
@@ -357,7 +363,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
       );
       break;
     case 'jobs':
-      body = <JobBoardPage />;
+      // Rendered in the persistent slot below.
+      body = null;
       break;
     case 'runs':
       body = (
@@ -397,6 +404,8 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
       body = null;
   }
 
+  const showJobs = content === 'jobs';
+
   return (
     <AppShell value={content} handleChangeContent={setContent}>
       <Box
@@ -404,15 +413,27 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
           flex: 1,
           minHeight: 0,
           minWidth: 0,
-          display: 'flex',
+          display: showJobs ? 'flex' : 'none',
           flexDirection: 'column',
-          ...(content === 'jobs' && jobBoardHidesScrollbar()
-            ? jobBoardScrollSx()
-            : { overflow: 'auto' }),
+          ...(jobBoardHidesScrollbar() ? jobBoardScrollSx() : { overflow: 'auto' }),
         }}
       >
-        {body}
+        {jobsMounted ? <JobBoardPage /> : null}
       </Box>
+      {!showJobs ? (
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'auto',
+          }}
+        >
+          {body}
+        </Box>
+      ) : null}
     </AppShell>
   );
 }
