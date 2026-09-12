@@ -52,14 +52,14 @@ export function BrandMark({ compact = false, size = 32 }: Props) {
           sx={{
             fontFamily: DISPLAY_FONT,
             fontWeight: 700,
-            fontSize: '1.1rem',
-            letterSpacing: '-0.03em',
+            fontSize: '1.15rem',
+            letterSpacing: '-0.02em',
             color: STITCH.primary,
             minWidth: 0,
           }}
         >
           Scout
-          <Box component="span" sx={{ color: STITCH.secondaryDark }}>
+          <Box component="span" sx={{ color: STITCH.secondary }}>
             Text
           </Box>
         </Typography>

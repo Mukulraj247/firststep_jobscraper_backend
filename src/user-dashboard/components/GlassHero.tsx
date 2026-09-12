@@ -1,10 +1,9 @@
 import React from 'react';
 import { Box } from '@mui/material';
-import { RADIUS, STITCH } from '../tokens';
+import { HERO_GRADIENT, MOTION_SAFE, RADIUS, STITCH } from '../tokens';
 
 /**
- * Stitch glass hero — dark navy→teal gradient with ambient mesh blooms.
- * Used on Home and Catalog; interior pages use PageHeader.
+ * FirstStep-style welcome hero: light wash, navy/teal ambient blobs.
  */
 export function GlassHero({
   children,
@@ -18,59 +17,65 @@ export function GlassHero({
       sx={{
         position: 'relative',
         overflow: 'hidden',
-        borderRadius: RADIUS.panel,
-        background: `linear-gradient(115deg, ${STITCH.primaryContainer} 0%, ${STITCH.tertiaryContainer} 52%, ${STITCH.secondary} 130%)`,
-        color: STITCH.onPrimary,
-        px: { xs: 2.5, md: dense ? 3 : 4 },
-        py: { xs: 3, md: dense ? 3 : 4 },
-        mb: { xs: 2, md: 3 },
-        boxShadow: '0 12px 32px rgba(0, 29, 41, 0.18)',
+        borderRadius: { xs: 0, md: RADIUS.panel },
+        background: HERO_GRADIENT,
+        color: STITCH.onSurface,
         border: 'none',
+        px: { xs: 1, md: dense ? 2 : 2 },
+        py: { xs: 3.5, md: dense ? 4 : 6 },
+        mb: { xs: 3, md: 4 },
+        boxShadow: 'none',
+        minHeight: { xs: 'auto', md: dense ? 180 : 220 },
       }}
     >
       <Box
         aria-hidden
         sx={{
           position: 'absolute',
-          width: 288,
-          height: 288,
-          top: -96,
-          left: -80,
+          width: { xs: 200, md: 360 },
+          height: { xs: 200, md: 360 },
+          top: { xs: -80, md: -120 },
+          right: { xs: -60, md: -80 },
           borderRadius: '50%',
-          bgcolor: STITCH.secondaryFixed,
-          opacity: 0.2,
-          filter: 'blur(64px)',
-          pointerEvents: 'none',
-        }}
-      />
-      <Box
-        aria-hidden
-        sx={{
-          position: 'absolute',
-          width: 320,
-          height: 320,
-          bottom: -80,
-          right: 40,
-          borderRadius: '50%',
-          bgcolor: STITCH.tertiaryFixedDim,
-          opacity: 0.25,
+          background: `linear-gradient(135deg, ${STITCH.primaryContainer}, ${STITCH.primaryDark})`,
+          opacity: 0.22,
           filter: 'blur(72px)',
           pointerEvents: 'none',
+          [MOTION_SAFE]: { animation: 'fsFloat 8s ease-in-out infinite' },
+          '@keyframes fsFloat': {
+            '0%, 100%': { transform: 'translateY(0)' },
+            '50%': { transform: 'translateY(-18px)' },
+          },
         }}
       />
       <Box
         aria-hidden
         sx={{
           position: 'absolute',
-          width: 208,
-          height: 208,
-          top: '50%',
-          left: '33%',
-          transform: 'translateY(-50%)',
+          width: { xs: 160, md: 280 },
+          height: { xs: 160, md: 280 },
+          bottom: { xs: -70, md: -90 },
+          right: { xs: 40, md: 120 },
           borderRadius: '50%',
-          bgcolor: STITCH.primaryFixed,
-          opacity: 0.15,
-          filter: 'blur(48px)',
+          background: `linear-gradient(135deg, ${STITCH.secondary}, ${STITCH.secondaryDark})`,
+          opacity: 0.28,
+          filter: 'blur(64px)',
+          pointerEvents: 'none',
+          [MOTION_SAFE]: { animation: 'fsFloat 8s ease-in-out infinite 2s' },
+        }}
+      />
+      <Box
+        aria-hidden
+        sx={{
+          position: 'absolute',
+          width: 220,
+          height: 220,
+          top: 40,
+          left: '28%',
+          borderRadius: '50%',
+          background: STITCH.primaryLight,
+          opacity: 0.14,
+          filter: 'blur(56px)',
           pointerEvents: 'none',
         }}
       />

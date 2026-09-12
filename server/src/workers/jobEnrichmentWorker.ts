@@ -19,6 +19,11 @@ import {
   resolveFrozenExperience,
 } from '../../../src/shared/frozenExperience';
 import {
+  LOCATION_RULES_VERSION,
+  classifyJobLocation,
+} from '../../../src/shared/frozenLocations';
+import { loadCompanyHistoricalStates } from '../services/companyHistoricalStates';
+import {
   fetchBrowserJobFallback,
   shouldTryBrowserJobFallback,
 } from '../services/browserJobFallback';
@@ -790,6 +795,50 @@ async function persistResult(
       logger.log(
         'warn',
         `[jobEnrichment] experience resolve failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
+      );
+    }
+
+    try {
+      const companyHistoricalStates = await loadCompanyHistoricalStates(mergedCompany);
+      const locHash = createHash('sha1')
+        .update(
+          [mergedLocation, mergedRemote, mergedCompany, ...(companyHistoricalStates || [])].join(
+            '|'
+          )
+        )
+        .digest('hex')
+        .slice(0, 16);
+      const existingLoc = (doc as any).locationClassification || {};
+      const locAlreadyCurrent =
+        existingLoc.contentHash === locHash &&
+        existingLoc.rulesVersion === LOCATION_RULES_VERSION &&
+        Array.isArray((doc as any).frozenStates);
+      const locResult = classifyJobLocation({
+        location: mergedLocation,
+        remoteType: mergedRemote,
+        companyName: mergedCompany,
+        companyHistoricalStates,
+      });
+      if (!locAlreadyCurrent) {
+        $set.frozenStates = locResult.frozenStates;
+        $set.frozenCities = locResult.frozenCities;
+        $set.locationIsRemote = locResult.locationIsRemote;
+        $set.locationIsUs = locResult.locationIsUs;
+        $set.locationClassification = {
+          method: locResult.method,
+          confidence: locResult.confidence,
+          rulesVersion: LOCATION_RULES_VERSION,
+          classifiedAt: new Date(),
+          contentHash: locHash,
+          ...(locResult.candidates?.length
+            ? { candidates: locResult.candidates.slice(0, 12) }
+            : {}),
+        };
+      }
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `[jobEnrichment] location resolve failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
       );
     }
 

@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
-import React, { useState, useContext, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState, useContext } from 'react';
 import styled from "styled-components";
 import { stopRecording } from "../../api/recording";
 import { useGlobalInfoStore } from "../../context/globalInfo";
@@ -15,21 +14,16 @@ import {
   AccountCircle,
   Logout,
   Clear,
-  YouTube,
-  X,
-  GitHub,
   LightMode,
   DarkMode,
-  Translate,
   Menu as MenuIcon,
 } from "@mui/icons-material";
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../../context/auth';
 import { SaveRecording } from '../recorder/SaveRecording';
-import DiscordIcon from '../icons/DiscordIcon';
-import { apiUrl } from '../../apiConfig';
 import ScoutXLogo from "../../assets/scoutx-logo.png";
 import { useThemeMode } from '../../context/theme-provider';
+import { useScoutXLogout } from '../../auth/scoutxLogout';
 import {
   HAMBURGER_BUTTON_ID,
   NAVBAR_LOGO_MAX_HEIGHT_PX,
@@ -53,60 +47,34 @@ export const NavBar: React.FC<NavBarProps> = ({
   const { user } = state;
   const navigate = useNavigate();
   const { darkMode, toggleTheme } = useThemeMode();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { isMobile, shellMounted, drawerOpen, openDrawer } = useAppShellNav();
   const showHamburger = shouldShowHamburger(isMobile, shellMounted);
+  const scoutXLogout = useScoutXLogout();
 
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-
-  const [langAnchorEl, setLangAnchorEl] = useState<null | HTMLElement>(null);
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
   };
 
-  const handleLangMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setLangAnchorEl(event.currentTarget);
-  };
-
   const handleMenuClose = () => {
     setAnchorEl(null);
-    setLangAnchorEl(null);
   };
 
+  /** Clears ScoutX cookie + Auth0 session (see scoutxLogout). */
   const logout = async () => {
     try {
-      const { data } = await axios.get(`${apiUrl}/auth/logout`);
-      if (data.ok) {
-        dispatch({ type: "LOGOUT" });
-        window.localStorage.removeItem("user");
-        // notify('success', t('navbar.notifications.success.logout'));
-        navigate("/login");
-      }
+      dispatch({ type: 'LOGOUT' });
+      await scoutXLogout();
     } catch (error: any) {
-      const status = error.response?.status;
-      let errorKey = 'unknown';
-
-      switch (status) {
-        case 401:
-          errorKey = 'unauthorized';
-          break;
-        case 500:
-          errorKey = 'server';
-          break;
-        default:
-          if (error.message?.includes('Network Error')) {
-            errorKey = 'network';
-          }
-      }
-
       notify(
         'error',
-        t(`navbar.notifications.errors.logout.${errorKey}`, {
-          error: error.response?.data?.message || error.message
+        t('navbar.notifications.errors.logout.unknown', {
+          error: error?.response?.data?.message || error?.message || 'Logout failed',
         })
       );
-      navigate("/login");
+      window.location.assign('/login');
     }
   };
 
@@ -117,11 +85,6 @@ export const NavBar: React.FC<NavBarProps> = ({
       setBrowserId(null);
     }
     navigate("/");
-  };
-
-  const changeLanguage = (lang: string) => {
-    i18n.changeLanguage(lang);
-    localStorage.setItem("language", lang);
   };
 
   const renderThemeToggle = () => (
@@ -170,7 +133,7 @@ export const NavBar: React.FC<NavBarProps> = ({
               navigate('/');
             }
           }}
-          aria-label={t('navbar.project_name')}
+          aria-label="Scout-X Scrapper"
         >
           <img
             src={ScoutXLogo}
@@ -212,102 +175,8 @@ export const NavBar: React.FC<NavBarProps> = ({
                     PaperProps={{ sx: { width: '180px' } }}
                   >
                     <MenuItem onClick={() => { handleMenuClose(); logout(); }}>
-                      <Logout sx={{ marginRight: '5px' }} /> {t('navbar.menu_items.logout')}
+                      <Logout sx={{ marginRight: '5px' }} /> Logout
                     </MenuItem>
-                    <MenuItem onClick={handleLangMenuOpen}>
-                      <Translate sx={{ marginRight: '5px' }} /> {t('navbar.menu_items.language')}
-                    </MenuItem>
-                    <hr />
-                    <MenuItem onClick={() => {
-                      window.open('https://github.com/getmaxun/maxun', '_blank');
-                    }}>
-                      <GitHub sx={{ marginRight: '5px' }} /> GitHub
-                    </MenuItem>
-                    <MenuItem onClick={() => {
-                      window.open('https://discord.gg/5GbPjBUkws', '_blank');
-                    }}>
-                      <DiscordIcon sx={{ marginRight: '5px' }} /> Discord
-                    </MenuItem>
-                    <MenuItem onClick={() => {
-                      window.open('https://www.youtube.com/@MaxunOSS/videos?ref=app', '_blank');
-                    }}>
-                      <YouTube sx={{ marginRight: '5px' }} /> YouTube
-                    </MenuItem>
-                    <MenuItem onClick={() => {
-                      window.open('https://x.com/MaxunHQ?ref=app', '_blank');
-                    }}>
-                      <X sx={{ marginRight: '5px' }} /> Twitter (X)
-                    </MenuItem>
-                    <Menu
-                      anchorEl={langAnchorEl}
-                      open={Boolean(langAnchorEl)}
-                      onClose={handleMenuClose}
-                      anchorOrigin={{
-                        vertical: "bottom",
-                        horizontal: "center",
-                      }}
-                      transformOrigin={{
-                        vertical: "top",
-                        horizontal: "center",
-                      }}
-                    >
-                      <MenuItem
-                        onClick={() => {
-                          changeLanguage("en");
-                          handleMenuClose();
-                        }}
-                      >
-                        English
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          changeLanguage("es");
-                          handleMenuClose();
-                        }}
-                      >
-                        Español
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          changeLanguage("ja");
-                          handleMenuClose();
-                        }}
-                      >
-                        日本語
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          changeLanguage("zh");
-                          handleMenuClose();
-                        }}
-                      >
-                        中文
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          changeLanguage("de");
-                          handleMenuClose();
-                        }}
-                      >
-                        Deutsch
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          changeLanguage("tr");
-                          handleMenuClose();
-                        }}
-                      >
-                        Türkçe
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => {
-                          window.open('https://docs.maxun.dev/development/i18n', '_blank');
-                          handleMenuClose();
-                        }}
-                      >
-                        Add Language
-                      </MenuItem>
-                    </Menu>
                   </Menu>
                   {renderThemeToggle()}
                 </>
@@ -330,88 +199,6 @@ export const NavBar: React.FC<NavBarProps> = ({
             </NavBarEnd>
           ) : (
             <NavBarEnd>
-              <IconButton
-                onClick={handleLangMenuOpen}
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  borderRadius: "5px",
-                  padding: "8px",
-                  marginRight: "4px",
-                }}
-              >
-                <Translate />
-              </IconButton>
-              <Menu
-                anchorEl={langAnchorEl}
-                open={Boolean(langAnchorEl)}
-                onClose={handleMenuClose}
-                anchorOrigin={{
-                  vertical: "bottom",
-                  horizontal: "center",
-                }}
-                transformOrigin={{
-                  vertical: "top",
-                  horizontal: "center",
-                }}
-              >
-                <MenuItem
-                  onClick={() => {
-                    changeLanguage("en");
-                    handleMenuClose();
-                  }}
-                >
-                  English
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    changeLanguage("es");
-                    handleMenuClose();
-                  }}
-                >
-                  Español
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    changeLanguage("ja");
-                    handleMenuClose();
-                  }}
-                >
-                  日本語
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    changeLanguage("zh");
-                    handleMenuClose();
-                  }}
-                >
-                  中文
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    changeLanguage("de");
-                    handleMenuClose();
-                  }}
-                >
-                  Deutsch
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    changeLanguage("tr");
-                    handleMenuClose();
-                  }}
-                >
-                  Türkçe
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    window.open('https://docs.maxun.dev/development/i18n', '_blank');
-                    handleMenuClose();
-                  }}
-                >
-                  Add Language
-                </MenuItem>
-              </Menu>
               {renderThemeToggle()}
             </NavBarEnd>
           )}

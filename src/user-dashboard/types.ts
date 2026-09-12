@@ -75,6 +75,14 @@ export type PortalUser = {
   name: string;
   email: string;
   persona: 'priya' | 'marcus' | 'guest';
+  auth0Sub?: string;
+  scoutxRoles?: string[];
+  firstStepPlan?: {
+    subscriptionType: string | null;
+    isActive: boolean | null;
+    status: string | null;
+  } | null;
+  firstStepRole?: string | null;
 };
 
 export type FeedFilters = {

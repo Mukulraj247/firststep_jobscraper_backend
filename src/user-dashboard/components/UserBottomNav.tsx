@@ -40,7 +40,7 @@ export function UserBottomNav() {
             minWidth: 0,
             color: STITCH.muted,
             gap: '2px',
-            '&.Mui-selected': { color: STITCH.secondaryDark },
+            '&.Mui-selected': { color: STITCH.primaryContainer },
           },
           '& .MuiBottomNavigationAction-label': {
             fontSize: '0.68rem',
@@ -49,7 +49,7 @@ export function UserBottomNav() {
             '&.Mui-selected': { fontSize: '0.68rem', fontWeight: 700 },
           },
           '& .Mui-selected .MuiSvgIcon-root': {
-            bgcolor: tint(STITCH.secondaryBright, 0.16),
+            bgcolor: tint(STITCH.secondary, 0.18),
             borderRadius: 999,
             px: 1.5,
             py: 0.15,

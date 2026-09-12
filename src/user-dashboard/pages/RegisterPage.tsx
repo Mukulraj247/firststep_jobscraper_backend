@@ -5,12 +5,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../components/AuthLayout';
 import { usePortalAuth } from '../hooks/usePortalAuth';
 import { FIRSTSTEP, primaryButtonSx } from '../tokens';
+import { isScoutXAuth0Configured } from '../../auth/ScoutXAuth0Provider';
 
-const STEPS = ['Pick a cluster that matches your search', 'Choose a refresh window: 1h, 2h or daily', 'Read your feed and apply straight from it'];
+const STEPS = [
+  'Pick a cluster that matches your search',
+  'Choose a refresh window: 1h, 2h or daily',
+  'Read your feed and apply straight from it',
+];
 
 export function RegisterPage() {
   const { login, user } = usePortalAuth();
   const navigate = useNavigate();
+  const auth0On = isScoutXAuth0Configured();
 
   useEffect(() => {
     if (user) navigate('/user', { replace: true });
@@ -22,7 +28,7 @@ export function RegisterPage() {
         Create your account
       </Typography>
       <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted, mt: 0.75, mb: 2.5 }}>
-        Three steps and your first feed starts refreshing.
+        Sign up with Auth0 (First Step tenant). Password registration is disabled.
       </Typography>
 
       <Stack spacing={1.25} sx={{ mb: 3 }}>
@@ -36,11 +42,20 @@ export function RegisterPage() {
         ))}
       </Stack>
 
-      <Button fullWidth variant="contained" disableElevation onClick={() => login('priya')} sx={{ ...primaryButtonSx, py: 1.2 }}>
+      <Button
+        fullWidth
+        variant="contained"
+        disableElevation
+        disabled={!auth0On}
+        onClick={() => login()}
+        sx={{ ...primaryButtonSx, py: 1.2 }}
+      >
         Continue with Auth0
       </Button>
       <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', color: FIRSTSTEP.textMuted, mt: 1.25 }}>
-        Demo mode — Auth0 connects in production
+        {auth0On
+          ? 'You will land on the ScoutX customer portal after Auth0.'
+          : 'Set VITE_AUTH0_* to enable signup'}
       </Typography>
 
       <Typography variant="body2" sx={{ mt: 3, textAlign: 'center', color: FIRSTSTEP.textMuted }}>

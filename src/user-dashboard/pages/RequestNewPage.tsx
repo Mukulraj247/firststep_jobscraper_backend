@@ -212,7 +212,7 @@ export function RequestNewPage() {
             fontWeight: 700,
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
-            color: STITCH.secondaryFixed,
+            color: STITCH.primaryContainer,
             fontFamily: BODY_FONT,
             mb: 1,
           }}
@@ -227,11 +227,12 @@ export function RequestNewPage() {
             letterSpacing: '-0.03em',
             fontSize: { xs: '1.5rem', md: '2rem' },
             lineHeight: 1.15,
+            color: STITCH.primaryContainer,
           }}
         >
           Create Custom Role Cluster
         </Typography>
-        <Typography sx={{ mt: 0.75, color: STITCH.primaryFixedDim, maxWidth: 640 }}>
+        <Typography sx={{ mt: 0.75, color: STITCH.muted, maxWidth: 640 }}>
           Describe the niche you want. Our curators build and maintain the filters — typically live in 24–48 hours.
         </Typography>
       </GlassHero>

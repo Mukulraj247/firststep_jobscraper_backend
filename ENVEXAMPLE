@@ -7,6 +7,24 @@ SESSION_SECRET=maxun_session # A strong, random string used to sign session cook
 # Keep this secret; it is independent of normal scout login.
 ADMIN_PASSWORD=change-me-admin-password
 
+# -----------------------------------------------------------------------------
+# Auth0 — reuse First Step development SPA (same tenant / client_id for now)
+# See docs/SCOUTX-AUTH0-SETUP.md for dashboard steps (callbacks + RBAC roles).
+# Do NOT write ScoutX into user_metadata.role (that field is First Step only).
+# -----------------------------------------------------------------------------
+# VITE_AUTH0_DOMAIN=dev-app0lbs2pjcoxxuv.us.auth0.com
+# VITE_AUTH0_CLIENT_ID=x2ginS1tSrJizlvIdyQLzeEfWfGFFbd9
+# Custom ScoutX API (RBAC) — not Auth0 Management API
+# VITE_AUTH0_AUDIENCE=https://scoutx.app/api
+# VITE_AUTH0_CALLBACK_URL=http://localhost:5173
+# AUTH0_DOMAIN=dev-app0lbs2pjcoxxuv.us.auth0.com
+# AUTH0_SPA_CLIENT_ID=x2ginS1tSrJizlvIdyQLzeEfWfGFFbd9
+# AUTH0_API_AUDIENCE=https://scoutx.app/api
+# SCOUTX_OPS_USER_ID=6a8cfcda6a727b0780e05692
+# Ops admin = Auth0 RBAC ScoutX_Admin only (do not use email allowlist)
+# FIRSTSTEP_API_BASE_URL=http://localhost:5000
+# Optional hostname (after DNS): VITE_AUTH0_CALLBACK_URL=https://scoutx-dev.firststepjob.com
+
 # Optional: DigitalOcean Monitoring API for the /admin compute panel (CPU / memory / disk / bandwidth).
 # Create a Personal Access Token with read scope: https://cloud.digitalocean.com/account/api/tokens
 # Droplet ID = full number from the Droplet URL (…/droplets/512345678), NOT the public IP.

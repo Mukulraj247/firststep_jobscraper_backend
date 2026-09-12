@@ -71,6 +71,8 @@ export interface JobBoardFilters {
   frozenExperienceLevels: string[];
   /** Experience year bands that currently have jobs. */
   frozenExperienceYears: string[];
+  /** USPS state codes that currently have jobs. */
+  frozenStates: string[];
   locations: string[];
 }
 
@@ -96,6 +98,8 @@ export const listJobs = async (params?: {
   frozenIndustries?: string[];
   frozenExperienceLevels?: string[];
   frozenExperienceYears?: string[];
+  /** USPS state codes; a job matches when it carries any of them. */
+  frozenStates?: string[];
   location?: string;
   workMode?: string;
   jobType?: string;
@@ -125,6 +129,9 @@ export const listJobs = async (params?: {
       ...(params?.frozenExperienceYears?.length
         ? { frozenExperienceYear: params.frozenExperienceYears.join(',') }
         : {}),
+      ...(params?.frozenStates?.length
+        ? { frozenState: params.frozenStates.join(',') }
+        : {}),
       ...(params?.location ? { location: params.location } : {}),
       ...(params?.workMode ? { workMode: params.workMode } : {}),
       ...(params?.jobType ? { jobType: params.jobType } : {}),
@@ -146,6 +153,7 @@ export const listJobs = async (params?: {
       frozenIndustries: data.filters?.frozenIndustries || [],
       frozenExperienceLevels: data.filters?.frozenExperienceLevels || [],
       frozenExperienceYears: data.filters?.frozenExperienceYears || [],
+      frozenStates: data.filters?.frozenStates || [],
       locations: data.filters?.locations || [],
     },
   };

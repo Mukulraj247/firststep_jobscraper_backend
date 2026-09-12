@@ -20,6 +20,10 @@ import {
   normalizeExperienceYearFilter,
 } from '../../../src/shared/frozenExperience';
 import {
+  FROZEN_US_STATE_CODES,
+  normalizeFrozenStateFilter,
+} from '../../../src/shared/frozenLocations';
+import {
   decodeHtmlEntities,
   pickBestDescription,
   sanitizeCompanyName,
@@ -54,6 +58,7 @@ type FacetCacheEntry = {
   frozenIndustries: string[];
   frozenExperienceLevels: string[];
   frozenExperienceYears: string[];
+  frozenStates: string[];
   locations: string[];
 };
 
@@ -277,6 +282,19 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
   const frozenExperienceYears = Array.isArray(row.frozenExperienceYears)
     ? row.frozenExperienceYears.map((x: unknown) => String(x || '').trim()).filter(Boolean)
     : [];
+  const frozenStates = Array.isArray(row.frozenStates)
+    ? row.frozenStates.map((x: unknown) => String(x || '').trim().toUpperCase()).filter(Boolean)
+    : [];
+  const frozenCities = Array.isArray(row.frozenCities)
+    ? row.frozenCities
+        .map((c: any) => ({
+          name: String(c?.name || '').trim(),
+          state: String(c?.state || '').trim().toUpperCase(),
+        }))
+        .filter((c: { name: string; state: string }) => c.name && c.state)
+    : [];
+  const locationIsRemote = Boolean(row.locationIsRemote);
+  const locationIsUs = row.locationIsUs !== false;
   const h1bEligible = Boolean(row.h1bEligible);
   const h1bCompanyScore = String(row.h1bCompanyScore || 'unknown');
   const h1bRoleScore = String(row.h1bRoleScore || 'unknown');
@@ -341,6 +359,10 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
       ...(frozenIndustries.length ? { frozenIndustries } : {}),
       ...(frozenExperienceLevels.length ? { frozenExperienceLevels } : {}),
       ...(frozenExperienceYears.length ? { frozenExperienceYears } : {}),
+      ...(frozenStates.length ? { frozenStates } : {}),
+      ...(frozenCities.length ? { frozenCities } : {}),
+      ...(locationIsRemote ? { locationIsRemote: true } : {}),
+      ...(!locationIsUs ? { locationIsUs: false } : {}),
       ...(h1bEligible
         ? {
             h1bEligible,
@@ -378,6 +400,7 @@ async function getFacets(
   frozenIndustries: string[];
   frozenExperienceLevels: string[];
   frozenExperienceYears: string[];
+  frozenStates: string[];
   locations: string[];
 }> {
   const cached = facetCache.get(ownerId);
@@ -389,6 +412,7 @@ async function getFacets(
       frozenIndustries: cached.frozenIndustries || [],
       frozenExperienceLevels: cached.frozenExperienceLevels || [],
       frozenExperienceYears: cached.frozenExperienceYears || [],
+      frozenStates: cached.frozenStates || [],
       locations: cached.locations || [],
     };
   }
@@ -402,6 +426,7 @@ async function getFacets(
     frozenIndustryFacets,
     frozenExperienceLevelFacets,
     frozenExperienceYearFacets,
+    frozenStateFacets,
     locationFacets,
   ] =
     await Promise.all([
@@ -479,6 +504,15 @@ async function getFacets(
       { $limit: FROZEN_EXPERIENCE_YEARS.length },
     ]),
     JobBoardListing.aggregate([
+      { $match: { ...match, frozenStates: { $nin: [null, []] } } },
+      { $project: { frozenStates: 1 } },
+      { $unwind: '$frozenStates' },
+      { $group: { _id: '$frozenStates', count: { $sum: 1 } } },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      { $limit: FROZEN_US_STATE_CODES.length },
+    ]),
+    JobBoardListing.aggregate([
       { $match: match },
       {
         $project: {
@@ -527,6 +561,12 @@ async function getFacets(
     frozenExperienceYearFacets.map((f: any) => String(f._id || '').trim()).filter(Boolean)
   );
   const frozenExperienceYears = FROZEN_EXPERIENCE_YEARS.filter((name) => presentExpYears.has(name));
+  const presentStates = new Set(
+    frozenStateFacets
+      .map((f: any) => String(f._id || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+  const frozenStates = FROZEN_US_STATE_CODES.filter((code) => presentStates.has(code));
   const locations = locationFacets
     .map((f: any) => normalizeLocation(decodeHtmlEntities(String(f._id || ''))))
     .filter(Boolean);
@@ -539,6 +579,7 @@ async function getFacets(
     frozenIndustries,
     frozenExperienceLevels,
     frozenExperienceYears,
+    frozenStates,
     locations: uniqueLocations,
   });
   return {
@@ -548,6 +589,7 @@ async function getFacets(
     frozenIndustries,
     frozenExperienceLevels,
     frozenExperienceYears,
+    frozenStates,
     locations: uniqueLocations,
   };
 }
@@ -572,6 +614,7 @@ router.get('/jobs', async (req: any, res: any) => {
     const frozenIndustries = normalizeFrozenIndustryFilter(req.query.frozenIndustry);
     const frozenExperienceLevels = normalizeExperienceLevelFilter(req.query.frozenExperienceLevel);
     const frozenExperienceYears = normalizeExperienceYearFilter(req.query.frozenExperienceYear);
+    const frozenStates = normalizeFrozenStateFilter(req.query.frozenState);
     const location = String(req.query.location || '').trim();
     const workMode = String(req.query.workMode || '').trim();
     const jobType = String(req.query.jobType || '').trim();
@@ -626,6 +669,9 @@ router.get('/jobs', async (req: any, res: any) => {
         ...(match.$and || []),
         { frozenExperienceYears: { $in: frozenExperienceYears } },
       ];
+    }
+    if (frozenStates.length) {
+      match.$and = [...(match.$and || []), { frozenStates: { $in: frozenStates } }];
     }
     if (h1bSponsorFriendly) {
       match.$and = [
@@ -683,6 +729,7 @@ router.get('/jobs', async (req: any, res: any) => {
       frozenIndustries,
       frozenExperienceLevels,
       frozenExperienceYears,
+      frozenStates,
       q,
       runId,
       location,
@@ -692,7 +739,7 @@ router.get('/jobs', async (req: any, res: any) => {
       source: req.query.source != null ? String(req.query.source).trim() : '',
       h1bSponsorFriendly,
       h1bFy2026Match,
-      v: 22,
+      v: 23,
     });
     const useText = !runId && q.length >= 3;
     const projection: Record<string, any> = {
@@ -708,6 +755,10 @@ router.get('/jobs', async (req: any, res: any) => {
       frozenIndustries: 1,
       frozenExperienceLevels: 1,
       frozenExperienceYears: 1,
+      frozenStates: 1,
+      frozenCities: 1,
+      locationIsRemote: 1,
+      locationIsUs: 1,
       location: 1,
       salaryRange: 1,
       employmentType: 1,
@@ -790,6 +841,7 @@ router.get('/jobs', async (req: any, res: any) => {
         frozenIndustries: facets.frozenIndustries,
         frozenExperienceLevels: facets.frozenExperienceLevels,
         frozenExperienceYears: facets.frozenExperienceYears,
+        frozenStates: facets.frozenStates,
         locations: facets.locations,
       },
     });
@@ -922,7 +974,7 @@ router.get('/jobs/:id', async (req: any, res: any) => {
       status: 'ready',
     })
       .select(
-        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories frozenIndustries frozenExperienceLevels frozenExperienceYears location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship h1bEligible h1bCompanyScore h1bRoleScore h1bCompanyConfidence h1bRoleConfidence h1bFilingCount h1bLastFilingYear h1bMatchedGovEmployer h1bCapExempt h1bDataAsOf h1bMappingStatus h1bFy2026Match h1bFy2026TitleConfidence h1bFy2026MatchedTitle h1bFy2026CertifiedCount h1bFy2026DataAsOf companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
+        'jobUrl applyUrl jobId jobTitle companyName jobDescription descriptionSnippet jobCategory frozenCategories frozenIndustries frozenExperienceLevels frozenExperienceYears frozenStates frozenCities locationIsRemote locationIsUs location salaryRange employmentType remoteType jobExperience sectorIndustry f500 date status enrichment companyLogoUrl about minimumQualifications preferredQualifications responsibilities benefits skills certifications seniorityLevel roleType educationRequirement visaSponsorship h1bEligible h1bCompanyScore h1bRoleScore h1bCompanyConfidence h1bRoleConfidence h1bFilingCount h1bLastFilingYear h1bMatchedGovEmployer h1bCapExempt h1bDataAsOf h1bMappingStatus h1bFy2026Match h1bFy2026TitleConfidence h1bFy2026MatchedTitle h1bFy2026CertifiedCount h1bFy2026DataAsOf companyEmployeeCount companyFoundedYear companyWebsite aggregatorPostingUrl listSnapshot createdAt lastSeenAt'
       )
       .lean();
 

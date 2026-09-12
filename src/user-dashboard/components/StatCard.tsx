@@ -9,7 +9,7 @@ import {
   RADIUS,
   SHADOW,
   STITCH,
-  panelSx,
+  featuredPanelSx,
   type AccentKey,
 } from '../tokens';
 
@@ -35,7 +35,7 @@ export function StatCard({ label, value, icon: Icon, accent = 'teal', hint, to }
     <Box
       {...(clickable ? { component: Link, to } : {})}
       sx={{
-        ...panelSx,
+        ...featuredPanelSx,
         display: 'block',
         height: '100%',
         p: 2,

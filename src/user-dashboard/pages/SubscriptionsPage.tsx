@@ -236,7 +236,7 @@ export function SubscriptionsPage() {
                 px: 1.25,
                 py: 0.45,
                 borderRadius: RADIUS.pill,
-                bgcolor: 'rgba(255,255,255,0.15)',
+                bgcolor: STITCH.secondaryContainer,
                 mb: 1.25,
               }}
             >
@@ -246,7 +246,7 @@ export function SubscriptionsPage() {
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: STITCH.secondaryFixed,
+                  color: STITCH.primaryContainer,
                   fontFamily: BODY_FONT,
                 }}
               >
@@ -261,11 +261,12 @@ export function SubscriptionsPage() {
                 letterSpacing: '-0.03em',
                 fontSize: { xs: '1.6rem', md: '2rem' },
                 lineHeight: 1.15,
+                color: STITCH.primaryContainer,
               }}
             >
               Subscriptions
             </Typography>
-            <Typography sx={{ mt: 0.75, color: STITCH.primaryFixedDim, fontSize: '0.95rem' }}>
+            <Typography sx={{ mt: 0.75, color: STITCH.muted, fontSize: '0.95rem' }}>
               Change how often each cluster delivers, pause one temporarily, or cancel anytime. Changes take
               effect at the next refresh.
             </Typography>
@@ -277,12 +278,12 @@ export function SubscriptionsPage() {
                   px: 2,
                   py: 1.25,
                   borderRadius: RADIUS.card,
-                  bgcolor: 'rgba(255,255,255,0.12)',
-                  border: '1px solid rgba(255,255,255,0.18)',
+                  bgcolor: STITCH.surfaceLow,
+                  border: `1px solid ${STITCH.outlineVariant}`,
                   minWidth: 100,
                 }}
               >
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>
+                <Typography sx={{ fontSize: '0.68rem', color: STITCH.muted, fontWeight: 600 }}>
                   Active
                 </Typography>
                 <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.35rem' }}>
@@ -294,12 +295,12 @@ export function SubscriptionsPage() {
                   px: 2,
                   py: 1.25,
                   borderRadius: RADIUS.card,
-                  bgcolor: 'rgba(255,255,255,0.12)',
-                  border: '1px solid rgba(255,255,255,0.18)',
+                  bgcolor: STITCH.surfaceLow,
+                  border: `1px solid ${STITCH.outlineVariant}`,
                   minWidth: 120,
                 }}
               >
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>
+                <Typography sx={{ fontSize: '0.68rem', color: STITCH.muted, fontWeight: 600 }}>
                   Monthly total
                 </Typography>
                 <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.35rem' }}>

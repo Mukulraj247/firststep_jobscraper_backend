@@ -48,8 +48,8 @@ export function ClusterDetailPage() {
   return (
     <Box sx={{ pb: { xs: 14, md: 2 } }}>
       <GlassHero>
-        <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: 'rgba(255,255,255,0.65)', mb: 1.25, fontFamily: BODY_FONT }}>
-          <Box component={Link} to="/user/clusters" sx={{ color: 'inherit', textDecoration: 'none', '&:hover': { color: STITCH.secondaryFixed } }}>
+        <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: STITCH.muted, mb: 1.25, fontFamily: BODY_FONT }}>
+          <Box component={Link} to="/user/clusters" sx={{ color: 'inherit', textDecoration: 'none', '&:hover': { color: STITCH.primaryContainer } }}>
             Catalog
           </Box>
           {' / '}
@@ -78,10 +78,10 @@ export function ClusterDetailPage() {
               borderRadius: RADIUS.pill,
               fontWeight: 700,
               fontSize: '0.7rem',
-              bgcolor: 'rgba(255,255,255,0.14)',
-              color: STITCH.onPrimary,
-              border: '1px solid rgba(255,255,255,0.22)',
-              '& .MuiChip-icon': { color: STITCH.secondaryFixed },
+              bgcolor: STITCH.secondaryContainer,
+              color: STITCH.primaryContainer,
+              border: `1px solid ${STITCH.outlineVariant}`,
+              '& .MuiChip-icon': { color: STITCH.secondary },
             }}
           />
         </Stack>
@@ -92,7 +92,7 @@ export function ClusterDetailPage() {
               component="img"
               src={cluster.companyLogos[0]}
               alt=""
-              sx={{ width: 44, height: 44, borderRadius: RADIUS.md, bgcolor: 'rgba(255,255,255,0.15)', objectFit: 'cover' }}
+              sx={{ width: 44, height: 44, borderRadius: RADIUS.md, bgcolor: STITCH.surfaceLow, objectFit: 'cover' }}
             />
           )}
           <Box>
@@ -104,17 +104,18 @@ export function ClusterDetailPage() {
                 letterSpacing: '-0.03em',
                 fontSize: { xs: '1.7rem', md: '2.25rem' },
                 lineHeight: 1.15,
+                color: STITCH.primaryContainer,
               }}
             >
               {cluster.name}
             </Typography>
-            <Typography sx={{ fontSize: '0.75rem', color: STITCH.primaryFixedDim, fontFamily: BODY_FONT }}>
+            <Typography sx={{ fontSize: '0.75rem', color: STITCH.muted, fontFamily: BODY_FONT }}>
               Cluster ID · {cluster.id} · Synced 14m ago
             </Typography>
           </Box>
         </Stack>
 
-        <Typography sx={{ color: STITCH.primaryFixedDim, mt: 1, maxWidth: 720, fontSize: '0.95rem' }}>
+        <Typography sx={{ color: STITCH.muted, mt: 1, maxWidth: 720, fontSize: '0.95rem' }}>
           {cluster.description}
         </Typography>
 
@@ -129,12 +130,12 @@ export function ClusterDetailPage() {
                 sx={{
                   p: 1.5,
                   borderRadius: RADIUS.card,
-                  bgcolor: 'rgba(255,255,255,0.1)',
-                  border: '1px solid rgba(255,255,255,0.14)',
+                  bgcolor: STITCH.surfaceLow,
+                  border: `1px solid ${STITCH.outlineVariant}`,
                   backdropFilter: 'blur(10px)',
                 }}
               >
-                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.65)' }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: STITCH.muted }}>
                   {stat.label}
                 </Typography>
                 <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.25rem', mt: 0.25 }}>
@@ -156,9 +157,9 @@ export function ClusterDetailPage() {
                 borderRadius: RADIUS.pill,
                 fontSize: '0.72rem',
                 fontWeight: 600,
-                bgcolor: 'rgba(255,255,255,0.12)',
-                color: STITCH.onPrimary,
-                border: '1px solid rgba(255,255,255,0.18)',
+                bgcolor: STITCH.surfaceLow,
+                color: STITCH.primaryContainer,
+                border: `1px solid ${STITCH.outlineVariant}`,
               }}
             />
           ))}

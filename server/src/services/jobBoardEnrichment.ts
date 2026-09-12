@@ -30,6 +30,11 @@ import {
   experienceContentHashParts,
   resolveFrozenExperience,
 } from '../../../src/shared/frozenExperience';
+import {
+  LOCATION_RULES_VERSION,
+  classifyJobLocation,
+} from '../../../src/shared/frozenLocations';
+import { loadCompanyHistoricalStates } from './companyHistoricalStates';
 import { resolveH1bSponsorship } from './h1b/resolveH1bSponsorship';
 import { resolveFy2026JobMatch } from './h1b/matchFy2026Role';
 import logger from '../logger';
@@ -864,6 +869,37 @@ export async function enqueueJobBoardEnrichments(opts: {
         logger.log(
           'warn',
           `enqueueJobBoardEnrichments experience resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+        );
+      }
+
+      try {
+        const snap = item.snapshot || {};
+        const loc = String(fields.location || snap.location || '').trim();
+        const remoteType = String(fields.remoteType || snap.remoteType || '').trim();
+        const companyName = String(fields.companyName || snap.companyName || '').trim();
+        const companyHistoricalStates = await loadCompanyHistoricalStates(companyName);
+        const locResult = classifyJobLocation({
+          location: loc,
+          remoteType,
+          companyName,
+          companyHistoricalStates,
+        });
+        tagFields.frozenStates = locResult.frozenStates;
+        tagFields.frozenCities = locResult.frozenCities;
+        tagFields.locationIsRemote = locResult.locationIsRemote;
+        tagFields.locationIsUs = locResult.locationIsUs;
+        tagFields.locationClassification = {
+          method: locResult.method,
+          confidence: locResult.confidence,
+          rulesVersion: LOCATION_RULES_VERSION,
+          classifiedAt: nowDate,
+          contentHash: String(fields.contentHash || ''),
+          ...(locResult.candidates?.length ? { candidates: locResult.candidates.slice(0, 12) } : {}),
+        };
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `enqueueJobBoardEnrichments location resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
         );
       }
 

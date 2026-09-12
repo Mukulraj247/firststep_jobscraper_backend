@@ -21,14 +21,14 @@ import { useRequirePortalAuth } from '../hooks/usePortalAuth';
 import { listClusters, listFeed, listRequests, listSaved, listSubscriptions, saveJob, unsaveJob } from '../mock/mockApi';
 import type { Cluster, ClusterRequest, ClusterSubscription, FeedJob } from '../types';
 import { FREQUENCY_LABEL } from '../types';
-import { greetingFor, pluralize, timeUntil } from '../utils/format';
+import { pluralize, timeUntil } from '../utils/format';
 import {
   BODY_FONT,
   DISPLAY_FONT,
   RADIUS,
   STITCH,
-  accentButtonSx,
-  panelSx,
+  featuredPanelSx,
+  ghostButtonSx,
   primaryButtonSx,
 } from '../tokens';
 
@@ -96,8 +96,7 @@ export function HomePage() {
                 px: 1.5,
                 py: 0.5,
                 borderRadius: RADIUS.pill,
-                bgcolor: 'rgba(255,255,255,0.15)',
-                backdropFilter: 'blur(8px)',
+                bgcolor: STITCH.secondaryContainer,
                 mb: 1.5,
               }}
             >
@@ -107,7 +106,7 @@ export function HomePage() {
                     position: 'absolute',
                     inset: 0,
                     borderRadius: '50%',
-                    bgcolor: STITCH.secondaryFixed,
+                    bgcolor: STITCH.secondary,
                     animation: 'pulse 1.6s ease-out infinite',
                     '@keyframes pulse': {
                       '0%': { transform: 'scale(1)', opacity: 0.75 },
@@ -115,7 +114,7 @@ export function HomePage() {
                     },
                   }}
                 />
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: STITCH.secondaryFixed }} />
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: STITCH.secondary }} />
               </Box>
               <Typography
                 sx={{
@@ -123,7 +122,7 @@ export function HomePage() {
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: STITCH.secondaryFixed,
+                  color: STITCH.primaryContainer,
                   fontFamily: BODY_FONT,
                 }}
               >
@@ -135,14 +134,18 @@ export function HomePage() {
               sx={{
                 fontFamily: DISPLAY_FONT,
                 fontWeight: 700,
-                letterSpacing: '-0.03em',
-                fontSize: { xs: '2rem', md: '3rem' },
-                lineHeight: 1.1,
+                letterSpacing: '-0.02em',
+                fontSize: { xs: '1.75rem', md: '2.75rem' },
+                lineHeight: 1.2,
+                color: STITCH.onSurface,
               }}
             >
-              {greetingFor()}, {firstName}
+              Welcome,{' '}
+              <Box component="span" sx={{ color: STITCH.primaryContainer }}>
+                {firstName}!
+              </Box>
             </Typography>
-            <Typography sx={{ mt: 1, color: STITCH.primaryFixedDim, fontSize: '1rem', maxWidth: 520 }}>
+            <Typography sx={{ mt: 1.5, color: STITCH.muted, fontSize: { xs: '0.9rem', md: '1.05rem' }, maxWidth: 520, lineHeight: 1.6 }}>
               Your job clusters are actively monitored and refreshed every 1–2 hours.
               {nextSync && (
                 <>
@@ -152,10 +155,7 @@ export function HomePage() {
                     component="span"
                     sx={{
                       fontWeight: 700,
-                      color: STITCH.onPrimary,
-                      textDecoration: 'underline',
-                      textDecorationColor: 'rgba(146,243,232,0.5)',
-                      textUnderlineOffset: 4,
+                      color: STITCH.primaryContainer,
                     }}
                   >
                     {nextSync}
@@ -172,24 +172,16 @@ export function HomePage() {
               variant="contained"
               disableElevation
               startIcon={<ExploreOutlined sx={{ fontSize: 20 }} />}
-              sx={accentButtonSx}
+              sx={primaryButtonSx}
             >
               Browse New Clusters
             </Button>
             <Button
               component={Link}
               to="/user/profile"
+              variant="outlined"
               startIcon={<TuneOutlined sx={{ fontSize: 20 }} />}
-              sx={{
-                borderRadius: RADIUS.control,
-                fontWeight: 600,
-                textTransform: 'none',
-                px: 2.5,
-                color: STITCH.onPrimary,
-                bgcolor: 'rgba(255,255,255,0.15)',
-                backdropFilter: 'blur(8px)',
-                '&:hover': { bgcolor: 'rgba(255,255,255,0.25)' },
-              }}
+              sx={ghostButtonSx}
             >
               Configure Feed Alerts
             </Button>
@@ -291,7 +283,7 @@ export function HomePage() {
               const cluster = allClusters.find((c) => c.id === sub.clusterId);
               return (
                 <Grid item xs={12} lg={6} key={sub.id}>
-                  <Box sx={{ ...panelSx, p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <Box sx={{ ...featuredPanelSx, p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
                     <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
                       <Box>
                         <Chip
@@ -314,7 +306,7 @@ export function HomePage() {
                             fontFamily: DISPLAY_FONT,
                             fontWeight: 600,
                             fontSize: '1.25rem',
-                            color: STITCH.onSurface,
+                            color: STITCH.primaryContainer,
                           }}
                         >
                           {sub.clusterName}
@@ -444,7 +436,7 @@ export function HomePage() {
             component={Link}
             to="/user/feed"
             endIcon={<ArrowForward sx={{ fontSize: 16 }} />}
-            sx={{ textTransform: 'none', fontWeight: 700, color: STITCH.secondary }}
+            sx={{ textTransform: 'none', fontWeight: 700, color: STITCH.primaryContainer }}
           >
             Open full stream ({feedCount})
           </Button>

@@ -45,6 +45,10 @@ import {
   FROZEN_EXPERIENCE_LEVELS,
   FROZEN_EXPERIENCE_YEARS,
 } from '../../shared/frozenExperience';
+import {
+  FROZEN_US_STATE_CODES,
+  stateCodeToLabel,
+} from '../../shared/frozenLocations';
 import { resolveJobBoardCompany, resolveJobBoardLocation } from '../../utils/jobBoardDisplay';
 import { isEmployerApplyHref } from '../../shared/aggregatorHosts';
 import {
@@ -1476,6 +1480,69 @@ const JobBoardExperienceYearsFilter: React.FC<{
   );
 };
 
+/**
+ * State filter = frozenStates USPS codes; UI shows short/full English names.
+ */
+const JobBoardStateFilter: React.FC<{
+  value: string[];
+  facetOptions: string[];
+  onChange: (next: string[]) => void;
+}> = ({ value, facetOptions, onChange }) => {
+  const options = useMemo(() => {
+    const present = new Set(facetOptions);
+    const withJobs = FROZEN_US_STATE_CODES.filter((code) => present.has(code));
+    const withoutJobs = FROZEN_US_STATE_CODES.filter((code) => !present.has(code));
+    const ordered = [...withJobs, ...withoutJobs];
+    const missing = value.filter(
+      (item) => !ordered.includes(item as (typeof FROZEN_US_STATE_CODES)[number])
+    );
+    return missing.length ? [...missing, ...ordered] : ordered;
+  }, [facetOptions, value]);
+
+  return (
+    <Autocomplete
+      multiple
+      disableCloseOnSelect
+      size="small"
+      options={options}
+      value={value}
+      onChange={(_event, next) => onChange(orderFrozenCategories(next as string[], facetOptions))}
+      getOptionLabel={(option) => stateCodeToLabel(option)}
+      isOptionEqualToValue={(a, b) => a === b}
+      autoHighlight
+      clearOnEscape
+      ListboxProps={{ sx: jobBoardFacetListboxSx() }}
+      renderOption={(props, option) => (
+        <li {...props} key={option} title={`${stateCodeToLabel(option, { short: false })} (${option})`}>
+          {stateCodeToLabel(option)}
+        </li>
+      )}
+      renderTags={(selected, getTagProps) =>
+        selected.map((option, index) => {
+          const { key, onDelete } = getTagProps({ index });
+          return (
+            <Chip
+              key={key}
+              size="small"
+              label={stateCodeToLabel(option)}
+              onDelete={onDelete}
+              sx={{ m: 0.25 }}
+            />
+          );
+        })
+      }
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="State"
+          placeholder={value.length ? '' : 'e.g. N. Carolina'}
+        />
+      )}
+      sx={{ minWidth: 0, flex: '1 1 220px', maxWidth: '100%', ...heroGlassFormControlSx() }}
+    />
+  );
+};
+
 const JobBoardChipFilter: React.FC<{
   caption: string;
   value: string;
@@ -1520,6 +1587,7 @@ export const JobBoardPage: React.FC = () => {
     frozenIndustries: [],
     frozenExperienceLevels: [],
     frozenExperienceYears: [],
+    frozenStates: [],
     locations: [],
   });
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 });
@@ -1532,6 +1600,7 @@ export const JobBoardPage: React.FC = () => {
   const [frozenIndustries, setFrozenIndustries] = useState<string[]>([]);
   const [frozenExperienceLevels, setFrozenExperienceLevels] = useState<string[]>([]);
   const [frozenExperienceYears, setFrozenExperienceYears] = useState<string[]>([]);
+  const [frozenStates, setFrozenStates] = useState<string[]>([]);
   const [location, setLocation] = useState('');
   const [workMode, setWorkMode] = useState('');
   const [jobType, setJobType] = useState('');
@@ -1558,6 +1627,7 @@ export const JobBoardPage: React.FC = () => {
         frozenIndustries: frozenIndustries.length ? frozenIndustries : undefined,
         frozenExperienceLevels: frozenExperienceLevels.length ? frozenExperienceLevels : undefined,
         frozenExperienceYears: frozenExperienceYears.length ? frozenExperienceYears : undefined,
+        frozenStates: frozenStates.length ? frozenStates : undefined,
         location: location || undefined,
         workMode: workMode || undefined,
         jobType: jobType || undefined,
@@ -1574,6 +1644,7 @@ export const JobBoardPage: React.FC = () => {
         frozenIndustries: res.filters?.frozenIndustries || [],
         frozenExperienceLevels: res.filters?.frozenExperienceLevels || [],
         frozenExperienceYears: res.filters?.frozenExperienceYears || [],
+        frozenStates: res.filters?.frozenStates || [],
         locations: res.filters?.locations || [],
       });
     } catch {
@@ -1582,7 +1653,7 @@ export const JobBoardPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, q, category, frozenCategories, frozenIndustries, frozenExperienceLevels, frozenExperienceYears, location, workMode, jobType, added, source, h1bSponsorFriendly, h1bFy2026Match, t]);
+  }, [page, q, category, frozenCategories, frozenIndustries, frozenExperienceLevels, frozenExperienceYears, frozenStates, location, workMode, jobType, added, source, h1bSponsorFriendly, h1bFy2026Match, t]);
 
   useEffect(() => {
     void loadJobs();
@@ -1647,6 +1718,7 @@ export const JobBoardPage: React.FC = () => {
     setFrozenIndustries([]);
     setFrozenExperienceLevels([]);
     setFrozenExperienceYears([]);
+    setFrozenStates([]);
     setLocation('');
     setWorkMode('');
     setJobType('');
@@ -1664,6 +1736,7 @@ export const JobBoardPage: React.FC = () => {
     frozenIndustries,
     frozenExperienceLevels,
     frozenExperienceYears,
+    frozenStates,
     location,
     workMode,
     jobType,
@@ -1805,6 +1878,14 @@ export const JobBoardPage: React.FC = () => {
                 facetOptions={filters.frozenExperienceYears}
                 onChange={(next) => {
                   setFrozenExperienceYears(next);
+                  setPage(1);
+                }}
+              />
+              <JobBoardStateFilter
+                value={frozenStates}
+                facetOptions={filters.frozenStates}
+                onChange={(next) => {
+                  setFrozenStates(next);
                   setPage(1);
                 }}
               />

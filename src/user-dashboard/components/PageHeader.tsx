@@ -61,10 +61,10 @@ export function PageHeader({ eyebrow, title, subtitle, actions, meta }: Props) {
             component="h1"
             sx={{
               fontFamily: DISPLAY_FONT,
-              fontWeight: 600,
+              fontWeight: 700,
               letterSpacing: '-0.02em',
               lineHeight: 1.15,
-              color: STITCH.onSurface,
+              color: STITCH.primaryContainer,
               fontSize: { xs: '1.5rem', md: '1.85rem' },
             }}
           >

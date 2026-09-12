@@ -1,49 +1,51 @@
 /**
- * ScoutText customer portal tokens — aligned to the Stitch DESIGN.md system.
- * Kept portal-local so ops FirstStep tokens stay untouched.
+ * ScoutText customer portal tokens — aligned to FirstStep user dashboard.
+ * Kept portal-local so ops tokens stay untouched.
  */
 
 export const STITCH = {
-  // Brand / structure
-  primary: '#001d29',
-  primaryContainer: '#023345',
+  // Brand / structure — FirstStep theme.ts + #023345 lockup
+  primary: '#023345',
+  primaryContainer: '#1e4a5f',
   onPrimary: '#ffffff',
-  onPrimaryContainer: '#759cb1',
-  primaryFixed: '#c1e8ff',
-  primaryFixedDim: '#a4cce3',
-  onPrimaryFixed: '#001e2b',
+  onPrimaryContainer: '#5b8fa3',
+  primaryFixed: '#e8f2f6',
+  primaryFixedDim: '#5b8fa3',
+  onPrimaryFixed: '#0f2633',
+  primaryDark: '#0f2633',
+  primaryLight: '#5b8fa3',
 
-  // Accent / secondary
-  secondary: '#006a63',
+  // Accent / secondary — FirstStep teal
+  secondary: '#4fb3a9',
   secondaryBright: '#4fb3a9',
-  secondaryDark: '#2a8e9e',
+  secondaryDark: '#357a7a',
   onSecondary: '#ffffff',
-  secondaryContainer: '#8ff1e5',
-  onSecondaryContainer: '#006f67',
-  secondaryFixed: '#92f3e8',
-  secondaryFixedDim: '#75d7cc',
+  secondaryContainer: '#e6f7f5',
+  onSecondaryContainer: '#1e4a5f',
+  secondaryFixed: '#7dd3d8',
+  secondaryFixedDim: '#4fb3a9',
 
-  // Tertiary / hero depth
-  tertiary: '#001d22',
-  tertiaryContainer: '#00343c',
-  tertiaryFixedDim: '#7ad4e5',
-  onTertiaryContainer: '#44a2b3',
+  // Tertiary / depth
+  tertiary: '#0f2633',
+  tertiaryContainer: '#034a63',
+  tertiaryFixedDim: '#7dd3d8',
+  onTertiaryContainer: '#1e4a5f',
 
-  // Surfaces
-  background: '#f8f9ff',
-  surface: '#f8f9ff',
-  surfaceBright: '#f8f9ff',
-  surfaceDim: '#cbdbf5',
+  // Surfaces — cool gray, not lavender
+  background: '#f8fafb',
+  surface: '#f8fafc',
+  surfaceBright: '#ffffff',
+  surfaceDim: '#e2e8f0',
   surfaceLowest: '#ffffff',
-  surfaceLow: '#eff4ff',
-  surfaceContainer: '#e5eeff',
-  surfaceHigh: '#dce9ff',
-  surfaceHighest: '#d3e4fe',
-  onSurface: '#0b1c30',
-  onSurfaceVariant: '#41484c',
-  outline: '#72787c',
-  outlineVariant: '#c1c7cc',
-  border: '#e2e8f0',
+  surfaceLow: '#f1f5f9',
+  surfaceContainer: '#eef4f6',
+  surfaceHigh: '#e2e8f0',
+  surfaceHighest: '#dbe7ec',
+  onSurface: '#1e293b',
+  onSurfaceVariant: '#64748b',
+  outline: '#94a3b8',
+  outlineVariant: '#e2e8f0',
+  border: 'rgba(226, 232, 240, 0.9)',
   muted: '#64748b',
 
   // Semantic
@@ -57,14 +59,14 @@ export const STITCH = {
 export const FIRSTSTEP = {
   navy: STITCH.primaryContainer,
   navyDeep: STITCH.primary,
-  navyInk: STITCH.primary,
+  navyInk: STITCH.primaryDark,
   teal: STITCH.secondaryBright,
   tealDark: STITCH.secondaryDark,
-  tealDeep: STITCH.secondary,
+  tealDeep: STITCH.secondaryDark,
   surface: STITCH.background,
   surfaceAlt: STITCH.surfaceLow,
   white: STITCH.surfaceLowest,
-  border: STITCH.border,
+  border: STITCH.outlineVariant,
   textMuted: STITCH.muted,
   success: STITCH.success,
   successDeep: '#059669',
@@ -72,14 +74,14 @@ export const FIRSTSTEP = {
   warning: STITCH.warning,
 } as const;
 
-/** Stitch Tailwind: DEFAULT 4px · lg 8px · xl 12px · full pill */
+/** FirstStep: cards 16 · controls 12 · chips pill */
 export const RADIUS = {
-  card: '12px',
-  panel: '12px',
+  card: '16px',
+  panel: '16px',
   control: '12px',
-  xl: '12px',
-  sm: '4px',
-  md: '8px',
+  xl: '16px',
+  sm: '6px',
+  md: '12px',
   pill: '9999px',
 } as const;
 
@@ -92,43 +94,61 @@ export const tint = (color: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-export const DISPLAY_FONT = "'Outfit', 'Geologica', system-ui, sans-serif";
-export const BODY_FONT = "'Inter', system-ui, sans-serif";
+export const DISPLAY_FONT = "'Geologica', 'Rotunda Regular', system-ui, sans-serif";
+export const BODY_FONT = "'Geologica', 'Inter', system-ui, sans-serif";
 
 export const PORTAL_NAV_WIDTH = 280;
-export const PORTAL_TOPBAR_HEIGHT = 64;
+export const PORTAL_TOPBAR_HEIGHT = 96;
 export const PAGE_MAX_WIDTH = 1440;
 
 export const SHADOW = {
-  xs: '0 1px 8px rgba(0,0,0,0.04)',
-  sm: `0 4px 20px -2px ${tint(STITCH.primaryContainer, 0.04)}`,
-  md: `0 12px 28px -4px ${tint(STITCH.primaryContainer, 0.08)}, 0 0 0 1px ${tint(STITCH.secondaryBright, 0.3)}`,
-  lg: `0 20px 40px -10px ${tint(STITCH.primary, 0.16)}`,
-  teal: `0 4px 12px ${tint(STITCH.primaryContainer, 0.18)}`,
-  cardHover: `0 10px 24px -4px ${tint(STITCH.secondaryBright, 0.18)}`,
+  xs: '0 4px 20px rgba(0, 0, 0, 0.08)',
+  sm: '0 8px 24px rgba(2, 51, 69, 0.08)',
+  md: '0 12px 40px rgba(0, 0, 0, 0.12)',
+  lg: '0 20px 60px rgba(0, 0, 0, 0.15)',
+  teal: '0 4px 12px rgba(30, 74, 95, 0.22)',
+  cardHover: '0 12px 40px rgba(0, 0, 0, 0.15)',
 } as const;
 
 export const MOTION_SAFE = '@media (prefers-reduced-motion: no-preference)';
-export const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
+export const EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
 
-export const HERO_GRADIENT =
-  `linear-gradient(135deg, ${STITCH.primaryContainer} 0%, ${STITCH.tertiaryContainer} 48%, ${STITCH.secondary} 128%)`;
+export const HERO_GRADIENT = 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)';
 
-/** Stitch cards: white + soft shadow, no hard border. */
+const accentBar = {
+  content: '""',
+  position: 'absolute' as const,
+  top: 0,
+  left: 0,
+  right: 0,
+  height: 4,
+  background: `linear-gradient(90deg, ${STITCH.primaryContainer}, ${STITCH.secondary})`,
+  borderRadius: '16px 16px 0 0',
+};
+
+/** FirstStep cards: white → slate wash, hairline border. */
 export const panelSx = {
   bgcolor: STITCH.surfaceLowest,
-  border: 'none',
+  background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+  border: '1px solid rgba(226, 232, 240, 0.8)',
   borderRadius: RADIUS.card,
   boxShadow: SHADOW.xs,
 } as const;
 
-export const interactivePanelSx = {
+/** Major dashboard cards — FirstStep 4px navy→teal bar. */
+export const featuredPanelSx = {
   ...panelSx,
-  transition: `transform 220ms ${EASE}, box-shadow 220ms ${EASE}, border-color 220ms ${EASE}`,
+  position: 'relative' as const,
+  overflow: 'hidden' as const,
+  '&::before': accentBar,
+} as const;
+
+export const interactivePanelSx = {
+  ...featuredPanelSx,
+  transition: `transform 300ms ${EASE}, box-shadow 300ms ${EASE}`,
   '&:hover': {
-    borderColor: tint(STITCH.secondaryBright, 0.45),
     boxShadow: SHADOW.cardHover,
-    [MOTION_SAFE]: { transform: 'translateY(-2px)' },
+    [MOTION_SAFE]: { transform: 'translateY(-4px)' },
   },
 } as const;
 
@@ -137,20 +157,24 @@ export const pillSx = {
   fontWeight: 600,
 } as const;
 
-/** Deep navy primary — matches Stitch "View Live Feed" / Subscribe CTAs. */
+/** FirstStep primary CTA — navy gradient. */
 export const primaryButtonSx = {
   borderRadius: RADIUS.control,
   fontWeight: 600,
   textTransform: 'none' as const,
   px: 2.5,
   fontFamily: BODY_FONT,
-  bgcolor: STITCH.primary,
+  background: `linear-gradient(135deg, ${STITCH.primaryContainer}, ${STITCH.primaryDark})`,
   color: STITCH.onPrimary,
   boxShadow: SHADOW.teal,
-  '&:hover': { bgcolor: STITCH.primaryContainer, boxShadow: SHADOW.teal },
+  '&:hover': {
+    background: `linear-gradient(135deg, ${STITCH.primaryDark}, ${STITCH.primaryContainer})`,
+    boxShadow: '0 8px 20px rgba(0, 0, 0, 0.15)',
+    [MOTION_SAFE]: { transform: 'translateY(-2px)' },
+  },
 };
 
-/** Stitch secondary CTA — `bg-secondary` (#006a63) + white label (Browse / Apply). */
+/** FirstStep secondary CTA — teal. */
 export const accentButtonSx = {
   borderRadius: RADIUS.control,
   fontWeight: 600,
@@ -159,8 +183,8 @@ export const accentButtonSx = {
   fontFamily: BODY_FONT,
   bgcolor: STITCH.secondary,
   color: STITCH.onSecondary,
-  boxShadow: `0 4px 12px ${tint(STITCH.secondary, 0.28)}`,
-  '&:hover': { bgcolor: STITCH.onSecondaryContainer, color: STITCH.onSecondary },
+  boxShadow: `0 4px 12px ${tint(STITCH.secondary, 0.32)}`,
+  '&:hover': { bgcolor: STITCH.secondaryDark, color: STITCH.onSecondary },
 };
 
 export const ghostButtonSx = {
@@ -169,12 +193,14 @@ export const ghostButtonSx = {
   textTransform: 'none' as const,
   px: 2,
   fontFamily: BODY_FONT,
-  color: STITCH.primaryContainer,
-  borderColor: STITCH.border,
+  color: STITCH.primary,
+  borderColor: STITCH.primary,
   bgcolor: STITCH.surfaceLowest,
+  borderWidth: 1,
   '&:hover': {
-    borderColor: STITCH.secondaryBright,
-    bgcolor: tint(STITCH.secondaryBright, 0.08),
+    borderColor: STITCH.primary,
+    bgcolor: tint(STITCH.primary, 0.04),
+    borderWidth: 1,
   },
 };
 

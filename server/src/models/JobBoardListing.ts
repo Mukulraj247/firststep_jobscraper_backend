@@ -152,6 +152,31 @@ export interface IJobBoardListing extends Document {
     contentHash?: string;
     matchedSignals?: string[];
   };
+  /** USPS state/territory codes for cluster filters. */
+  frozenStates: string[];
+  /** Canonical city + state when resolved. */
+  frozenCities: Array<{ name: string; state: string }>;
+  locationIsRemote: boolean;
+  /** false for clear non-US jobs; job stays on board. */
+  locationIsUs: boolean;
+  locationClassification?: {
+    method:
+      | 'explicit_state'
+      | 'zip'
+      | 'unique_city'
+      | 'population'
+      | 'company_hq'
+      | 'company_history'
+      | 'remote'
+      | 'non_us'
+      | 'ambiguous'
+      | 'none';
+    confidence: number;
+    rulesVersion: string;
+    classifiedAt?: Date | null;
+    contentHash?: string;
+    candidates?: Array<{ city: string; state: string; population: number }>;
+  };
   listSnapshot: IJobBoardListSnapshot;
   enrichment: IJobBoardEnrichment;
   /** Origin of the listing, e.g. hiring_cafe for Aggregators. Empty for company scrapers. */
@@ -326,6 +351,52 @@ const JobBoardListingSchema: Schema = new Schema(
       contentHash: { type: String, default: '' },
       matchedSignals: { type: [String], default: [] },
     },
+    frozenStates: { type: [String], default: [] },
+    frozenCities: {
+      type: [
+        {
+          name: { type: String, default: '' },
+          state: { type: String, default: '' },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
+    locationIsRemote: { type: Boolean, default: false },
+    locationIsUs: { type: Boolean, default: true },
+    locationClassification: {
+      method: {
+        type: String,
+        enum: [
+          'explicit_state',
+          'zip',
+          'unique_city',
+          'population',
+          'company_hq',
+          'company_history',
+          'remote',
+          'non_us',
+          'ambiguous',
+          'none',
+        ],
+        default: 'none',
+      },
+      confidence: { type: Number, default: 0 },
+      rulesVersion: { type: String, default: '' },
+      classifiedAt: { type: Date, default: null },
+      contentHash: { type: String, default: '' },
+      candidates: {
+        type: [
+          {
+            city: { type: String, default: '' },
+            state: { type: String, default: '' },
+            population: { type: Number, default: 0 },
+            _id: false,
+          },
+        ],
+        default: undefined,
+      },
+    },
     listSnapshot: { type: ListSnapshotSchema, default: () => ({}) },
     enrichment: { type: EnrichmentSchema, default: () => ({}) },
     source: { type: String, default: '', index: true },
@@ -367,6 +438,14 @@ JobBoardListingSchema.index(
 JobBoardListingSchema.index(
   { frozenExperienceYears: 1, lastSeenAt: -1 },
   { name: 'job_board_exp_years_last_seen_idx' }
+);
+JobBoardListingSchema.index(
+  { ownerId: 1, status: 1, frozenStates: 1 },
+  { name: 'job_board_owner_status_frozen_state_idx' }
+);
+JobBoardListingSchema.index(
+  { frozenStates: 1, lastSeenAt: -1 },
+  { name: 'job_board_frozen_states_last_seen_idx' }
 );
 JobBoardListingSchema.index({ ownerId: 1, source: 1, date: -1 }, { name: 'job_board_owner_source_date_idx' });
 JobBoardListingSchema.index(

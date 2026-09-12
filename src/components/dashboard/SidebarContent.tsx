@@ -17,7 +17,6 @@ import {
   InsightsOutlined,
   BadgeOutlined,
 } from '@mui/icons-material';
-import { useTranslation } from 'react-i18next';
 import { FIRSTSTEP, tint } from './ops/dashboardTokens';
 import { sidebarIconAriaHidden, sidebarNavButtonA11y } from './appShellBehavior';
 import { SIDEBAR_NAV_VALUES } from './sidebarNav';
@@ -40,7 +39,6 @@ export const SidebarContent = ({
   onNavigate,
 }: SidebarContentProps) => {
   const theme = useTheme();
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -53,9 +51,9 @@ export const SidebarContent = ({
       label: 'Automations',
       icon: <PrecisionManufacturing aria-hidden={sidebarIconAriaHidden} />,
     },
-    jobs: { label: t('mainmenu.jobs'), icon: <WorkOutline aria-hidden={sidebarIconAriaHidden} /> },
-    scrapers: { label: t('mainmenu.recordings'), icon: <AutoAwesome aria-hidden={sidebarIconAriaHidden} /> },
-    runs: { label: t('mainmenu.runs'), icon: <PlayArrow aria-hidden={sidebarIconAriaHidden} /> },
+    jobs: { label: 'Job board', icon: <WorkOutline aria-hidden={sidebarIconAriaHidden} /> },
+    scrapers: { label: 'Scrapers', icon: <AutoAwesome aria-hidden={sidebarIconAriaHidden} /> },
+    runs: { label: 'Runs', icon: <PlayArrow aria-hidden={sidebarIconAriaHidden} /> },
     failures: {
       label: 'Failure Dashboard',
       icon: <ErrorOutline aria-hidden={sidebarIconAriaHidden} />,
@@ -69,14 +67,14 @@ export const SidebarContent = ({
       icon: <BadgeOutlined aria-hidden={sidebarIconAriaHidden} />,
     },
     communication: {
-      label: t('mainmenu.communication', 'Communication'),
+      label: 'Communication',
       icon: <MailOutline aria-hidden={sidebarIconAriaHidden} />,
     },
     aggregators: {
       label: 'Aggregators',
       icon: <HubOutlined aria-hidden={sidebarIconAriaHidden} />,
     },
-    proxy: { label: t('mainmenu.proxy'), icon: <Usb aria-hidden={sidebarIconAriaHidden} /> },
+    proxy: { label: 'Proxy', icon: <Usb aria-hidden={sidebarIconAriaHidden} /> },
   };
 
   const items = SIDEBAR_NAV_VALUES.map((navValue) => ({
@@ -156,7 +154,7 @@ export const SidebarContent = ({
               color: 'text.primary',
             }}
           >
-            {t('navbar.project_name')}
+            Scout-X Scrapper
           </Typography>
         ) : null}
       </Stack>
@@ -270,7 +268,7 @@ export const SidebarContent = ({
                 }}
               >
                 <ChevronLeft />
-                {t('mainmenu.collapse', 'Collapse')}
+                Collapse
               </ButtonBase>
             )}
           </Box>

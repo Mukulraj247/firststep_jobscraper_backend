@@ -93,7 +93,7 @@ export function RequestsPage() {
                 fontWeight: 700,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
-                color: STITCH.secondaryFixed,
+                color: STITCH.primaryContainer,
                 fontFamily: BODY_FONT,
                 mb: 1,
               }}
@@ -108,11 +108,12 @@ export function RequestsPage() {
                 letterSpacing: '-0.03em',
                 fontSize: { xs: '1.6rem', md: '2rem' },
                 lineHeight: 1.15,
+                color: STITCH.primaryContainer,
               }}
             >
               My Requests
             </Typography>
-            <Typography sx={{ mt: 0.75, color: STITCH.primaryFixedDim }}>
+            <Typography sx={{ mt: 0.75, color: STITCH.muted }}>
               Custom clusters you&apos;ve asked us to build. We&apos;ll notify you here when one goes live — typically
               24–48 hours after dispatch.
             </Typography>

@@ -18,7 +18,7 @@ import {
   DISPLAY_FONT,
   RADIUS,
   STITCH,
-  accentButtonSx,
+  ghostButtonSx,
   primaryButtonSx,
   tint,
 } from '../tokens';
@@ -95,7 +95,7 @@ export function ClustersPage() {
                 px: 1.5,
                 py: 0.5,
                 borderRadius: RADIUS.pill,
-                bgcolor: 'rgba(255,255,255,0.15)',
+                bgcolor: STITCH.secondaryContainer,
                 mb: 1.5,
               }}
             >
@@ -105,7 +105,7 @@ export function ClustersPage() {
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: STITCH.secondaryFixed,
+                  color: STITCH.primaryContainer,
                   fontFamily: BODY_FONT,
                 }}
               >
@@ -117,14 +117,15 @@ export function ClustersPage() {
               sx={{
                 fontFamily: DISPLAY_FONT,
                 fontWeight: 700,
-                letterSpacing: '-0.03em',
+                letterSpacing: '-0.02em',
                 fontSize: { xs: '1.85rem', md: '2.5rem' },
-                lineHeight: 1.1,
+                lineHeight: 1.15,
+                color: STITCH.primaryContainer,
               }}
             >
               Cluster Catalog
             </Typography>
-            <Typography sx={{ mt: 1, color: STITCH.primaryFixedDim, maxWidth: 520 }}>
+            <Typography sx={{ mt: 1, color: STITCH.muted, maxWidth: 520 }}>
               Subscribe to curated or customized real-time job clusters delivered directly to your feed on a 1h, 2h,
               or 24h cadence.
             </Typography>
@@ -132,18 +133,12 @@ export function ClustersPage() {
           <Button
             component={Link}
             to="/user/requests/new"
-            variant="contained"
-            disableElevation
+            variant="outlined"
             startIcon={<AddCircleOutline sx={{ fontSize: 18 }} />}
             sx={{
-              ...accentButtonSx,
+              ...ghostButtonSx,
               flexShrink: 0,
               alignSelf: { md: 'center' },
-              bgcolor: 'transparent',
-              color: STITCH.onPrimary,
-              border: '1px solid rgba(255,255,255,0.45)',
-              boxShadow: 'none',
-              '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', color: STITCH.onPrimary },
             }}
           >
             Request Custom Cluster
@@ -156,7 +151,7 @@ export function ClustersPage() {
           sx={{
             mt: 3,
             pt: 2.5,
-            borderTop: '1px solid rgba(255,255,255,0.14)',
+            borderTop: `1px solid ${STITCH.outlineVariant}`,
           }}
         >
           {[
@@ -166,8 +161,10 @@ export function ClustersPage() {
             { value: String(clusters.length), label: 'High-Velocity Clusters Ready' },
           ].map((m) => (
             <Grid item xs={6} md={3} key={m.label}>
-              <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.25rem' }}>{m.value}</Typography>
-              <Typography sx={{ fontSize: '0.75rem', color: STITCH.primaryFixedDim }}>{m.label}</Typography>
+              <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.25rem', color: STITCH.primary }}>
+                {m.value}
+              </Typography>
+              <Typography sx={{ fontSize: '0.75rem', color: STITCH.muted }}>{m.label}</Typography>
             </Grid>
           ))}
         </Grid>
@@ -181,7 +178,7 @@ export function ClustersPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           sx={{
-            maxWidth: { md: 480 },
+            maxWidth: '100%',
             '& .MuiOutlinedInput-root': {
               borderRadius: RADIUS.control,
               bgcolor: STITCH.surfaceLowest,

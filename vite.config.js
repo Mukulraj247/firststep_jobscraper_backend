@@ -33,6 +33,12 @@ export default defineConfig(() => {
       // Ensure the value is always a valid absolute URL at build time.
       'import.meta.env.VITE_BACKEND_URL': JSON.stringify(parsedBackendUrl.toString()),
       'import.meta.env.VITE_PUBLIC_URL': JSON.stringify(publicUrl),
+      'import.meta.env.VITE_AUTH0_DOMAIN': JSON.stringify(process.env.VITE_AUTH0_DOMAIN || ''),
+      'import.meta.env.VITE_AUTH0_CLIENT_ID': JSON.stringify(process.env.VITE_AUTH0_CLIENT_ID || ''),
+      'import.meta.env.VITE_AUTH0_AUDIENCE': JSON.stringify(process.env.VITE_AUTH0_AUDIENCE || ''),
+      'import.meta.env.VITE_AUTH0_CALLBACK_URL': JSON.stringify(
+        process.env.VITE_AUTH0_CALLBACK_URL || publicUrl
+      ),
     },
     server: {
       host: parsedPublicUrl.hostname,

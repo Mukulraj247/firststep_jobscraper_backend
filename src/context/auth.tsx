@@ -61,15 +61,18 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
             await axios.get(`${apiUrl}/auth/logout`);
             dispatch({ type: 'LOGOUT' });
             window.localStorage.removeItem('user');
+            window.localStorage.removeItem('scouttext.portal.auth');
+            window.sessionStorage.setItem('scoutx.skipAuth0Exchange', '1');
             // Keep ops admins on /admin — that page has its own password gate and
             // must not bounce into the normal scout /login flow.
             if (!window.location.pathname.startsWith('/admin')) {
-                navigate('/login');
+                // Full navigation so Auth0 + React state both reset cleanly when Auth0 is on.
+                window.location.assign('/login');
             }
         } catch (err) {
             console.error('Logout error:', err);
         }
-    }, [navigate]);
+    }, []);
 
     const checkAutoLogout = useCallback(() => {
         if (state.user && state.lastActivityTime) {

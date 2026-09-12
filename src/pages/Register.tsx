@@ -1,184 +1,110 @@
-import axios from "axios";
-import { useState, useContext, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { AuthContext } from "../context/auth";
-import { Box, Typography, TextField, Button, CircularProgress, InputAdornment, IconButton } from "@mui/material";
-import Visibility from "@mui/icons-material/Visibility";
-import VisibilityOff from "@mui/icons-material/VisibilityOff";
-import { useGlobalInfoStore } from "../context/globalInfo";
-import { apiUrl } from "../apiConfig";
-import { useThemeMode } from "../context/theme-provider";
-import { useTranslation } from 'react-i18next';
-import i18n from '../i18n';
+import { useEffect } from 'react';
+import { Box, Button, Typography } from '@mui/material';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth0 } from '@auth0/auth0-react';
+import { useThemeMode } from '../context/theme-provider';
 import ScoutXLogo from '../assets/scoutx-logo.png';
+import { isScoutXAuth0Configured } from '../auth/ScoutXAuth0Provider';
+import { clearSkipAuth0AutoExchange } from '../auth/scoutxLogout';
 
+/**
+ * Ops registration via email/password is disabled.
+ * New users sign up through Auth0 (First Step tenant) and land on /user or ops by role.
+ */
 const Register = () => {
-  const { t } = useTranslation();
-  const [form, setForm] = useState({
-    email: "",
-    password: "",
-  });
-  const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const { notify } = useGlobalInfoStore();
-  const { email, password } = form;
-
-  const { state, dispatch } = useContext(AuthContext);
-  const { user } = state;
-  const { darkMode } = useThemeMode();
-
   const navigate = useNavigate();
+  const { darkMode } = useThemeMode();
+  const auth0On = isScoutXAuth0Configured();
+
+  if (!auth0On) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8, px: 3 }}>
+        <Typography>Auth0 is not configured. Cannot register.</Typography>
+      </Box>
+    );
+  }
+
+  return <RegisterWithAuth0 darkMode={darkMode} navigate={navigate} />;
+};
+
+function RegisterWithAuth0({
+  darkMode,
+  navigate,
+}: {
+  darkMode: boolean;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  const { loginWithRedirect, isAuthenticated } = useAuth0();
 
   useEffect(() => {
-    if (user) {
-      navigate("/");
+    if (isAuthenticated) {
+      navigate('/login', { replace: true });
     }
-  }, [user, navigate]);
-
-  const handleChange = (e: any) => {
-    const { name, value } = e.target;
-    setForm({ ...form, [name]: value });
-  };
-
-  const submitForm = async (e: any) => {
-    e.preventDefault();
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      notify("error", "Invalid email format");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { data } = await axios.post(`${apiUrl}/auth/register`, { email, password });
-      dispatch({ type: "LOGIN", payload: data });
-      window.localStorage.setItem("user", JSON.stringify(data));
-      navigate("/");
-    } catch (error: any) {
-      const errorResponse = error.response?.data;
-
-      const errorMessage = errorResponse?.code
-        ? t(errorResponse.code)
-        : t('register.error.generic');
-
-      notify("error", errorMessage);
-      setLoading(false);
-    }
-  };
+  }, [isAuthenticated, navigate]);
 
   return (
     <Box
       sx={{
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        maxHeight: "100vh",
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
         mt: 6,
         padding: 4,
-        backgroundColor: "inherit",
       }}
     >
       <Box
-        component="form"
-        onSubmit={submitForm}
         sx={{
-          textAlign: "center",
-          backgroundColor: darkMode ? "#121111ff" : "#ffffff",
-          color: darkMode ? "#ffffff" : "#333333",
+          textAlign: 'center',
+          backgroundColor: darkMode ? '#121111ff' : '#ffffff',
+          color: darkMode ? '#ffffff' : '#333333',
           padding: 6,
           borderRadius: 5,
-          boxShadow:
-            "0px 20px 40px rgba(0, 0, 0, 0.2), 0px -5px 10px rgba(0, 0, 0, 0.15)",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          maxWidth: 500,
-          width: "100%",
+          boxShadow: '0px 20px 40px rgba(0, 0, 0, 0.2)',
+          maxWidth: 480,
+          width: '100%',
         }}
       >
         <img
           src={ScoutXLogo}
-          alt="Scout-X Scrapper"
+          alt="Scout-X"
           height={48}
-          style={{
-            marginBottom: 20,
-            width: 'auto',
-            maxHeight: 48,
-            objectFit: 'contain',
-            display: 'block',
-          }}
+          style={{ marginBottom: 20, objectFit: 'contain' }}
         />
-        <Typography variant="h4" gutterBottom>
-          {t('register.title')}
+        <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>
+          Create an account with Auth0
         </Typography>
-        <TextField
-          fullWidth
-          label={t('register.email')}
-          name="email"
-          value={email}
-          onChange={handleChange}
-          margin="normal"
-          variant="outlined"
-          required
-        />
-        <TextField
-          fullWidth
-          label={t('register.password')}
-          name="password"
-          type={showPassword ? "text" : "password"}
-          value={password}
-          onChange={handleChange}
-          margin="normal"
-          variant="outlined"
-          InputProps={{
-            endAdornment: (
-              <InputAdornment position="end">
-                <IconButton
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  edge="end"
-                >
-                  {showPassword ? <VisibilityOff /> : <Visibility />}
-                </IconButton>
-              </InputAdornment>
-            ),
-          }}
-          required
-        />
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+          ScoutX uses the First Step Auth0 tenant. Password registration is disabled. After Auth0
+          signup you will land on the customer portal unless you have the ScoutX_Admin role.
+        </Typography>
         <Button
-          type="submit"
           fullWidth
           variant="contained"
           color="primary"
-          sx={{
-            mt: 2,
-            mb: 2,
+          sx={{ py: 1.2, mb: 2 }}
+          onClick={() => {
+            clearSkipAuth0AutoExchange();
+            loginWithRedirect({
+              appState: { returnTo: '/login' },
+              authorizationParams: {
+                audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+                scope: 'openid profile email',
+                screen_hint: 'signup',
+              },
+            });
           }}
-          disabled={loading || !email || !password}
         >
-          {loading ? (
-            <>
-              <CircularProgress size={20} sx={{ mr: 2 }} />
-              Loading
-            </>
-          ) : (
-            t('register.button')
-          )}
+          Continue with Auth0
         </Button>
-        <Typography
-          variant="body2"
-          align="center"
-          sx={{ color: darkMode ? "#ffffff" : "#333333" }}
-        >
-          {t('register.register_prompt')}{" "}
-          <Link to="/login" style={{ textDecoration: "none", color: "#ff33cc" }}>
-            {t('register.login_link')}
+        <Typography variant="body2">
+          Already have an account?{' '}
+          <Link to="/login" style={{ color: '#ff33cc', textDecoration: 'none' }}>
+            Sign in
           </Link>
         </Typography>
       </Box>
     </Box>
   );
-};
+}
 
 export default Register;

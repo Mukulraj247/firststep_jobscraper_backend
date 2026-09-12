@@ -31,6 +31,7 @@ import { RunDetailsPage } from './RunDetailsPage';
 import { AdminPage } from './AdminPage';
 import { UserDashboardShell } from '../user-dashboard/UserDashboardShell';
 import { isUserDashboardPath } from '../user-dashboard/routeHelpers';
+import { NoAccessPage } from './NoAccessPage';
 
 function SkipToMain() {
   const location = useLocation();
@@ -240,6 +241,7 @@ export const PageWrapper = () => {
                   element={null}
                 />
                 <Route path="/admin" element={<AdminPage />} />
+                <Route path="/no-access" element={<NoAccessPage />} />
                 <Route path="*" element={<PageMain><NotFoundPage /></PageMain>} />
               </Routes>
             </Box>

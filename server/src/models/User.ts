@@ -3,6 +3,8 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface IUser extends Document {
   email: string;
   password?: string;
+  /** Auth0 subject (`auth0|…`). Linked to existing row only — never used as ownerId. */
+  auth0Sub?: string | null;
   api_key_name?: string | null;
   api_key?: string | null;
   api_key_created_at?: Date | null;
@@ -22,6 +24,12 @@ const UserSchema: Schema = new Schema(
     password: {
       type: String,
       required: true,
+    },
+    auth0Sub: {
+      type: String,
+      default: null,
+      sparse: true,
+      unique: true,
     },
     api_key_name: {
       type: String,

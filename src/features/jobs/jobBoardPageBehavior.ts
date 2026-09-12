@@ -9,6 +9,7 @@ export const JOB_BOARD_FILTER_CONTROLS = [
   'frozenIndustry',
   'frozenExperienceLevel',
   'frozenExperienceYear',
+  'frozenState',
   'location',
   'workMode',
   'jobType',
@@ -78,6 +79,7 @@ export type JobBoardFilterState = {
   frozenIndustries?: string[];
   frozenExperienceLevels?: string[];
   frozenExperienceYears?: string[];
+  frozenStates?: string[];
   location: string;
   workMode: string;
   jobType: string;
@@ -198,6 +200,7 @@ export function hasActiveJobBoardFilters(value: JobBoardFilterState): boolean {
     || value.frozenIndustries?.length
     || value.frozenExperienceLevels?.length
     || value.frozenExperienceYears?.length
+    || value.frozenStates?.length
     || value.location
     || value.workMode
     || value.jobType

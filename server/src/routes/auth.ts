@@ -1,13 +1,25 @@
-import { Router, Request, Response } from "express";
-import User from "../models/User";
-import Robot from "../models/Robot";
 import jwt from "jsonwebtoken";
-import { hashPassword, comparePassword } from "../utils/auth";
 import { requireSignIn } from "../middlewares/auth";
+import { Auth0Request, requireAuth0AccessToken } from "../middlewares/auth0";
+import {
+  hasScoutXAdmin,
+  resolveScoutXRoles,
+  extractEmailFromAuth0Payload,
+  extractSubFromAuth0Payload,
+  extractFirstStepRole,
+  SCOUTX_USER_ROLE,
+  type ScoutXRole,
+} from "../services/scoutxAuth0";
+import { resolveOpsMongoUser } from "../services/scoutxOpsUser";
+import { fetchFirstStepPlanSnapshot } from "../services/firstStepSubscription";
+import { upsertPortalUser } from "../services/portalUserService";
 import { genAPIKey } from "../utils/api";
 import { google } from "googleapis";
 import { capture } from "../utils/analytics";
 import crypto from 'crypto';
+import User from "../models/User";
+import Robot from "../models/Robot";
+import { Router, Request, Response } from "express";
 
 declare module "express-session" {
   interface SessionData {
@@ -55,133 +67,183 @@ interface AuthenticatedRequest extends Request {
   user?: { id: string };
 }
 
-router.post("/register", async (req, res) => {
+router.post("/register", async (_req, res) => {
+  return res.status(410).json({
+    error: "Password registration is disabled. Use Auth0 to sign in to ScoutX.",
+    code: "register.auth0_only",
+  });
+});
+
+router.post("/login", async (_req, res) => {
+  return res.status(410).json({
+    error: "Password login is disabled. Use Auth0 to sign in to ScoutX.",
+    code: "login.auth0_only",
+  });
+});
+
+/**
+ * Exchange a validated Auth0 access token for ScoutX session.
+ * ScoutX_Admin (RBAC claim only) → Mongo ops owner cookie.
+ * Everyone else → portal session + scoutx_portal_users upsert (no maxun_users).
+ */
+router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const payload = (req.auth?.payload || {}) as Record<string, unknown>;
+    const bodyEmail =
+      typeof req.body?.email === 'string' ? String(req.body.email).trim().toLowerCase() : null;
+    const bodyName = typeof req.body?.name === 'string' ? String(req.body.name).trim() : null;
+    const bodyFirstStepRole =
+      typeof req.body?.firstStepRole === 'string' ? String(req.body.firstStepRole).trim() : null;
+    const email = bodyEmail || extractEmailFromAuth0Payload(payload);
+    const auth0Sub = extractSubFromAuth0Payload(payload);
+    const roles = resolveScoutXRoles(payload, email);
+    const firstStepRole = extractFirstStepRole(payload, bodyFirstStepRole);
+    const name =
+      bodyName ||
+      (typeof payload.name === 'string' ? payload.name : null) ||
+      (email ? email.split('@')[0] : null);
 
-    if (!email) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        code: "register.validation.email_required"
-      });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        code: "register.validation.invalid_email_format"
-      });
-    }
-
-    if (!password || password.length < 6) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        code: "register.validation.password_requirements"
-      });
-    }
-
-    let userExist = await User.findOne({ email }).lean();
-    if (userExist) {
-      return res.status(400).json({
-        error: "USER_EXISTS",
-        code: "register.error.user_exists"
-      });
-    }
-
-    const hashedPassword = await hashPassword(password);
-
-    let user: any;
-    try {
-      user = await User.create({ email, password: hashedPassword });
-    } catch (error: any) {
-      console.log(`Could not create user - ${error}`);
-      return res.status(500).json({
-        error: "DATABASE_ERROR",
-        code: "register.error.creation_failed"
-      });
-    }
-
-    if (!process.env.JWT_SECRET) {
-      console.log("JWT_SECRET is not defined in the environment");
-      return res.status(500).json({
-        error: "SERVER_ERROR",
-        code: "register.error.server_error"
-      });
-    }
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string);
-    user.password = undefined;
-    res.cookie("token", token, jwtCookieOptions);
-
-    capture("maxun-oss-user-registered", {
-      email: user.email,
-      userId: user._id,
-      registeredAt: new Date().toISOString(),
+    // Debug: why /user vs /dashboard (remove once Auth0 roles are confirmed)
+    console.log('[auth0/exchange]', {
+      email,
+      auth0Sub,
+      roles,
+      rolesClaim: payload['https://scoutx.app/roles'],
+      permissions: payload.permissions,
+      aud: payload.aud,
     });
 
-    console.log(`User registered`);
-    res.json(user);
+    const firstStepPlan = await fetchFirstStepPlanSnapshot(auth0Sub);
 
+    if (hasScoutXAdmin(roles)) {
+      if (!email && !auth0Sub) {
+        return res.status(400).json({
+          error:
+            'Auth0 token is missing email. Enable email scope / Action claim, or pass email in the request body.',
+          code: 'auth0.email_required',
+        });
+      }
+
+      const opsUser = await resolveOpsMongoUser({ email, auth0Sub, payload });
+      if (!opsUser) {
+        return res.status(500).json({
+          error:
+            'Ops Mongo user not found. Set SCOUTX_OPS_USER_ID to the existing maxun_users._id (do not register a new user).',
+          code: 'auth0.ops_user_missing',
+        });
+      }
+
+      if (auth0Sub && email) {
+        try {
+          await upsertPortalUser({
+            auth0Sub,
+            email,
+            name,
+            scoutxRoles: roles,
+            firstStepRole,
+            firstStepPlan,
+          });
+        } catch (err) {
+          console.warn('Portal profile upsert (admin) failed (non-fatal):', err);
+        }
+      }
+
+      const token = jwt.sign({ id: opsUser.id }, process.env.JWT_SECRET as string);
+      res.cookie('token', token, jwtCookieOptions);
+
+      capture('maxun-oss-user-login', {
+        email: opsUser.email,
+        userId: opsUser.id,
+        authSource: 'auth0',
+        loggedInAt: new Date().toISOString(),
+      });
+
+      return res.json({
+        id: opsUser.id,
+        email: opsUser.email,
+        name: name || opsUser.email,
+        auth0Sub: opsUser.auth0Sub || auth0Sub,
+        scoutxRoles: roles,
+        authSource: 'auth0',
+        landing: '/dashboard',
+        firstStepPlan: {
+          subscriptionType: firstStepPlan.subscriptionType,
+          isActive: firstStepPlan.isActive,
+          status: firstStepPlan.status,
+        },
+        firstStepRole,
+      });
+    }
+
+    // Portal — any Auth0 user; do not create maxun_users or set ops cookie.
+    if (!email) {
+      return res.status(400).json({
+        error: 'Auth0 token is missing email for portal login.',
+        code: 'auth0.email_required',
+      });
+    }
+    if (!auth0Sub) {
+      return res.status(400).json({
+        error: 'Auth0 token is missing sub for portal profile.',
+        code: 'auth0.sub_required',
+      });
+    }
+
+    const portalRoles: ScoutXRole[] = roles.includes(SCOUTX_USER_ROLE)
+      ? roles
+      : [...roles, SCOUTX_USER_ROLE];
+
+    try {
+      await upsertPortalUser({
+        auth0Sub,
+        email,
+        name,
+        scoutxRoles: portalRoles,
+        firstStepRole,
+        firstStepPlan,
+      });
+    } catch (err) {
+      console.error('Portal profile upsert failed:', err);
+      return res.status(500).json({
+        error: 'Failed to create portal profile',
+        code: 'auth0.portal_upsert_failed',
+      });
+    }
+
+    return res.json({
+      id: auth0Sub,
+      email,
+      name: name || email.split('@')[0],
+      auth0Sub,
+      scoutxRoles: portalRoles,
+      authSource: 'auth0',
+      landing: '/user',
+      firstStepPlan: {
+        subscriptionType: firstStepPlan.subscriptionType,
+        isActive: firstStepPlan.isActive,
+        status: firstStepPlan.status,
+      },
+      firstStepRole,
+    });
   } catch (error: any) {
-    console.log(`Could not register user - ${error}`);
+    console.error(`Auth0 exchange error: ${error?.message || error}`);
     return res.status(500).json({
-      error: "SERVER_ERROR",
-      code: "register.error.generic"
+      error: 'SERVER_ERROR',
+      code: 'auth0.exchange_failed',
     });
   }
 });
 
-router.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        code: "login.validation.required_fields"
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        code: "login.validation.password_length"
-      });
-    }
-
-    let user: any = await User.findOne({ email }).lean();
-    if (!user) {
-      return res.status(404).json({
-        error: "USER_NOT_FOUND",
-        code: "login.error.user_not_found"
-      });
-    }
-
-    const match = await comparePassword(password, user.password);
-    if (!match) {
-      return res.status(401).json({
-        error: "INVALID_CREDENTIALS",
-        code: "login.error.invalid_credentials"
-      });
-    }
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string);
-
-    user.password = undefined;
-    res.cookie("token", token, jwtCookieOptions);
-    capture("maxun-oss-user-login", {
-      email: user.email,
-      userId: user._id,
-      loggedInAt: new Date().toISOString(),
-    });
-    res.json(user);
-  } catch (error: any) {
-    console.error(`Login error: ${error.message}`);
-    res.status(500).json({
-      error: "SERVER_ERROR",
-      code: "login.error.server_error"
-    });
-  }
+router.get("/auth0/config", (_req, res) => {
+  const domain = String(process.env.AUTH0_DOMAIN || '').trim();
+  const clientId = String(process.env.AUTH0_SPA_CLIENT_ID || process.env.AUTH0_CLIENT_ID || '').trim();
+  const audience = String(process.env.AUTH0_API_AUDIENCE || process.env.AUTH0_AUDIENCE || '').trim();
+  res.json({
+    configured: !!(domain && clientId),
+    domain: domain || null,
+    clientId: clientId || null,
+    audience: audience || null,
+  });
 });
 
 router.get("/logout", async (req, res) => {

@@ -37,7 +37,7 @@ function SettingsCard({ title, description, children }: { title: string; descrip
 }
 
 export function ProfilePage() {
-  const { user, loading, logout, switchDemoPersona } = usePortalAuth();
+  const { user, loading, logout, switchDemoPersona, authMode } = usePortalAuth();
   useRequirePortalAuth();
   const [counts, setCounts] = useState<Counts | null>(null);
 
@@ -94,6 +94,12 @@ export function ProfilePage() {
                   <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted }}>
                     {user.email}
                   </Typography>
+                  {(user.firstStepPlan?.subscriptionType || user.firstStepRole) && (
+                    <Typography variant="caption" sx={{ display: 'block', color: FIRSTSTEP.textMuted, mt: 0.5 }}>
+                      First Step: {user.firstStepPlan?.subscriptionType || '—'}
+                      {user.firstStepRole ? ` · role ${user.firstStepRole}` : ''}
+                    </Typography>
+                  )}
                   <Chip
                     label="ScoutText member"
                     size="small"
@@ -139,13 +145,15 @@ export function ProfilePage() {
               </Stack>
             </SettingsCard>
 
-            <DemoPersonaSwitcher
-              value={persona}
-              onChange={async (p) => {
-                await switchDemoPersona(p);
-                window.location.reload();
-              }}
-            />
+            {authMode === 'mock' && (
+              <DemoPersonaSwitcher
+                value={persona}
+                onChange={async (p) => {
+                  await switchDemoPersona(p);
+                  window.location.reload();
+                }}
+              />
+            )}
           </Stack>
         </Grid>
 

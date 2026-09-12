@@ -26,7 +26,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
           position: 'relative',
           overflow: 'hidden',
           color: STITCH.onPrimary,
-          background: `linear-gradient(150deg, ${STITCH.primary} 0%, ${STITCH.primaryContainer} 52%, ${STITCH.secondary} 122%)`,
+          background: `linear-gradient(150deg, ${STITCH.primary} 0%, ${STITCH.primaryContainer} 48%, ${STITCH.tertiaryContainer} 100%)`,
         }}
       >
         <Box

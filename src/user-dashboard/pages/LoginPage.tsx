@@ -1,13 +1,15 @@
 import React, { useEffect } from 'react';
-import { Box, Button, Divider, Stack, Typography } from '@mui/material';
+import { Box, Button, Typography } from '@mui/material';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../components/AuthLayout';
 import { usePortalAuth } from '../hooks/usePortalAuth';
-import { DISPLAY_FONT, STITCH, accentButtonSx, ghostButtonSx } from '../tokens';
+import { DISPLAY_FONT, STITCH, accentButtonSx } from '../tokens';
+import { isScoutXAuth0Configured } from '../../auth/ScoutXAuth0Provider';
 
 export function LoginPage() {
-  const { login, user } = usePortalAuth();
+  const { login, user, authMode } = usePortalAuth();
   const navigate = useNavigate();
+  const auth0On = isScoutXAuth0Configured();
 
   useEffect(() => {
     if (user) navigate('/user', { replace: true });
@@ -27,41 +29,42 @@ export function LoginPage() {
         Welcome back
       </Typography>
       <Typography sx={{ color: STITCH.muted, mt: 0.75, mb: 3, fontSize: '0.875rem' }}>
-        Sign in to see the roles your clusters surfaced since your last refresh.
+        Sign in with Auth0 to see roles your clusters surfaced since your last refresh.
       </Typography>
 
       <Button
         fullWidth
         variant="contained"
         disableElevation
-        onClick={() => login('priya')}
+        onClick={() => login()}
+        disabled={!auth0On}
         sx={{ ...accentButtonSx, py: 1.2 }}
       >
         Continue with Auth0
       </Button>
       <Typography sx={{ display: 'block', textAlign: 'center', color: STITCH.muted, mt: 1.25, fontSize: '0.75rem' }}>
-        Demo mode — Auth0 connects in production
+        {auth0On
+          ? 'Same Auth0 tenant as First Step. Any signed-in user gets the portal; ScoutX_Admin opens ops.'
+          : 'Auth0 env is missing — set VITE_AUTH0_* in ScoutX .env'}
       </Typography>
 
-      <Divider sx={{ my: 2.5 }}>
-        <Typography sx={{ color: STITCH.muted, fontSize: '0.75rem' }}>or explore a demo persona</Typography>
-      </Divider>
-
-      <Stack spacing={1}>
-        <Button fullWidth variant="outlined" onClick={() => login('priya')} sx={ghostButtonSx}>
-          Priya — student, FAANG software
-        </Button>
-        <Button fullWidth variant="outlined" onClick={() => login('marcus')} sx={ghostButtonSx}>
-          Marcus — professional, H-1B focus
-        </Button>
-      </Stack>
+      {authMode === 'unavailable' && (
+        <Typography sx={{ mt: 2, textAlign: 'center', color: STITCH.muted, fontSize: '0.75rem' }}>
+          Demo personas are removed. Configure Auth0 to continue.
+        </Typography>
+      )}
 
       <Typography sx={{ mt: 3, textAlign: 'center', color: STITCH.muted, fontSize: '0.875rem' }}>
         No account?{' '}
         <Box
           component={Link}
           to="/user/register"
-          sx={{ color: STITCH.secondaryDark, fontWeight: 700, textDecoration: 'none', '&:hover': { color: STITCH.primary } }}
+          sx={{
+            color: STITCH.secondaryDark,
+            fontWeight: 700,
+            textDecoration: 'none',
+            '&:hover': { color: STITCH.primary },
+          }}
         >
           Create one
         </Box>

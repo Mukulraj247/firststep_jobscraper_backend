@@ -109,7 +109,7 @@ export function CheckoutPage() {
       <GlassHero dense>
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ md: 'center' }} spacing={2}>
           <Box>
-            <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: 'rgba(255,255,255,0.65)', mb: 1, fontFamily: BODY_FONT }}>
+            <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: STITCH.muted, mb: 1, fontFamily: BODY_FONT }}>
               Clusters › {cluster.name} › Checkout & Delivery Window
             </Typography>
             <Typography
@@ -120,11 +120,12 @@ export function CheckoutPage() {
                 letterSpacing: '-0.03em',
                 fontSize: { xs: '1.5rem', md: '2rem' },
                 lineHeight: 1.15,
+                color: STITCH.primaryContainer,
               }}
             >
               Subscription Checkout & Delivery Window
             </Typography>
-            <Typography sx={{ mt: 0.75, color: STITCH.primaryFixedDim, maxWidth: 560 }}>
+            <Typography sx={{ mt: 0.75, color: STITCH.muted, maxWidth: 560 }}>
               Confirm plan, delivery cadence, and demo billing — nothing is charged in this sandbox.
             </Typography>
           </Box>
@@ -133,12 +134,12 @@ export function CheckoutPage() {
               px: 2,
               py: 1.5,
               borderRadius: RADIUS.card,
-              bgcolor: 'rgba(255,255,255,0.12)',
-              border: '1px solid rgba(255,255,255,0.16)',
+              bgcolor: STITCH.surfaceLow,
+              border: `1px solid ${STITCH.outlineVariant}`,
               minWidth: 180,
             }}
           >
-            <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>
+            <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: STITCH.muted }}>
               Cluster Dispatcher
             </Typography>
             <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 0.5 }}>

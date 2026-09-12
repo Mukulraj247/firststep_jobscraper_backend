@@ -19,7 +19,7 @@ import {
 const NOW = Date.parse('2026-08-18T12:00:00.000Z');
 
 describe('job board filters', () => {
-  it('exposes search, added date, category, frozen category, industry, experience, location, work mode, and job type — not company', () => {
+  it('exposes search, added date, category, frozen category, industry, experience, state, location, work mode, and job type — not company', () => {
     expect([...JOB_BOARD_FILTER_CONTROLS]).toEqual([
       'search',
       'added',
@@ -28,6 +28,7 @@ describe('job board filters', () => {
       'frozenIndustry',
       'frozenExperienceLevel',
       'frozenExperienceYear',
+      'frozenState',
       'location',
       'workMode',
       'jobType',

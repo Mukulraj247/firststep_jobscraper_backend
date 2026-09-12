@@ -26,7 +26,7 @@ export function SectionHeading({ title, count, actionLabel, actionTo }: Props) {
           sx={{
             fontFamily: DISPLAY_FONT,
             fontWeight: 600,
-            color: STITCH.onSurface,
+            color: STITCH.primaryContainer,
             fontSize: '1.5rem',
             letterSpacing: '-0.02em',
           }}
@@ -50,10 +50,10 @@ export function SectionHeading({ title, count, actionLabel, actionTo }: Props) {
             flexShrink: 0,
             fontSize: '0.875rem',
             fontWeight: 600,
-            color: STITCH.secondary,
+            color: STITCH.primaryContainer,
             textDecoration: 'none',
             fontFamily: BODY_FONT,
-            '&:hover': { color: STITCH.onSecondaryContainer },
+            '&:hover': { color: STITCH.secondary },
           }}
         >
           {actionLabel}

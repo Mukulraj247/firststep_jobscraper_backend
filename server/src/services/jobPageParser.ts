@@ -625,7 +625,7 @@ export function normalizeSalaryRange(
 }
 
 const US_STATE_ABBR = new Set(
-  'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'
+  'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC PR GU VI AS MP'
     .split(' ')
 );
 
@@ -681,6 +681,12 @@ const US_STATE_NAMES: Record<string, string> = {
   wisconsin: 'WI',
   wyoming: 'WY',
   'district of columbia': 'DC',
+  'puerto rico': 'PR',
+  guam: 'GU',
+  'virgin islands': 'VI',
+  'us virgin islands': 'VI',
+  'american samoa': 'AS',
+  'northern mariana islands': 'MP',
 };
 
 const STREET_TOKEN_RE =

@@ -1,8 +1,6 @@
 import React from 'react';
 import { Box, CircularProgress } from '@mui/material';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { UserBottomNav } from './components/UserBottomNav';
-import { UserSidebar } from './components/UserSidebar';
 import { UserTopBar } from './components/UserTopBar';
 import { usePortalAuth } from './hooks/usePortalAuth';
 import { CheckoutPage } from './pages/CheckoutPage';
@@ -19,7 +17,7 @@ import { RequestsPage } from './pages/RequestsPage';
 import { SavedPage } from './pages/SavedPage';
 import { SubscriptionsPage } from './pages/SubscriptionsPage';
 import { isPublicUserRoute } from './routeHelpers';
-import { BODY_FONT, DISPLAY_FONT, PAGE_MAX_WIDTH, PORTAL_NAV_WIDTH, PORTAL_TOPBAR_HEIGHT, STITCH, hiddenScrollbarSx } from './tokens';
+import { BODY_FONT, DISPLAY_FONT, PAGE_MAX_WIDTH, PORTAL_TOPBAR_HEIGHT, STITCH, hiddenScrollbarSx } from './tokens';
 
 function PortalGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = usePortalAuth();
@@ -36,7 +34,7 @@ function PortalGate({ children }: { children: React.ReactNode }) {
           bgcolor: STITCH.background,
         }}
       >
-        <CircularProgress sx={{ color: STITCH.secondaryBright }} />
+        <CircularProgress sx={{ color: STITCH.primaryContainer }} />
       </Box>
     );
   }
@@ -59,34 +57,26 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
     <Box
       sx={{
         minHeight: '100dvh',
-        bgcolor: STITCH.background,
+        bgcolor: '#ffffff',
         fontFamily: BODY_FONT,
         color: STITCH.onSurface,
-        // Offset fixed sidebar on desktop so content never sits underneath it.
-        pl: { xs: 0, md: `${PORTAL_NAV_WIDTH}px` },
         '& h1, & h2, & h3, & .MuiTypography-h1, & .MuiTypography-h2, & .MuiTypography-h3, & .MuiTypography-h4, & .MuiTypography-h5, & .MuiTypography-h6':
           { fontFamily: DISPLAY_FONT },
       }}
     >
-      <UserSidebar />
-      <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: '100dvh' }}>
-        <UserTopBar />
-        <Box
-          component="main"
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            // Room for fixed desktop top bar + content gutter
-            pt: { xs: 2, md: `${PORTAL_TOPBAR_HEIGHT + 24}px` },
-            px: { xs: 2, md: 3 },
-            pb: { xs: 11, md: 3 },
-            ...hiddenScrollbarSx,
-          }}
-        >
-          <Box sx={{ maxWidth: PAGE_MAX_WIDTH, mx: 'auto', width: '100%' }}>{children}</Box>
-        </Box>
+      <UserTopBar />
+      <Box
+        component="main"
+        sx={{
+          minWidth: 0,
+          pt: { xs: '80px', md: `${PORTAL_TOPBAR_HEIGHT + 16}px` },
+          px: { xs: 2.5, md: 4 },
+          pb: { xs: 4, md: 5 },
+          ...hiddenScrollbarSx,
+        }}
+      >
+        <Box sx={{ maxWidth: PAGE_MAX_WIDTH, mx: 'auto', width: '100%' }}>{children}</Box>
       </Box>
-      <UserBottomNav />
     </Box>
   );
 }
