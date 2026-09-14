@@ -10,11 +10,12 @@ import {
 } from './dataRetention';
 
 const now = new Date('2026-08-25T12:00:00.000Z');
+/** Explicit policy under test (matches free-tier 3/7/14 defaults). */
 const settings = {
-  successDays: 7,
-  failureDays: 30,
-  jobBoardDays: 60,
-  extractedOrphanDays: 30,
+  successDays: 3,
+  failureDays: 7,
+  jobBoardDays: 14,
+  extractedOrphanDays: 7,
 };
 
 describe('dataRetention policy', () => {
@@ -25,6 +26,16 @@ describe('dataRetention policy', () => {
     delete process.env.RETENTION_RUN_FAILURE_DAYS;
     delete process.env.RETENTION_JOB_BOARD_DAYS;
     delete process.env.RETENTION_EXTRACTED_ORPHAN_DAYS;
+  });
+
+  it('defaults to free-tier 3/7/7/14 when env unset', () => {
+    const cfg = getRetentionSettings();
+    expect(cfg.successDays).toBe(3);
+    expect(cfg.failureDays).toBe(7);
+    expect(cfg.extractedOrphanDays).toBe(7);
+    expect(cfg.jobBoardDays).toBe(14);
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.dryRun).toBe(false);
   });
 
   it('classifies active runs as keep-forever', () => {
@@ -44,32 +55,24 @@ describe('dataRetention policy', () => {
     expect(classifyRunRetention('aborted')).toBe('success');
   });
 
-  it('keeps a failed run that is 8 days old', () => {
-    const sortAt = daysAgo(8, now);
-    expect(
-      shouldPurgeRun({ status: 'failed', sortAt }, now, settings)
-    ).toBe(false);
-  });
-
-  it('purges a success run that is 8 days old', () => {
-    const sortAt = daysAgo(8, now);
-    expect(
-      shouldPurgeRun({ status: 'success', sortAt }, now, settings)
-    ).toBe(true);
-  });
-
-  it('keeps a success run that is 6 days old', () => {
+  it('keeps a failed run that is 6 days old', () => {
     const sortAt = daysAgo(6, now);
-    expect(
-      shouldPurgeRun({ status: 'success', sortAt }, now, settings)
-    ).toBe(false);
+    expect(shouldPurgeRun({ status: 'failed', sortAt }, now, settings)).toBe(false);
   });
 
-  it('purges a failed run older than 30 days', () => {
-    const sortAt = daysAgo(31, now);
-    expect(
-      shouldPurgeRun({ status: 'failed', sortAt }, now, settings)
-    ).toBe(true);
+  it('purges a success run that is 4 days old', () => {
+    const sortAt = daysAgo(4, now);
+    expect(shouldPurgeRun({ status: 'success', sortAt }, now, settings)).toBe(true);
+  });
+
+  it('keeps a success run that is 2 days old', () => {
+    const sortAt = daysAgo(2, now);
+    expect(shouldPurgeRun({ status: 'success', sortAt }, now, settings)).toBe(false);
+  });
+
+  it('purges a failed run older than 7 days', () => {
+    const sortAt = daysAgo(8, now);
+    expect(shouldPurgeRun({ status: 'failed', sortAt }, now, settings)).toBe(true);
   });
 
   it('never purges running automations even if sortAt is old', () => {
@@ -86,29 +89,31 @@ describe('dataRetention policy', () => {
       true
     );
     expect(shouldPurgeRun({ status: 'failed', sortAt: null, _id: oldId }, now, settings)).toBe(
-      false
+      true
     );
   });
 
-  it('purges job listings last seen more than 60 days ago', () => {
-    expect(
-      shouldPurgeJobListing({ lastSeenAt: daysAgo(61, now) }, now, settings)
-    ).toBe(true);
-    expect(
-      shouldPurgeJobListing({ lastSeenAt: daysAgo(59, now) }, now, settings)
-    ).toBe(false);
+  it('purges job listings last seen more than 14 days ago', () => {
+    expect(shouldPurgeJobListing({ lastSeenAt: daysAgo(15, now) }, now, settings)).toBe(true);
+    expect(shouldPurgeJobListing({ lastSeenAt: daysAgo(13, now) }, now, settings)).toBe(false);
   });
 
   it('keeps jobs with no lastSeenAt', () => {
     expect(shouldPurgeJobListing({ lastSeenAt: null }, now, settings)).toBe(false);
   });
 
-  it('purges extracted orphans older than 30 days', () => {
+  it('never purges extracted rows whose run still exists', () => {
     expect(
-      shouldPurgeOrphanExtracted({ createdAt: daysAgo(31, now) }, now, settings)
+      shouldPurgeOrphanExtracted({ createdAt: daysAgo(31, now) }, now, settings, true)
+    ).toBe(false);
+  });
+
+  it('purges extracted orphans older than 7 days only when run is gone', () => {
+    expect(
+      shouldPurgeOrphanExtracted({ createdAt: daysAgo(8, now) }, now, settings, false)
     ).toBe(true);
     expect(
-      shouldPurgeOrphanExtracted({ createdAt: daysAgo(29, now) }, now, settings)
+      shouldPurgeOrphanExtracted({ createdAt: daysAgo(6, now) }, now, settings, false)
     ).toBe(false);
   });
 

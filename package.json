@@ -128,7 +128,8 @@
     "h1b:aggregate": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=4096 npx ts-node --project server/tsconfig.json server/src/scripts/aggregateGovEmployersFromLca.ts",
     "h1b:aggregate-fy2026": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=4096 npx ts-node --project server/tsconfig.json server/src/scripts/aggregateFy2026GovRoles.ts",
     "h1b:seed-map": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/seedAndMapH1b.ts",
-    "h1b:backfill": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/backfillH1bOnJobs.ts"
+    "h1b:backfill": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/backfillH1bOnJobs.ts",
+    "retention:once": "cross-env TS_NODE_TRANSPILE_ONLY=1 NODE_OPTIONS=--max-old-space-size=2048 npx ts-node --project server/tsconfig.json server/src/scripts/runDataRetentionOnce.ts"
   },
   "overrides": {
     "playwright-core": "1.58.0"

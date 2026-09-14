@@ -176,3 +176,19 @@ PROXY_POOL=
 # JOB_TAGGER_MAX_BADGES=2
 # JOB_TAGGER_ENABLED=true
 
+# -----------------------------------------------------------------------------
+# Data retention (Agenda job `data-retention` — frees Atlas space)
+# Never deletes: maxun_robots, maxun_users, scoutx_portal_users, H1B refs,
+# maxun_ops_digest_settings, schedules / next-run stamps on robots.
+# Purges: old maxun_runs + extracted by runId, true extracted orphans, stale job board.
+# -----------------------------------------------------------------------------
+# RETENTION_ENABLED=true
+# RETENTION_DRY_RUN=false
+# RETENTION_RUN_SUCCESS_DAYS=3
+# RETENTION_RUN_FAILURE_DAYS=7
+# RETENTION_EXTRACTED_ORPHAN_DAYS=7
+# RETENTION_JOB_BOARD_DAYS=14
+# RETENTION_SCHEDULE=15 4 * * *
+# RETENTION_BATCH_SIZE=500
+# RETENTION_BATCH_DELAY_MS=100
+

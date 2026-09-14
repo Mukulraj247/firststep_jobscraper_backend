@@ -55,10 +55,10 @@ export function getRetentionSettings(): RetentionSettings {
   return {
     enabled: isTruthyEnv('RETENTION_ENABLED', true),
     dryRun: isTruthyEnv('RETENTION_DRY_RUN', false),
-    successDays: parsePositiveIntEnv('RETENTION_RUN_SUCCESS_DAYS', 7),
-    failureDays: parsePositiveIntEnv('RETENTION_RUN_FAILURE_DAYS', 30),
-    extractedOrphanDays: parsePositiveIntEnv('RETENTION_EXTRACTED_ORPHAN_DAYS', 30),
-    jobBoardDays: parsePositiveIntEnv('RETENTION_JOB_BOARD_DAYS', 60),
+    successDays: parsePositiveIntEnv('RETENTION_RUN_SUCCESS_DAYS', 3),
+    failureDays: parsePositiveIntEnv('RETENTION_RUN_FAILURE_DAYS', 7),
+    extractedOrphanDays: parsePositiveIntEnv('RETENTION_EXTRACTED_ORPHAN_DAYS', 7),
+    jobBoardDays: parsePositiveIntEnv('RETENTION_JOB_BOARD_DAYS', 14),
     batchSize: parsePositiveIntEnv('RETENTION_BATCH_SIZE', 500),
     batchDelayMs: parsePositiveIntEnv('RETENTION_BATCH_DELAY_MS', 100),
     schedule: (process.env.RETENTION_SCHEDULE || '15 4 * * *').trim() || '15 4 * * *',
@@ -126,8 +126,10 @@ export function shouldPurgeJobListing(
 export function shouldPurgeOrphanExtracted(
   row: { createdAt?: Date | string | null },
   now: Date,
-  settings: Pick<RetentionSettings, 'extractedOrphanDays'>
+  settings: Pick<RetentionSettings, 'extractedOrphanDays'>,
+  runExists: boolean
 ): boolean {
+  if (runExists) return false;
   if (!row.createdAt) return false;
   const created = new Date(row.createdAt);
   if (Number.isNaN(created.getTime())) return false;
@@ -189,24 +191,73 @@ async function purgeRunBatches(
 }
 
 async function purgeExtractedOrphans(settings: RetentionSettings, cutoff: Date): Promise<number> {
-  const filter = { createdAt: { $lt: cutoff } };
+  // True orphans only: old extracted rows whose runId no longer exists in maxun_runs.
+  // Paginate by _id so kept (still-linked) rows do not stall the loop.
   if (settings.dryRun) {
-    return ExtractedData.countDocuments(filter);
+    const counted = await ExtractedData.aggregate<{ n: number }>([
+      { $match: { createdAt: { $lt: cutoff } } },
+      {
+        $lookup: {
+          from: 'maxun_runs',
+          localField: 'runId',
+          foreignField: 'runId',
+          as: 'run',
+        },
+      },
+      { $match: { run: { $size: 0 } } },
+      { $count: 'n' },
+    ]);
+    return counted[0]?.n ?? 0;
   }
 
   let deleted = 0;
+  let lastId: mongoose.Types.ObjectId | null = null;
+
   while (true) {
+    const filter: Record<string, unknown> = { createdAt: { $lt: cutoff } };
+    if (lastId) {
+      filter._id = { $gt: lastId };
+    }
+
     const docs = await ExtractedData.find(filter)
-      .select({ _id: 1 })
+      .select({ _id: 1, runId: 1 })
+      .sort({ _id: 1 })
       .limit(settings.batchSize)
       .lean();
     if (docs.length === 0) break;
-    const result = await ExtractedData.deleteMany({
-      _id: { $in: docs.map((d) => d._id) },
-    });
-    deleted += result.deletedCount ?? 0;
+
+    lastId = docs[docs.length - 1]._id as mongoose.Types.ObjectId;
+
+    const runIds = [
+      ...new Set(
+        docs
+          .map((d) => (d.runId == null || d.runId === '' ? null : String(d.runId)))
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
+
+    const existing = runIds.length
+      ? await Run.find({ runId: { $in: runIds } })
+          .select({ runId: 1 })
+          .lean()
+      : [];
+    const existingSet = new Set(existing.map((r) => String(r.runId)));
+
+    const orphanIds = docs
+      .filter((d) => {
+        if (d.runId == null || d.runId === '') return true;
+        return !existingSet.has(String(d.runId));
+      })
+      .map((d) => d._id);
+
+    if (orphanIds.length > 0) {
+      const result = await ExtractedData.deleteMany({ _id: { $in: orphanIds } });
+      deleted += result.deletedCount ?? 0;
+    }
+
     await sleep(settings.batchDelayMs);
   }
+
   return deleted;
 }
 

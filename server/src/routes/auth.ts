@@ -207,11 +207,18 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
         firstStepRole,
         firstStepPlan,
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Portal profile upsert failed:', err);
-      return res.status(500).json({
-        error: 'Failed to create portal profile',
-        code: 'auth0.portal_upsert_failed',
+      const msg = String(err?.message || err || '');
+      const quota =
+        /space quota|Writes are blocked|disk|storage/i.test(msg) ||
+        err?.code === 8000 ||
+        err?.codeName === 'AtlasError';
+      return res.status(quota ? 503 : 500).json({
+        error: quota
+          ? 'Database storage is full — cannot create new portal profiles. Free MongoDB Atlas space or upgrade the cluster, then try again.'
+          : 'Failed to create portal profile',
+        code: quota ? 'auth0.portal_db_quota' : 'auth0.portal_upsert_failed',
       });
     }
 
