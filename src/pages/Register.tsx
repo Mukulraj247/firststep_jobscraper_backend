@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { useThemeMode } from '../context/theme-provider';
 import ScoutXLogo from '../assets/scoutx-logo.png';
-import { isScoutXAuth0Configured } from '../auth/ScoutXAuth0Provider';
+import { isScoutXAuth0Configured, auth0RedirectUri } from '../auth/ScoutXAuth0Provider';
 import { clearSkipAuth0AutoExchange } from '../auth/scoutxLogout';
 
 /**
@@ -87,9 +87,9 @@ function RegisterWithAuth0({
             loginWithRedirect({
               appState: { returnTo: '/login' },
               authorizationParams: {
-                redirect_uri: window.location.origin,
+                redirect_uri: auth0RedirectUri(),
                 audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-                scope: 'openid profile email',
+                scope: 'openid profile email offline_access',
                 screen_hint: 'signup',
               },
             });

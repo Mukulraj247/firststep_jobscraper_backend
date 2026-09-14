@@ -8,10 +8,13 @@ import {
 const domain = import.meta.env.VITE_AUTH0_DOMAIN as string | undefined;
 const clientId = import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined;
 const audience = import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined;
+
 /** Fallback only when `window` is unavailable (tests / SSR). Runtime uses page origin. */
 const redirectUriFallback =
   (import.meta.env.VITE_AUTH0_CALLBACK_URL as string | undefined) ||
-  'http://localhost:5173';
+  'http://localhost:5173/login';
+
+const AUTH0_SCOPE = 'openid profile email offline_access';
 
 /** Env vars present (domain + client id). */
 export function hasScoutXAuth0Env(): boolean {
@@ -36,23 +39,34 @@ export function getScoutXAuth0BlockReason(): string | null {
   return null;
 }
 
-function urlLooksLikeAuth0Callback(): boolean {
-  if (typeof window === 'undefined') return false;
-  const q = window.location.search;
+/** Callback must land on /login — `/` is a React Router Navigate that strips ?code=&state=. */
+export function auth0RedirectUri(origin?: string): string {
+  const base =
+    origin ||
+    (typeof window !== 'undefined' ? window.location.origin : '') ||
+    redirectUriFallback.replace(/\/login\/?$/, '');
+  return `${String(base).replace(/\/+$/, '')}/login`;
+}
+
+export function urlLooksLikeAuth0Callback(search?: string): boolean {
+  if (typeof window === 'undefined' && search == null) return false;
+  const q = search ?? window.location.search;
   return q.includes('code=') && q.includes('state=');
 }
 
 function resolvePostLoginPath(appState?: { returnTo?: string }): string {
-  const raw = appState?.returnTo || '/dashboard';
+  // Stay on /login so LoginAuth0Only can exchange the access token for a ScoutX cookie.
+  const raw = appState?.returnTo || '/login';
   try {
     const u = new URL(raw, window.location.origin);
-    let path = `${u.pathname}${u.search}${u.hash}` || '/dashboard';
+    let path = `${u.pathname}${u.search}${u.hash}` || '/login';
     if (path.includes('code=') || path.includes('state=')) {
-      path = u.pathname || '/dashboard';
+      path = u.pathname || '/login';
     }
-    return path.startsWith('/') ? path : '/dashboard';
+    if (path === '/' || path.startsWith('/?')) return '/login';
+    return path.startsWith('/') ? path : '/login';
   } catch {
-    return typeof raw === 'string' && raw.startsWith('/') ? raw.split('?')[0] : '/dashboard';
+    return typeof raw === 'string' && raw.startsWith('/') ? raw.split('?')[0] : '/login';
   }
 }
 
@@ -64,13 +78,16 @@ function resolvePostLoginPath(appState?: { returnTo?: string }): string {
  * Post-login navigation uses history.replaceState + popstate so React Router
  * picks up the clean URL without this provider re-rendering on location.
  *
- * redirect_uri always follows the current page origin so localhost and the
- * deployed hostname both work (each must be listed in Auth0 Allowed Callbacks).
- *
- * Never mounts Auth0Provider on insecure origins (bare http://IP) — that throws
- * "auth0-spa-js must run on a secure origin" and white-screens the SPA.
+ * redirect_uri is always `{origin}/login` so the Auth0 ?code=&state= callback is
+ * not eaten by the `/` → `/dashboard` Navigate inside UserRoute.
  */
 export function ScoutXAuth0Provider({ children }: { children: React.ReactNode }) {
+  // Freeze at first paint — if the URL is cleaned mid-callback, do not flip this to true.
+  const skipRedirectCallback = useMemo(
+    () => !urlLooksLikeAuth0Callback(),
+    []
+  );
+
   const onRedirectCallback = useCallback((appState?: { returnTo?: string }) => {
     const path = resolvePostLoginPath(appState);
     window.history.replaceState({}, document.title, path);
@@ -78,14 +95,10 @@ export function ScoutXAuth0Provider({ children }: { children: React.ReactNode })
   }, []);
 
   const authorizationParams = useMemo(() => {
-    const origin =
-      typeof window !== 'undefined'
-        ? window.location.origin
-        : redirectUriFallback;
     return {
-      redirect_uri: origin,
+      redirect_uri: auth0RedirectUri(),
       audience: audience || undefined,
-      scope: 'openid profile email',
+      scope: AUTH0_SCOPE,
     };
   }, []);
 
@@ -101,8 +114,7 @@ export function ScoutXAuth0Provider({ children }: { children: React.ReactNode })
       useRefreshTokens
       useRefreshTokensFallback
       cacheLocation="localstorage"
-      // Only handle Auth0 code/state when present; ignore unrelated query params.
-      skipRedirectCallback={!urlLooksLikeAuth0Callback()}
+      skipRedirectCallback={skipRedirectCallback}
       onRedirectCallback={onRedirectCallback}
     >
       {children}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAuth0SecureOrigin } from './auth0SecureOrigin';
+import { isAuth0SecureOrigin } from '../../auth/auth0SecureOrigin';
 
 describe('isAuth0SecureOrigin', () => {
   it('allows https and localhost http', () => {

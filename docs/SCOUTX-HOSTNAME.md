@@ -2,6 +2,8 @@
 
 Goal: stop using bare `http://IP:8080` in the browser. Use HTTPS + a real hostname so Auth0 callbacks and cookies work.
 
+**Auth0 hard rule:** `auth0-spa-js` only runs on HTTPS or `http://localhost` / `127.0.0.1`. Opening `http://174.x.x.x:8080` throws *“must run on a secure origin”* and white-screens the SPA. ScoutX skips mounting Auth0 on those URLs and shows a login hint instead.
+
 ## Suggested host
 
 `scoutx-dev.firststepjob.com` (or another name you already own). Point a DNS **A** record at the current DigitalOcean droplet IP.

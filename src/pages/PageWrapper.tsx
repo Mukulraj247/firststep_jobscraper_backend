@@ -32,6 +32,16 @@ import { AdminPage } from './AdminPage';
 import { UserDashboardShell } from '../user-dashboard/UserDashboardShell';
 import { isUserDashboardPath } from '../user-dashboard/routeHelpers';
 import { NoAccessPage } from './NoAccessPage';
+import { urlLooksLikeAuth0Callback } from '../auth/ScoutXAuth0Provider';
+
+/** `/` used to Navigate→/dashboard and wipe Auth0 ?code=&state= before the SDK ran. */
+function RootRedirect() {
+  const location = useLocation();
+  if (urlLooksLikeAuth0Callback(location.search)) {
+    return <Navigate to={`/login${location.search}`} replace />;
+  }
+  return <Navigate to="/dashboard" replace />;
+}
 
 function SkipToMain() {
   const location = useLocation();
@@ -199,7 +209,7 @@ export const PageWrapper = () => {
               <Routes>
                 <Route path="/user/*" element={<UserDashboardShell />} />
                 <Route element={<UserRoute />}>
-                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/" element={<RootRedirect />} />
                   <Route path="/dashboard" element={<MainPage handleEditRecording={handleEditRecording} initialContent="dashboard" />} />
                   <Route path="/automations" element={<MainPage handleEditRecording={handleEditRecording} initialContent="automations" />} />
                   <Route path="/jobs" element={<MainPage handleEditRecording={handleEditRecording} initialContent="jobs" />} />

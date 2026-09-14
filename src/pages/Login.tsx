@@ -7,14 +7,20 @@ import { useGlobalInfoStore } from '../context/globalInfo';
 import { useTranslation } from 'react-i18next';
 import { useThemeMode } from '../context/theme-provider';
 import ScoutXLogo from '../assets/scoutx-logo.png';
-import { isScoutXAuth0Configured, getScoutXAuth0BlockReason } from '../auth/ScoutXAuth0Provider';
+import {
+  auth0RedirectUri,
+  getScoutXAuth0BlockReason,
+  hasScoutXAuth0Env,
+  isScoutXAuth0Configured,
+  urlLooksLikeAuth0Callback,
+} from '../auth/ScoutXAuth0Provider';
 import { exchangeAuth0Token, landingPathForRoles } from '../auth/scoutxAuth';
 import {
   clearSkipAuth0AutoExchange,
   shouldSkipAuth0AutoExchange,
 } from '../auth/scoutxLogout';
-import { hasScoutXAuth0Env } from '../auth/ScoutXAuth0Provider';
-import { isAuth0SecureOrigin } from '../auth/auth0SecureOrigin';
+
+const AUTH0_SCOPE = 'openid profile email offline_access';
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -50,11 +56,19 @@ function LoginAuth0Only() {
     return () => clearTimeout(tmr);
   }, [isLoading]);
 
+  // Returning from Auth0 with ?code=&state= — never skip the ScoutX exchange.
+  useEffect(() => {
+    if (urlLooksLikeAuth0Callback()) {
+      clearSkipAuth0AutoExchange();
+    }
+  }, []);
+
   // Hydrate ScoutX session from localStorage before Auth0 auto-exchange.
-  // Without this, a brief AuthContext miss + Auth0 isAuthenticated causes
-  // exchange → navigate → remount loops that look like job-board refresh.
+  // Skip while an Auth0 callback is in flight — a stale local user would skip
+  // exchange and bounce /dashboard → 401 → /login.
   useEffect(() => {
     if (sessionUser) return;
+    if (urlLooksLikeAuth0Callback()) return;
     try {
       const raw = window.localStorage.getItem('user');
       if (!raw) return;
@@ -69,12 +83,14 @@ function LoginAuth0Only() {
 
   useEffect(() => {
     if (!sessionUser) return;
+    // Wait until Auth0 finishes the redirect callback before leaving /login.
+    if (urlLooksLikeAuth0Callback() || isLoading) return;
     if (Array.isArray(sessionUser.scoutxRoles)) {
       navigate(landingPathForRoles(sessionUser.scoutxRoles));
       return;
     }
     navigate('/dashboard');
-  }, [sessionUser, navigate]);
+  }, [sessionUser, navigate, isLoading]);
 
   const runExchange = async (opts?: { force?: boolean }) => {
     if (sessionUser) return;
@@ -83,12 +99,13 @@ function LoginAuth0Only() {
     exchangeOnceRef.current = true;
     setExchanging(true);
     setAuthError(null);
+    clearSkipAuth0AutoExchange();
     try {
       const accessToken = await withTimeout(
         getAccessTokenSilently({
           authorizationParams: {
             audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-            scope: 'openid profile email',
+            scope: AUTH0_SCOPE,
           },
         }),
         12000,
@@ -224,9 +241,9 @@ function LoginAuth0Only() {
             loginWithRedirect({
               appState: { returnTo: '/login' },
               authorizationParams: {
-                redirect_uri: window.location.origin,
+                redirect_uri: auth0RedirectUri(),
                 audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-                scope: 'openid profile email',
+                scope: AUTH0_SCOPE,
                 prompt: authError ? 'login' : undefined,
               },
             });
@@ -271,11 +288,13 @@ function LoginAuth0Only() {
 
 function LoginAuth0Missing() {
   const { darkMode } = useThemeMode();
+  const insecure = hasScoutXAuth0Env();
+  const reason = getScoutXAuth0BlockReason();
   return (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh', px: 3 }}>
       <Box
         sx={{
-          maxWidth: 480,
+          maxWidth: 520,
           textAlign: 'center',
           p: 4,
           borderRadius: 3,
@@ -284,12 +303,20 @@ function LoginAuth0Missing() {
         }}
       >
         <Typography variant="h5" sx={{ mb: 1, fontWeight: 700 }}>
-          Auth0 is not configured
+          {insecure ? 'Open ScoutX on a secure origin' : 'Auth0 is not configured'}
         </Typography>
         <Typography color="text.secondary" sx={{ mb: 2 }}>
-          Set <code>VITE_AUTH0_DOMAIN</code> and <code>VITE_AUTH0_CLIENT_ID</code> in ScoutX{' '}
-          <code>.env</code> (same values as First Step development). Password login is disabled.
+          {reason ||
+            'Set VITE_AUTH0_DOMAIN and VITE_AUTH0_CLIENT_ID in ScoutX .env (same values as First Step development). Password login is disabled.'}
         </Typography>
+        {insecure ? (
+          <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'left' }}>
+            Auth0 allows HTTPS hostnames and <code>http://localhost</code> only — not{' '}
+            <code>http://IP:8080</code>. Prefer{' '}
+            <code>https://scoutx-dev.firststepjob.com</code> or local{' '}
+            <code>http://localhost:5173</code>.
+          </Typography>
+        ) : null}
       </Box>
     </Box>
   );

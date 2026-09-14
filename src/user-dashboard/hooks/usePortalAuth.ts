@@ -106,7 +106,7 @@ function usePortalAuthAuth0() {
           getAccessTokenSilently({
             authorizationParams: {
               audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-              scope: 'openid profile email',
+              scope: 'openid profile email offline_access',
             },
           }),
           new Promise<string>((_, reject) =>

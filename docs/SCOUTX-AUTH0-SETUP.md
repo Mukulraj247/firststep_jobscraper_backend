@@ -19,7 +19,7 @@ Ops ownership stays on Mongo `maxun_users` id `6a8cfcda6a727b0780e05692` only. P
 | Domain | `dev-app0lbs2pjcoxxuv.us.auth0.com` |
 | Client ID | `x2ginS1tSrJizlvIdyQLzeEfWfGFFbd9` |
 | Audience | `https://scoutx.app/api` (custom ScoutX API with RBAC — **not** Management API) |
-| ScoutX callback | `http://localhost:5173` |
+| ScoutX callback | `http://localhost:5173/login` (must include `/login` — bare `/` strips Auth0 `?code=`) |
 | Ops Mongo user | `SCOUTX_OPS_USER_ID=6a8cfcda6a727b0780e05692` |
 | First Step API | `FIRSTSTEP_API_BASE_URL=http://localhost:5000` |
 
@@ -54,7 +54,9 @@ Ignore Auth0’s sample Node snippet (`jwtCheck` Express demo) — ScoutX alread
 1. Open **FIRSTSTEP (Test Application)** (`x2ginS1tSrJizlvIdyQLzeEfWfGFFbd9`).
 2. Keep First Step URLs (`http://localhost:5174`, …).
 3. Add ScoutX Allowed Callback / Logout / Web Origins: app origin (e.g. `http://localhost:5173`, `http://127.0.0.1:5173`, `https://scoutx-dev.firststepjob.com`). Logout return uses `/login` only.
-   - **Local login:** the SPA always sends `redirect_uri = window.location.origin`. Both `http://localhost:5173` and `http://127.0.0.1:5173` must be listed if you use either host.
+   - **Required callbacks (exact):** `http://localhost:5173/login`, `http://127.0.0.1:5173/login`, `https://scoutx-dev.firststepjob.com/login`
+   - Also keep origin roots if you still have older clients: `http://localhost:5173`, etc.
+   - **Local login:** the SPA sends `redirect_uri = {origin}/login`. Both localhost and 127.0.0.1 must be listed if you use either host.
    - Allowed Logout URLs: `http://localhost:5173/login`, `http://127.0.0.1:5173/login`, `https://scoutx-dev.firststepjob.com/login`
    - Allowed Web Origins: same origins without path.
 4. **Authorize** that SPA against API `https://scoutx.app/api` (see above).
