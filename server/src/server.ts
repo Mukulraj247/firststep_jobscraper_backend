@@ -58,6 +58,23 @@ const normalizeOrigin = (urlString?: string): string => {
   }
 };
 
+/** Local Vite may use localhost or 127.0.0.1 — allow both so Auth0 cookies work. */
+const devFriendlyOrigins = (publicUrl?: string): string[] => {
+  const primary = normalizeOrigin(publicUrl);
+  const origins = new Set<string>([primary]);
+  try {
+    const u = new URL(primary);
+    if (u.hostname === 'localhost') {
+      origins.add(`${u.protocol}//127.0.0.1${u.port ? `:${u.port}` : ''}`);
+    } else if (u.hostname === '127.0.0.1') {
+      origins.add(`${u.protocol}//localhost${u.port ? `:${u.port}` : ''}`);
+    }
+  } catch {
+    // ignore
+  }
+  return [...origins];
+};
+
 const isCrossOriginDeployment = (() => {
   try {
     const publicOrigin = normalizeOrigin(process.env.PUBLIC_URL);
@@ -74,8 +91,18 @@ const sessionCookieSameSite: 'none' | 'lax' =
     ? 'none'
     : 'lax';
 
+const PUBLIC_ORIGIN = normalizeOrigin(process.env.PUBLIC_URL);
+const ALLOWED_WEB_ORIGINS = devFriendlyOrigins(process.env.PUBLIC_URL);
+
 const CORS_CONFIG = {
-  origin: normalizeOrigin(process.env.PUBLIC_URL),
+  // Function form so localhost ↔ 127.0.0.1 both work in local Vite + Auth0.
+  origin: (requestOrigin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!requestOrigin || ALLOWED_WEB_ORIGINS.includes(requestOrigin)) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [...CORS_ALLOWED_HEADERS],
@@ -117,9 +144,12 @@ export let io = new Server(server, {
   // Run-status events are tiny; keep a modest default, overridable for self-hosted heavy payloads.
   maxHttpBufferSize: parseInt(process.env.SOCKET_MAX_HTTP_BUFFER_BYTES || String(10 * 1024 * 1024), 10),
   transports: ['websocket', 'polling'],
-  cors: CORS_CONFIG,
+  cors: {
+    origin: ALLOWED_WEB_ORIGINS,
+    credentials: true,
+  },
   allowRequest: createSocketOriginPolicy({
-    allowedOrigin: CORS_CONFIG.origin,
+    allowedOrigin: PUBLIC_ORIGIN,
     isProduction: process.env.NODE_ENV === 'production',
     allowedExtensionOrigins: process.env.ALLOWED_EXTENSION_ORIGINS,
   }),
@@ -158,6 +188,8 @@ const apiLimiter = rateLimit({
 app.use('/api', apiLimiter);
 
 readdirSync(path.join(__dirname, 'api')).forEach((r) => {
+  // Vitest/Jest files live next to routes but must never be require()'d at boot.
+  if (/\.(test|spec)\.(ts|js|cjs|mjs)$/i.test(r) || r.endsWith('.d.ts')) return;
   const route = require(path.join(__dirname, 'api', r));
   const router = route.default || route;
   if (typeof router === 'function') {

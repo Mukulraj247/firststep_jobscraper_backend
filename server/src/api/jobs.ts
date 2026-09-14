@@ -68,10 +68,37 @@ type CountCacheEntry = {
 };
 
 const FACET_TTL_MS = 5 * 60 * 1000;
+/** How long we wait for a cold facet rebuild before returning the job list anyway. */
+const FACET_COLD_WAIT_MS = 400;
 const COUNT_TTL_MS = 30 * 1000;
-const MIN_DETAIL_DESC_CHARS = 60;
 const facetCache = new Map<string, FacetCacheEntry>();
 const countCache = new Map<string, CountCacheEntry>();
+/** In-flight facet rebuilds so concurrent list requests share one aggregation burst. */
+const facetRefreshInFlight = new Map<string, Promise<FacetCacheEntry>>();
+
+const EMPTY_FACETS = {
+  companies: [] as string[],
+  categories: [] as string[],
+  frozenCategories: [] as string[],
+  frozenIndustries: [] as string[],
+  frozenExperienceLevels: [] as string[],
+  frozenExperienceYears: [] as string[],
+  frozenStates: [] as string[],
+  locations: [] as string[],
+};
+
+function facetsFromCacheEntry(cached: FacetCacheEntry) {
+  return {
+    companies: cached.companies,
+    categories: cached.categories,
+    frozenCategories: cached.frozenCategories || [],
+    frozenIndustries: cached.frozenIndustries || [],
+    frozenExperienceLevels: cached.frozenExperienceLevels || [],
+    frozenExperienceYears: cached.frozenExperienceYears || [],
+    frozenStates: cached.frozenStates || [],
+    locations: cached.locations || [],
+  };
+}
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -104,7 +131,13 @@ function companyFilterClause(company: string): Record<string, any> | null {
   };
 }
 
-/** Prefer detail enrichment, but list-complete rows are allowed when description is usable. */
+/**
+ * Index-friendly board eligibility filter.
+ *
+ * Intentionally avoids `$expr` / `$strLenCP` — those force collection scans and made
+ * cold `/api/jobs` (count + 8 facet aggregates) take minutes on ~13k listings.
+ * Description length / quality is enforced in `mapListingToJob` after the query.
+ */
 export function boardMatch(ownerId: string): Record<string, any> {
   return {
     ownerId,
@@ -113,23 +146,6 @@ export function boardMatch(ownerId: string): Record<string, any> {
     // with the cards that pass the final in-process quality gate.
     status: 'ready',
     'enrichment.method': { $in: ['ats', 'scrape.do', 'browser', 'list', 'llm'] },
-    $or: [
-      {
-        jobDescription: { $exists: true, $type: 'string', $ne: '' },
-        $expr: {
-          $gte: [{ $strLenCP: { $ifNull: ['$jobDescription', ''] } }, MIN_DETAIL_DESC_CHARS],
-        },
-      },
-      {
-        'listSnapshot.jobDescription': { $exists: true, $type: 'string', $ne: '' },
-        $expr: {
-          $gte: [
-            { $strLenCP: { $ifNull: ['$listSnapshot.jobDescription', ''] } },
-            MIN_DETAIL_DESC_CHARS,
-          ],
-        },
-      },
-    ],
   };
 }
 
@@ -391,32 +407,7 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
   };
 }
 
-async function getFacets(
-  ownerId: string,
-): Promise<{
-  companies: string[];
-  categories: string[];
-  frozenCategories: string[];
-  frozenIndustries: string[];
-  frozenExperienceLevels: string[];
-  frozenExperienceYears: string[];
-  frozenStates: string[];
-  locations: string[];
-}> {
-  const cached = facetCache.get(ownerId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return {
-      companies: cached.companies,
-      categories: cached.categories,
-      frozenCategories: cached.frozenCategories || [],
-      frozenIndustries: cached.frozenIndustries || [],
-      frozenExperienceLevels: cached.frozenExperienceLevels || [],
-      frozenExperienceYears: cached.frozenExperienceYears || [],
-      frozenStates: cached.frozenStates || [],
-      locations: cached.locations || [],
-    };
-  }
-
+async function computeFacets(ownerId: string): Promise<FacetCacheEntry> {
   const match = boardMatch(ownerId);
 
   const [
@@ -428,8 +419,7 @@ async function getFacets(
     frozenExperienceYearFacets,
     frozenStateFacets,
     locationFacets,
-  ] =
-    await Promise.all([
+  ] = await Promise.all([
     JobBoardListing.aggregate([
       { $match: match },
       {
@@ -571,7 +561,7 @@ async function getFacets(
     .map((f: any) => normalizeLocation(decodeHtmlEntities(String(f._id || ''))))
     .filter(Boolean);
   const uniqueLocations = [...new Set(locations)];
-  facetCache.set(ownerId, {
+  const entry: FacetCacheEntry = {
     expiresAt: Date.now() + FACET_TTL_MS,
     companies,
     categories,
@@ -581,17 +571,53 @@ async function getFacets(
     frozenExperienceYears,
     frozenStates,
     locations: uniqueLocations,
-  });
-  return {
-    companies,
-    categories,
-    frozenCategories,
-    frozenIndustries,
-    frozenExperienceLevels,
-    frozenExperienceYears,
-    frozenStates,
-    locations: uniqueLocations,
   };
+  facetCache.set(ownerId, entry);
+  return entry;
+}
+
+function refreshFacets(ownerId: string): Promise<FacetCacheEntry> {
+  const existing = facetRefreshInFlight.get(ownerId);
+  if (existing) return existing;
+  const pending = computeFacets(ownerId)
+    .catch((err) => {
+      logger.log('warn', `Job board facet refresh failed: ${err?.message || err}`);
+      const stale = facetCache.get(ownerId);
+      if (stale) return stale;
+      throw err;
+    })
+    .finally(() => {
+      facetRefreshInFlight.delete(ownerId);
+    });
+  facetRefreshInFlight.set(ownerId, pending);
+  return pending;
+}
+
+/**
+ * Never block the job list on a cold 8-aggregate facet rebuild.
+ * Fresh cache → instant. Stale → serve stale + refresh in background.
+ * Cold → wait briefly, then return empty filters while refresh continues.
+ */
+async function getFacetsForList(ownerId: string): Promise<typeof EMPTY_FACETS> {
+  const cached = facetCache.get(ownerId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return facetsFromCacheEntry(cached);
+  }
+
+  if (cached) {
+    void refreshFacets(ownerId);
+    return facetsFromCacheEntry(cached);
+  }
+
+  const pending = refreshFacets(ownerId);
+  const raced = await Promise.race([
+    pending.then((entry) => facetsFromCacheEntry(entry)),
+    new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), FACET_COLD_WAIT_MS);
+    }),
+  ]);
+  if (raced) return raced;
+  return { ...EMPTY_FACETS };
 }
 
 async function getCachedCount(cacheKey: string, match: Record<string, any>): Promise<number> {
@@ -820,7 +846,7 @@ router.get('/jobs', async (req: any, res: any) => {
     const [total, rows, facets] = await Promise.all([
       getCachedCount(countKey, match),
       query.skip(offset).limit(limit).lean(),
-      getFacets(ownerId),
+      getFacetsForList(ownerId),
     ]);
 
     return res.json({

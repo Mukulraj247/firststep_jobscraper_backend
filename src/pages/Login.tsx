@@ -7,12 +7,14 @@ import { useGlobalInfoStore } from '../context/globalInfo';
 import { useTranslation } from 'react-i18next';
 import { useThemeMode } from '../context/theme-provider';
 import ScoutXLogo from '../assets/scoutx-logo.png';
-import { isScoutXAuth0Configured } from '../auth/ScoutXAuth0Provider';
+import { isScoutXAuth0Configured, getScoutXAuth0BlockReason } from '../auth/ScoutXAuth0Provider';
 import { exchangeAuth0Token, landingPathForRoles } from '../auth/scoutxAuth';
 import {
   clearSkipAuth0AutoExchange,
   shouldSkipAuth0AutoExchange,
 } from '../auth/scoutxLogout';
+import { hasScoutXAuth0Env } from '../auth/ScoutXAuth0Provider';
+import { isAuth0SecureOrigin } from '../auth/auth0SecureOrigin';
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -222,6 +224,7 @@ function LoginAuth0Only() {
             loginWithRedirect({
               appState: { returnTo: '/login' },
               authorizationParams: {
+                redirect_uri: window.location.origin,
                 audience: import.meta.env.VITE_AUTH0_AUDIENCE,
                 scope: 'openid profile email',
                 prompt: authError ? 'login' : undefined,

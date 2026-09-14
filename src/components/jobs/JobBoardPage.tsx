@@ -1620,6 +1620,8 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  /** Bumps once after a cold facet miss so dropdowns refill without remounting. */
+  const [facetRefillNonce, setFacetRefillNonce] = useState(0);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobBoardJob | null>(null);
@@ -1653,6 +1655,7 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
     source,
     h1bSponsorFriendly ? '1' : '0',
     h1bFy2026Match ? '1' : '0',
+    String(facetRefillNonce),
   ].join('\u0002');
 
   useEffect(() => {
@@ -1741,6 +1744,19 @@ export const JobBoardPage: React.FC = React.memo(function JobBoardPage() {
     // fetchKey encodes every filter input used above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchKey]);
+
+  // Server returns the grid before cold facets finish — one soft refill fills dropdowns.
+  useEffect(() => {
+    if (!hasLoadedOnce || facetRefillNonce > 0) return undefined;
+    const facetsEmpty =
+      !filters.categories.length &&
+      !filters.frozenCategories.length &&
+      !filters.frozenIndustries.length &&
+      !filters.locations.length;
+    if (!facetsEmpty) return undefined;
+    const handle = window.setTimeout(() => setFacetRefillNonce(1), 1200);
+    return () => window.clearTimeout(handle);
+  }, [hasLoadedOnce, facetRefillNonce, filters]);
 
   useEffect(() => {
     if (!selectedId || !modalOpen) {

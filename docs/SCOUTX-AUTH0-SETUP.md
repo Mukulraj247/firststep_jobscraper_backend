@@ -53,7 +53,10 @@ Ignore Auth0’s sample Node snippet (`jwtCheck` Express demo) — ScoutX alread
 
 1. Open **FIRSTSTEP (Test Application)** (`x2ginS1tSrJizlvIdyQLzeEfWfGFFbd9`).
 2. Keep First Step URLs (`http://localhost:5174`, …).
-3. Add ScoutX Allowed Callback / Logout / Web Origins: app origin (e.g. `http://localhost:5173`, `https://scoutx-dev.firststepjob.com`). Logout return uses `/login` only.
+3. Add ScoutX Allowed Callback / Logout / Web Origins: app origin (e.g. `http://localhost:5173`, `http://127.0.0.1:5173`, `https://scoutx-dev.firststepjob.com`). Logout return uses `/login` only.
+   - **Local login:** the SPA always sends `redirect_uri = window.location.origin`. Both `http://localhost:5173` and `http://127.0.0.1:5173` must be listed if you use either host.
+   - Allowed Logout URLs: `http://localhost:5173/login`, `http://127.0.0.1:5173/login`, `https://scoutx-dev.firststepjob.com/login`
+   - Allowed Web Origins: same origins without path.
 4. **Authorize** that SPA against API `https://scoutx.app/api` (see above).
 5. Roles: `ScoutX_Admin`, `ScoutX_User`.
 6. **Required for ops:** Post-Login Action copies RBAC roles onto the access token:

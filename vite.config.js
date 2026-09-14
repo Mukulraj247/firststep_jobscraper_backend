@@ -43,6 +43,19 @@ export default defineConfig(() => {
     server: {
       host: parsedPublicUrl.hostname,
       port: serverPort,
+      // Same-origin API in local Vite so Auth0 session cookies (Set-Cookie from
+      // /auth/auth0/exchange) stick. apiConfig.js routes localhost DEV to page origin.
+      proxy: {
+        '/auth': { target: backendUrl, changeOrigin: true },
+        '/api': { target: backendUrl, changeOrigin: true },
+        '/storage': { target: backendUrl, changeOrigin: true },
+        '/record': { target: backendUrl, changeOrigin: true },
+        '/workflow': { target: backendUrl, changeOrigin: true },
+        '/robot': { target: backendUrl, changeOrigin: true },
+        '/proxy': { target: backendUrl, changeOrigin: true },
+        '/webhook': { target: backendUrl, changeOrigin: true },
+        '/socket.io': { target: backendUrl, changeOrigin: true, ws: true },
+      },
     },
     build: {
       outDir: 'build',

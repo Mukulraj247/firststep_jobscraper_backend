@@ -2,6 +2,9 @@
  * Vite bakes VITE_BACKEND_URL at build time. A localhost bake breaks Droplet HTTP
  * (Private Network Access blocks public-page → loopback). Prefer the page origin
  * when the baked URL is loopback but the user is on a public host.
+ *
+ * In Vite dev on localhost, always use the page origin so `/auth` + `/api` hit
+ * the Vite proxy (same-origin cookies for Auth0 exchange).
  */
 function resolveApiOrigin() {
   const fromEnv = String(import.meta.env.VITE_BACKEND_URL || '').replace(/\/+$/, '');
@@ -13,8 +16,14 @@ function resolveApiOrigin() {
   const envIsLoopback =
     !fromEnv ||
     /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:|\/|$)/i.test(fromEnv);
+  const pageIsLoopback = pageHost === 'localhost' || pageHost === '127.0.0.1';
 
-  if (page && pageHost && pageHost !== 'localhost' && pageHost !== '127.0.0.1' && envIsLoopback) {
+  // Local Vite: same-origin via proxy (see vite.config.js) — required for Auth0 cookies.
+  if (import.meta.env.DEV && page && pageIsLoopback) {
+    return page;
+  }
+
+  if (page && pageHost && !pageIsLoopback && envIsLoopback) {
     return page;
   }
   if (fromEnv) return fromEnv;
