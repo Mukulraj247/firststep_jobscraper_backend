@@ -24,6 +24,8 @@ ADMIN_PASSWORD=change-me-admin-password
 # Ops admin = Auth0 RBAC ScoutX_Admin only (do not use email allowlist)
 # FIRSTSTEP_API_BASE_URL=http://localhost:5000
 # Optional hostname (after DNS): VITE_AUTH0_CALLBACK_URL=https://scoutx-dev.firststepjob.com
+# For droplet SPA builds on your PC, use `.env.production` (see `.env.production.example`) —
+# do not overwrite local `.env` each time. `npm run build` / `npm run build:droplet` loads it.
 
 # Optional: DigitalOcean Monitoring API for the /admin compute panel (CPU / memory / disk / bandwidth).
 # Create a Personal Access Token with read scope: https://cloud.digitalocean.com/account/api/tokens
