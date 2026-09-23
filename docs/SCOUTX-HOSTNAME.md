@@ -12,6 +12,23 @@ Until DNS is live, local Auth0 continues on `http://localhost:5173`.
 
 ## Env after DNS + TLS
 
+**Local `.env`** — keep localhost for `npm run start:dev`.
+
+**Droplet UI builds on your PC** — put prod URLs in `.env.production` (copy from `.env.production.example`). Vite loads that file automatically on `npm run build` / `npm run build:droplet`, so you do **not** flip `.env` every deploy:
+
+```bash
+# once
+copy .env.production.example .env.production
+
+# every UI deploy from PC
+npm run build:server
+npm run build:droplet
+scp -r build root@DROPLET:/opt/scout-x/
+# then on droplet: chmod -R o+rX /opt/scout-x/build && chmod o+x /opt/scout-x /opt/scout-x/build
+```
+
+`.env.production` should contain:
+
 ```bash
 PUBLIC_URL=https://scoutx-dev.firststepjob.com
 BACKEND_URL=https://scoutx-dev.firststepjob.com
@@ -19,6 +36,8 @@ VITE_PUBLIC_URL=https://scoutx-dev.firststepjob.com
 VITE_BACKEND_URL=https://scoutx-dev.firststepjob.com
 VITE_AUTH0_CALLBACK_URL=https://scoutx-dev.firststepjob.com/login
 ```
+
+**Droplet `/opt/scout-x/.env`** — server-only (Auth0, Mongo, `FIRSTSTEP_API_BASE_URL`, etc.). Restart with `pm2 restart scout-x --update-env` after edits.
 
 Also add the HTTPS origins to the Auth0 SPA Allowed Callback / Logout / Web Origins (see `docs/SCOUTX-AUTH0-SETUP.md`).
 

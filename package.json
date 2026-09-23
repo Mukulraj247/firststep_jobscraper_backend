@@ -104,6 +104,7 @@
     "worker:aggregators:dev": "cross-env NODE_OPTIONS='--max-old-space-size=2048' nodemon server/src/aggregatorWorker.ts",
     "client": "cross-env NODE_OPTIONS=--max-old-space-size=4096 vite",
     "build": "vite build",
+    "build:droplet": "vite build",
     "install:ci": "npm ci --include=dev",
     "build:render-worker": "npm run install:ci && npm run build:server && npm run playwright:install",
     "build:server": "tsc -p server/tsconfig.json",
