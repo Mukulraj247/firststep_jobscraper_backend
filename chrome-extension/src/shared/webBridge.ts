@@ -7,6 +7,8 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:80',
   'http://127.0.0.1:80',
   'https://app.maxun.dev',
+  'https://scoutx-dev.firststepjob.com',
+  'https://scoutx.firststepjob.com',
 ];
 
 /**

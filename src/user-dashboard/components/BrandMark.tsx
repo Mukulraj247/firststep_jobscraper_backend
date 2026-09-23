@@ -5,12 +5,13 @@ import { DISPLAY_FONT, STITCH } from '../tokens';
 type Props = {
   compact?: boolean;
   size?: number;
+  inverted?: boolean;
 };
 
-/** Stitch wordmark: navy tile + mint scout mark + ScoutText lockup. */
-export function BrandMark({ compact = false, size = 32 }: Props) {
+/** ScoutX wordmark — portal brand. */
+export function BrandMark({ compact = false, size = 32, inverted = false }: Props) {
   return (
-    <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0 }}>
+    <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
       <Box
         aria-hidden
         sx={{
@@ -18,7 +19,7 @@ export function BrandMark({ compact = false, size = 32 }: Props) {
           height: size,
           flexShrink: 0,
           borderRadius: '8px',
-          bgcolor: STITCH.primaryContainer,
+          bgcolor: inverted ? 'rgba(255,255,255,0.14)' : STITCH.primaryContainer,
           display: 'grid',
           placeItems: 'center',
           position: 'relative',
@@ -30,7 +31,9 @@ export function BrandMark({ compact = false, size = 32 }: Props) {
             height: size * 0.34,
             borderRadius: '50%',
             bgcolor: STITCH.secondaryBright,
-            boxShadow: `0 0 0 ${Math.max(2, size * 0.06)}px ${STITCH.primaryContainer}, 0 0 0 ${Math.max(3, size * 0.1)}px ${STITCH.secondaryBright}`,
+            boxShadow: `0 0 0 ${Math.max(2, size * 0.06)}px ${
+              inverted ? 'rgba(255,255,255,0.2)' : STITCH.primaryContainer
+            }, 0 0 0 ${Math.max(3, size * 0.1)}px ${STITCH.secondaryBright}`,
           }}
         />
         <Box
@@ -52,16 +55,13 @@ export function BrandMark({ compact = false, size = 32 }: Props) {
           sx={{
             fontFamily: DISPLAY_FONT,
             fontWeight: 700,
-            fontSize: '1.15rem',
-            letterSpacing: '-0.02em',
-            color: STITCH.primary,
+            fontSize: size >= 32 ? '1.2rem' : '1.05rem',
+            letterSpacing: '-0.03em',
+            color: inverted ? '#ffffff' : STITCH.primary,
             minWidth: 0,
           }}
         >
-          Scout
-          <Box component="span" sx={{ color: STITCH.secondary }}>
-            Text
-          </Box>
+          ScoutX
         </Typography>
       )}
     </Stack>

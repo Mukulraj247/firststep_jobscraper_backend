@@ -64,7 +64,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
             <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, letterSpacing: '-0.03em', fontSize: '1.05rem' }}>
               Scout
               <Box component="span" sx={{ color: STITCH.secondaryBright }}>
-                Text
+                X
               </Box>
             </Typography>
           </Stack>
@@ -104,7 +104,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
         </Box>
 
         <Typography sx={{ position: 'relative', color: 'rgba(255,255,255,0.55)', fontSize: '0.75rem' }}>
-          Prototype build — mock data, no charges.
+          ScoutX portal · billing stays on your plan
         </Typography>
       </Box>
 

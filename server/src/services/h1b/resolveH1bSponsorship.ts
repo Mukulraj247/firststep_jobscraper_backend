@@ -12,6 +12,8 @@ export type H1bResolveInput = {
   remoteType?: string;
   visaSponsorship?: string;
   jobDescription?: string;
+  /** When set from frozen location resolve, wins over weak string heuristics. */
+  locationIsUs?: boolean;
 };
 
 export type H1bResolveResult = {
@@ -88,7 +90,14 @@ const EMPTY: H1bResolveResult = {
  * Auto-approved / approved mappings only (rejected never surface).
  */
 export async function resolveH1bSponsorship(input: H1bResolveInput): Promise<H1bResolveResult> {
-  const eligible = isUsJobLocation(input.location || '', input.remoteType);
+  // Frozen location classifier is authoritative when present (non-US cities/countries).
+  if (input.locationIsUs === false) {
+    return { ...EMPTY, h1bEligible: false };
+  }
+  const eligible =
+    input.locationIsUs === true
+      ? true
+      : isUsJobLocation(input.location || '', input.remoteType);
   if (!eligible) {
     return { ...EMPTY, h1bEligible: false };
   }

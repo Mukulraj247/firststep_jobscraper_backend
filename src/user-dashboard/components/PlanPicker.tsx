@@ -2,29 +2,30 @@ import React from 'react';
 import { Box, Button, Chip, Stack, Typography } from '@mui/material';
 import CheckCircle from '@mui/icons-material/CheckCircle';
 import type { ClusterPlan, DeliveryFrequency } from '../types';
+import { FREQUENCY_LABEL as FREQ_LABEL } from '../types';
 import { EASE, RADIUS, SHADOW, STITCH, primaryButtonSx, tint } from '../tokens';
 
 type Props = {
-  plans: ClusterPlan[];
-  selectedPlanId: string;
+  plans?: ClusterPlan[];
+  selectedPlanId?: string;
   selectedFrequency: DeliveryFrequency;
-  onPlanChange: (planId: string) => void;
+  allowedWindows?: readonly DeliveryFrequency[];
+  onPlanChange?: (planId: string) => void;
   onFrequencyChange: (freq: DeliveryFrequency) => void;
 };
 
-const FREQ_OPTIONS: Array<{ value: DeliveryFrequency; label: string; hint?: string }> = [
-  { value: '1h', label: 'Hourly' },
-  { value: '2h', label: 'Every 2 hours', hint: 'Recommended' },
-  { value: '24h', label: 'Daily' },
-];
+const DEFAULT_WINDOWS: DeliveryFrequency[] = ['1h', '12h', '24h'];
 
 export function PlanPicker({
-  plans,
+  plans = [],
   selectedPlanId,
   selectedFrequency,
+  allowedWindows,
   onPlanChange,
   onFrequencyChange,
 }: Props) {
+  const windows = (allowedWindows?.length ? allowedWindows : DEFAULT_WINDOWS) as DeliveryFrequency[];
+
   return (
     <Stack spacing={2.5}>
       <Box>
@@ -34,13 +35,18 @@ export function PlanPicker({
         >
           DELIVERY WINDOW
         </Typography>
+        <Typography variant="body2" sx={{ color: STITCH.muted, mb: 1.25, fontSize: '0.82rem' }}>
+          Feed shows jobs first seen in this window. Available windows depend on your plan.
+        </Typography>
         <Stack direction="row" flexWrap="wrap" gap={0.75}>
-          {FREQ_OPTIONS.map(({ value, label, hint }) => {
+          {windows.map((value) => {
             const selected = selectedFrequency === value;
+            const label =
+              value === '1h' ? 'Hourly' : value === '12h' ? 'Every 12 hours' : 'Daily';
             return (
               <Chip
                 key={value}
-                label={hint && selected ? `${label} · ${hint}` : label}
+                label={selected ? `${label} · ${FREQ_LABEL[value]}` : label}
                 onClick={() => onFrequencyChange(value)}
                 sx={{
                   borderRadius: RADIUS.pill,
@@ -58,89 +64,107 @@ export function PlanPicker({
         </Stack>
       </Box>
 
-      <Stack spacing={1.25}>
-        <Typography
-          variant="overline"
-          sx={{ display: 'block', fontWeight: 700, letterSpacing: '0.1em', color: STITCH.muted }}
-        >
-          SUBSCRIPTION TIER
-        </Typography>
-        {plans.map((plan, idx) => {
-          const selected = plan.id === selectedPlanId;
-          const featured = idx === plans.length - 1 && plans.length > 1;
-          return (
-            <Box
-              key={plan.id}
-              role="radio"
-              aria-checked={selected}
-              tabIndex={0}
-              onClick={() => onPlanChange(plan.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onPlanChange(plan.id);
-                }
-              }}
-              sx={{
-                p: 2,
-                cursor: 'pointer',
-                borderRadius: RADIUS.card,
-                bgcolor: selected ? tint(STITCH.secondary, 0.07) : STITCH.surfaceLowest,
-                boxShadow: selected
-                  ? `inset 0 0 0 2px ${STITCH.secondary}, ${SHADOW.sm}`
-                  : `inset 0 0 0 1px ${STITCH.outlineVariant}`,
-                transition: `box-shadow 180ms ${EASE}, background-color 180ms ${EASE}`,
-                '&:hover': {
+      {plans.length > 0 && onPlanChange ? (
+        <Stack spacing={1.25}>
+          <Typography
+            variant="overline"
+            sx={{ display: 'block', fontWeight: 700, letterSpacing: '0.1em', color: STITCH.muted }}
+          >
+            SUBSCRIPTION TIER
+          </Typography>
+          {plans.map((plan, idx) => {
+            const selected = plan.id === selectedPlanId;
+            const featured = idx === plans.length - 1 && plans.length > 1;
+            return (
+              <Box
+                key={plan.id}
+                role="radio"
+                aria-checked={selected}
+                tabIndex={0}
+                onClick={() => onPlanChange(plan.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onPlanChange(plan.id);
+                  }
+                }}
+                sx={{
+                  p: 2,
+                  cursor: 'pointer',
+                  borderRadius: RADIUS.card,
+                  bgcolor: selected ? tint(STITCH.secondary, 0.07) : STITCH.surfaceLowest,
                   boxShadow: selected
                     ? `inset 0 0 0 2px ${STITCH.secondary}, ${SHADOW.sm}`
-                    : `inset 0 0 0 1px ${tint(STITCH.secondary, 0.45)}`,
-                },
-                '&:focus-visible': { outline: `2px solid ${STITCH.secondary}`, outlineOffset: 2 },
-              }}
-            >
-              <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
-                <Stack direction="row" alignItems="center" spacing={0.75}>
-                  <Typography sx={{ fontWeight: 700, color: STITCH.primary }}>{plan.name}</Typography>
-                  {featured && (
-                    <Chip
-                      label="Best for job seekers"
-                      size="small"
-                      sx={{
-                        height: 20,
-                        fontSize: '0.62rem',
-                        fontWeight: 700,
-                        bgcolor: STITCH.primaryContainer,
-                        color: STITCH.onPrimary,
-                      }}
-                    />
-                  )}
-                </Stack>
-                <Typography sx={{ fontWeight: 700, color: STITCH.primary, letterSpacing: '-0.02em' }}>
-                  ${plan.priceMonthly}
-                  <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, color: STITCH.muted }}>
-                    /mo
-                  </Box>
-                </Typography>
-              </Stack>
-              <Stack spacing={0.5} sx={{ mt: 1 }}>
-                {plan.features.map((f) => (
-                  <Stack key={f} direction="row" alignItems="flex-start" spacing={0.75}>
-                    <CheckCircle sx={{ fontSize: 15, color: STITCH.secondary, mt: 0.25, flexShrink: 0 }} />
-                    <Typography variant="body2" sx={{ color: STITCH.muted, fontSize: '0.82rem' }}>
-                      {f}
-                    </Typography>
+                    : `inset 0 0 0 1px ${STITCH.outlineVariant}`,
+                  transition: `box-shadow 180ms ${EASE}, background-color 180ms ${EASE}`,
+                }}
+              >
+                <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
+                  <Stack direction="row" alignItems="center" spacing={0.75}>
+                    <Typography sx={{ fontWeight: 700, color: STITCH.primary }}>{plan.name}</Typography>
+                    {featured && (
+                      <Chip
+                        label="Best for job seekers"
+                        size="small"
+                        sx={{
+                          height: 20,
+                          fontSize: '0.62rem',
+                          fontWeight: 700,
+                          bgcolor: STITCH.primaryContainer,
+                          color: STITCH.onPrimary,
+                        }}
+                      />
+                    )}
                   </Stack>
-                ))}
-              </Stack>
-            </Box>
-          );
-        })}
-      </Stack>
+                  <Typography sx={{ fontWeight: 700, color: STITCH.primary }}>
+                    Included
+                  </Typography>
+                </Stack>
+                <Stack spacing={0.5} sx={{ mt: 1 }}>
+                  {plan.features.map((f) => (
+                    <Stack key={f} direction="row" alignItems="flex-start" spacing={0.75}>
+                      <CheckCircle sx={{ fontSize: 15, color: STITCH.secondary, mt: 0.25, flexShrink: 0 }} />
+                      <Typography variant="body2" sx={{ color: STITCH.muted, fontSize: '0.82rem' }}>
+                        {f}
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Stack>
+              </Box>
+            );
+          })}
+        </Stack>
+      ) : (
+        <Box
+          sx={{
+            p: 2,
+            borderRadius: RADIUS.card,
+            bgcolor: tint(STITCH.secondary, 0.06),
+            boxShadow: `inset 0 0 0 1px ${tint(STITCH.secondary, 0.25)}`,
+          }}
+        >
+          <Typography sx={{ fontWeight: 700, color: STITCH.primary, mb: 0.5 }}>
+            Included with your plan
+          </Typography>
+          <Typography variant="body2" sx={{ color: STITCH.muted, fontSize: '0.82rem' }}>
+            Activating a cluster uses one entitlement slot from your plan. No separate
+            ScoutX checkout.
+          </Typography>
+        </Box>
+      )}
     </Stack>
   );
 }
 
-export function PlanPickerStickyBar({ price, onSubscribe }: { price: number; onSubscribe: () => void }) {
+export function PlanPickerStickyBar({
+  price,
+  onSubscribe,
+  label = 'Activate cluster',
+}: {
+  price?: number;
+  onSubscribe: () => void;
+  label?: string;
+}) {
   return (
     <Box
       sx={{
@@ -163,12 +187,14 @@ export function PlanPickerStickyBar({ price, onSubscribe }: { price: number; onS
     >
       <Box>
         <Typography variant="caption" sx={{ color: STITCH.muted, display: 'block', lineHeight: 1.2 }}>
-          From
+          Your plan
         </Typography>
-        <Typography sx={{ fontWeight: 700, color: STITCH.primary, lineHeight: 1.2 }}>${price}/mo</Typography>
+        <Typography sx={{ fontWeight: 700, color: STITCH.primary, lineHeight: 1.2 }}>
+          Entitlement
+        </Typography>
       </Box>
       <Button variant="contained" disableElevation onClick={onSubscribe} sx={primaryButtonSx}>
-        Subscribe
+        {label}
       </Button>
     </Box>
   );

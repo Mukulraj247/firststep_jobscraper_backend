@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../components/AuthLayout';
-import { usePortalAuth } from '../hooks/usePortalAuth';
+import { usePortalAuth } from '../hooks/usePortalAuth.tsx';
 import { DISPLAY_FONT, STITCH, accentButtonSx } from '../tokens';
 import { isScoutXAuth0Configured } from '../../auth/ScoutXAuth0Provider';
 

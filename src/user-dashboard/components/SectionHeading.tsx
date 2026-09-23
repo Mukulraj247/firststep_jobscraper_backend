@@ -27,7 +27,7 @@ export function SectionHeading({ title, count, actionLabel, actionTo }: Props) {
             fontFamily: DISPLAY_FONT,
             fontWeight: 600,
             color: STITCH.primaryContainer,
-            fontSize: '1.5rem',
+            fontSize: { xs: '1.15rem', md: '1.25rem' },
             letterSpacing: '-0.02em',
           }}
         >

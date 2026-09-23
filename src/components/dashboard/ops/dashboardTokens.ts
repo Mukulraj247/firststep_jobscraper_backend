@@ -62,41 +62,19 @@ export const HERO_GRADIENT =
 export const HERO_GLASS_GRADIENT =
   `linear-gradient(135deg, rgba(255, 255, 255, 0.94) 0%, rgba(232, 248, 246, 0.82) 42%, rgba(255, 255, 255, 0.9) 100%)`;
 
-/** Shared glass hero shell used on dashboard, automations, and failures pages. */
+/** Shared page header shell — plain white card, First Step–style (no frosted glass). */
 export const heroGlassPanelSx = (
   options: { mb?: ResponsiveStyleValue<number | string>; shadow?: 'soft' | 'lifted' } = {},
 ): SystemStyleObject<Theme> => ({
   position: 'relative',
   overflow: 'hidden',
   isolation: 'isolate',
-  borderRadius: RADIUS.panel,
-  background: HERO_GLASS_GRADIENT,
-  backdropFilter: 'blur(22px) saturate(165%)',
-  WebkitBackdropFilter: 'blur(22px) saturate(165%)',
-  border: '1px solid rgba(255, 255, 255, 0.82)',
-  boxShadow:
-    options.shadow === 'lifted'
-      ? `
-        inset 0 1px 0 rgba(255, 255, 255, 0.95),
-        0 10px 28px ${tint(FIRSTSTEP.teal, 0.14)},
-        0 28px 56px ${tint(FIRSTSTEP.navy, 0.08)}
-      `
-      : `
-        inset 0 1px 0 rgba(255, 255, 255, 0.95),
-        0 8px 24px ${tint(FIRSTSTEP.teal, 0.1)},
-        0 20px 40px ${tint(FIRSTSTEP.navy, 0.05)}
-      `,
+  borderRadius: RADIUS.card,
+  background: FIRSTSTEP.white,
+  border: `1px solid ${FIRSTSTEP.border}`,
+  boxShadow: 'none',
   color: FIRSTSTEP.navy,
-  ...(options.mb !== undefined ? { mb: options.mb } : {}),
-  '&::after': {
-    content: '""',
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 'inherit',
-    pointerEvents: 'none',
-    background:
-      'radial-gradient(circle at 12% 18%, rgba(255, 255, 255, 0.75) 0%, transparent 42%), radial-gradient(circle at 88% 0%, rgba(79, 179, 169, 0.16) 0%, transparent 36%)',
-  },
+  ...(options.mb !== undefined ? { mb: options.mb } : { mb: 2 }),
 });
 
 export const heroGlassOverlineSx: SystemStyleObject<Theme> = {
@@ -109,10 +87,10 @@ export const heroGlassOverlineSx: SystemStyleObject<Theme> = {
 export const heroGlassTitleSx = (
   size: 'lg' | 'md' = 'lg',
 ): SystemStyleObject<Theme> => ({
-  fontSize: size === 'lg' ? { xs: '1.9rem', md: '2.4rem' } : { xs: '1.65rem', md: '2rem' },
+  fontSize: size === 'lg' ? { xs: '1.45rem', md: '1.75rem' } : { xs: '1.35rem', md: '1.55rem' },
   fontWeight: 700,
-  lineHeight: size === 'lg' ? 1.12 : 1.15,
-  letterSpacing: '-0.03em',
+  lineHeight: 1.2,
+  letterSpacing: '-0.02em',
   color: FIRSTSTEP.navyDeep,
 });
 
@@ -122,16 +100,13 @@ export const heroGlassSubtitleSx: SystemStyleObject<Theme> = {
 };
 
 export const heroGlassPillSx: SystemStyleObject<Theme> = {
-  mt: 2,
-  py: 0.75,
-  px: 1.75,
+  mt: 1.5,
+  py: 0.5,
+  px: 1.25,
   borderRadius: RADIUS.pill,
   width: 'fit-content',
-  bgcolor: 'rgba(255, 255, 255, 0.62)',
-  border: `1px solid ${tint(FIRSTSTEP.teal, 0.28)}`,
-  backdropFilter: 'blur(12px)',
-  WebkitBackdropFilter: 'blur(12px)',
-  boxShadow: `0 2px 10px ${tint(FIRSTSTEP.teal, 0.08)}`,
+  bgcolor: tint(FIRSTSTEP.teal, 0.1),
+  border: `1px solid ${tint(FIRSTSTEP.teal, 0.22)}`,
 };
 
 export const heroGlassPillTextSx: SystemStyleObject<Theme> = {
@@ -149,20 +124,16 @@ export const heroGlassGhostButtonSx: SystemStyleObject<Theme> = {
   py: 0.85,
   fontWeight: 600,
   color: FIRSTSTEP.navy,
-  borderColor: tint(FIRSTSTEP.teal, 0.42),
-  bgcolor: 'rgba(255, 255, 255, 0.58)',
-  backdropFilter: 'blur(10px)',
-  WebkitBackdropFilter: 'blur(10px)',
-  boxShadow: `0 2px 8px ${tint(FIRSTSTEP.teal, 0.08)}`,
+  borderColor: FIRSTSTEP.border,
+  bgcolor: FIRSTSTEP.white,
   '&:hover': {
     borderColor: FIRSTSTEP.teal,
-    bgcolor: 'rgba(255, 255, 255, 0.88)',
-    boxShadow: `0 6px 16px ${tint(FIRSTSTEP.teal, 0.14)}`,
+    bgcolor: tint(FIRSTSTEP.teal, 0.08),
   },
   '&.Mui-disabled': {
     color: tint(FIRSTSTEP.navy, 0.45),
-    borderColor: tint(FIRSTSTEP.teal, 0.18),
-    bgcolor: 'rgba(255, 255, 255, 0.35)',
+    borderColor: FIRSTSTEP.border,
+    bgcolor: FIRSTSTEP.surfaceAlt,
   },
 };
 

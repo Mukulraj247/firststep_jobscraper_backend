@@ -127,6 +127,7 @@ function companyFilterClause(company: string): Record<string, any> | null {
     $or: matchers.flatMap((re) => [
       { companyName: re },
       { 'listSnapshot.companyName': re },
+      { companyResolvedName: re },
     ]),
   };
 }
@@ -340,6 +341,10 @@ export function mapListingToJob(row: any, opts?: { fullDescription?: boolean; al
       applyUrl,
       jobTitle: title,
       companyName: company,
+      companyId: String(row.companyId || '').trim() || undefined,
+      companyKey: String(row.companyKey || '').trim() || undefined,
+      companyResolvedName:
+        String(row.companyResolvedName || '').trim() || company || undefined,
       jobDescription: snippet,
       jobCategory: category,
       date,
@@ -730,6 +735,7 @@ router.get('/jobs', async (req: any, res: any) => {
             $or: [
               { jobTitle: re },
               { companyName: re },
+              { companyResolvedName: re },
               { location: re },
               { 'listSnapshot.jobTitle': re },
               { 'listSnapshot.companyName': re },

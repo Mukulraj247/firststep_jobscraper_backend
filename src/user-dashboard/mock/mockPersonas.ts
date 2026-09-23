@@ -1,4 +1,6 @@
-import type { ClusterRequest, ClusterSubscription, PortalUser } from '../types';
+import type { ClusterRequest, ClusterSubscription, DeliveryFrequency, PortalUser } from '../types';
+
+export type PersonaKey = 'priya' | 'marcus';
 
 const now = Date.now();
 const hoursAgo = (h: number) => new Date(now - h * 60 * 60 * 1000).toISOString();
@@ -24,7 +26,7 @@ export const PRIYA_SUBSCRIPTIONS: ClusterSubscription[] = [
     clusterId: 'cluster-faang',
     clusterName: 'FAANG Software',
     planId: 'plan-standard',
-    frequency: '2h',
+    frequency: '12h' as DeliveryFrequency,
     status: 'active',
     subscribedAt: daysAgo(14),
     nextRefreshAt: hoursAgo(-1.5),
@@ -73,8 +75,6 @@ export const MARCUS_REQUESTS: ClusterRequest[] = [];
 
 export const PRIYA_SAVED = ['job-003', 'job-012', 'job-021'];
 export const MARCUS_SAVED = ['job-001', 'job-005', 'job-008', 'job-015'];
-
-export type PersonaKey = 'priya' | 'marcus';
 
 export function getPersonaDefaults(persona: PersonaKey) {
   if (persona === 'marcus') {

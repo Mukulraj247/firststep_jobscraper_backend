@@ -17,10 +17,12 @@ import {
   parseMetaTags,
   pickBestDescription,
   preferJobUrlTitle,
+  sanitizeCompanyName,
   titleFromJobUrl,
   htmlToPlainText,
   normalizeSalaryRange,
   normalizeLocation,
+  unwrapAggregatorCompanyChrome,
 } from './jobPageParser';
 
 const JSON_LD_FIXTURE = `<!DOCTYPE html><html><head>
@@ -99,6 +101,9 @@ describe('jobPageParser', () => {
     expect(isPortalCompanyName('Careers')).toBe(true);
     expect(isPortalCompanyName('Greenhouse')).toBe(true);
     expect(isPortalCompanyName('JPMC Candidate Experience page')).toBe(true);
+    expect(isPortalCompanyName('Professional')).toBe(true);
+    expect(isPortalCompanyName('Early Career')).toBe(true);
+    expect(isPortalCompanyName('api.paradox.ai-MC')).toBe(true);
     expect(isPortalCompanyName('Acme Corp')).toBe(false);
   });
 
@@ -423,6 +428,19 @@ describe('jobPageParser', () => {
           'Charlotte, North Carolina, United States | Indianapolis, Indiana, United States'
         )
       ).toBe('Charlotte, North Carolina · Indianapolis, Indiana');
+    });
+  });
+
+  describe('aggregator company chrome', () => {
+    it('unwraps See more open positions at X', () => {
+      expect(unwrapAggregatorCompanyChrome('See more open positions at Instana')).toBe('Instana');
+      expect(unwrapAggregatorCompanyChrome('See more open positions at Chaos')).toBe('Chaos');
+      expect(sanitizeCompanyName('See more open positions at Instana')).toBe('Instana');
+      expect(sanitizeCompanyName('Microsoft')).toBe('Microsoft');
+      expect(sanitizeCompanyName('Professional')).toBe('');
+      expect(sanitizeCompanyName('Early Career')).toBe('');
+      expect(sanitizeCompanyName('api.paradox.ai-MC')).toBe('');
+      expect(sanitizeCompanyName('NASDAQ: TEAM')).toBe('TEAM');
     });
   });
 });

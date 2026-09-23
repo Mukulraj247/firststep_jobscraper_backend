@@ -66,7 +66,7 @@ export const MAX_FROZEN_INDUSTRY_FILTERS = 10;
 export const MAX_FROZEN_INDUSTRIES_PER_JOB = 2;
 
 /** Rules / alias map version — bump when aliases change (backfill key). */
-export const INDUSTRY_RULES_VERSION = 'industry-v3';
+export const INDUSTRY_RULES_VERSION = 'industry-v14';
 
 function taxonomyKey(value: string): string {
   return String(value || '')

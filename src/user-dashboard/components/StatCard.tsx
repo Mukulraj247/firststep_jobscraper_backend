@@ -38,7 +38,7 @@ export function StatCard({ label, value, icon: Icon, accent = 'teal', hint, to }
         ...featuredPanelSx,
         display: 'block',
         height: '100%',
-        p: 2,
+        p: 1.75,
         textDecoration: 'none',
         position: 'relative',
         overflow: 'hidden',
@@ -68,7 +68,7 @@ export function StatCard({ label, value, icon: Icon, accent = 'teal', hint, to }
               fontFamily: DISPLAY_FONT,
               fontWeight: 600,
               letterSpacing: '-0.02em',
-              fontSize: { xs: '1.5rem', md: '2rem' },
+              fontSize: { xs: '1.35rem', md: '1.65rem' },
               lineHeight: 1.15,
               color: STITCH.onSurface,
             }}

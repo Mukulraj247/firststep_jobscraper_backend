@@ -1,5 +1,5 @@
 /**
- * ScoutText customer portal tokens — aligned to FirstStep user dashboard.
+ * ScoutX customer portal tokens — aligned to FirstStep user dashboard.
  * Kept portal-local so ops tokens stay untouched.
  */
 
@@ -97,9 +97,10 @@ export const tint = (color: string, alpha: number) => {
 export const DISPLAY_FONT = "'Geologica', 'Rotunda Regular', system-ui, sans-serif";
 export const BODY_FONT = "'Geologica', 'Inter', system-ui, sans-serif";
 
-export const PORTAL_NAV_WIDTH = 280;
-export const PORTAL_TOPBAR_HEIGHT = 96;
-export const PAGE_MAX_WIDTH = 1440;
+export const PORTAL_NAV_WIDTH = 220;
+export const PORTAL_NAV_COLLAPSED = 72;
+export const PORTAL_TOPBAR_HEIGHT = 56;
+export const PAGE_MAX_WIDTH = 1920;
 
 export const SHADOW = {
   xs: '0 4px 20px rgba(0, 0, 0, 0.08)',
@@ -204,7 +205,7 @@ export const ghostButtonSx = {
   },
 };
 
-export const ACCENTS = {
+export const ACCENTc = {
   teal: STITCH.secondaryBright,
   tealDark: STITCH.secondaryDark,
   navy: STITCH.primaryContainer,
@@ -213,7 +214,7 @@ export const ACCENTS = {
   red: STITCH.error,
 } as const;
 
-export type AccentKey = keyof typeof ACCENTS;
+export type AccentKey = keyof typeof ACCENTc;
 
 /** Re-exports used by older portal files that imported ops helpers. */
 export {

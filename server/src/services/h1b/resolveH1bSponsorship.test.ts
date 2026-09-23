@@ -24,6 +24,18 @@ describe('isUsJobLocation', () => {
   });
 });
 
+describe('resolveH1bSponsorship locationIsUs gate', () => {
+  it('forces ineligible when locationIsUs is false', async () => {
+    const { resolveH1bSponsorship } = await import('./resolveH1bSponsorship');
+    const r = await resolveH1bSponsorship({
+      companyName: 'Amazon',
+      location: '',
+      locationIsUs: false,
+    });
+    expect(r.h1bEligible).toBe(false);
+  });
+});
+
 describe('jdBlocksSponsorship', () => {
   it('blocks when visaSponsorship is no or JD forbids', () => {
     expect(jdBlocksSponsorship('no', '')).toBe(true);

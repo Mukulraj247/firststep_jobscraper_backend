@@ -1,14 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Button, Chip, Grid, Stack, Typography } from '@mui/material';
+import React, { useMemo, useState } from 'react';
+import { Box, Button, Chip, Grid, Stack, Step, StepLabel, Stepper, Typography } from '@mui/material';
 import AddCircleOutline from '@mui/icons-material/AddCircleOutline';
 import EditNoteOutlined from '@mui/icons-material/EditNoteOutlined';
 import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/EmptyState';
 import { GlassHero } from '../components/GlassHero';
 import { PanelSkeleton } from '../components/Skeletons';
-import { useRequirePortalAuth } from '../hooks/usePortalAuth';
-import { listRequests } from '../mock/mockApi';
+import { useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
+import { usePortalClusters, usePortalRequests } from '../hooks/portalQueries';
 import type { ClusterRequest } from '../types';
+import { humanLabel } from '../utils/displayLabels';
 import {
   BODY_FONT,
   DISPLAY_FONT,
@@ -23,16 +24,25 @@ import {
 const STATUS_LABEL: Record<ClusterRequest['status'], string> = {
   submitted: 'Submitted',
   in_review: 'In Review',
-  published: 'Published',
+  published: 'Live',
   rejected: 'Rejected',
 };
 
 const STATUS_HINT: Record<ClusterRequest['status'], string> = {
-  submitted: 'Queue status: Pending curator assignment.',
-  in_review: 'Estimated live delivery: Tomorrow.',
-  published: 'Your cluster is live — subscribe from the catalog.',
+  submitted: 'Our team has your request — triage usually starts within a day.',
+  in_review: 'Ops is configuring automations and filters for your companies.',
+  published: 'Your cluster is live — open it from the catalog or your feed.',
   rejected: 'We could not build this one — check notes from the team.',
 };
+
+const TIMELINE_STEPS = ['Submitted', 'In review', 'Live'] as const;
+
+function timelineActiveStep(status: ClusterRequest['status']): number {
+  if (status === 'published') return 2;
+  if (status === 'in_review') return 1;
+  if (status === 'rejected') return 0;
+  return 0;
+}
 
 const statusChipSx = (status: ClusterRequest['status']) => {
   switch (status) {
@@ -51,17 +61,10 @@ type FilterKey = 'all' | 'published' | 'pipeline';
 
 export function RequestsPage() {
   const { loading } = useRequirePortalAuth();
-  const [requests, setRequests] = useState<ClusterRequest[]>([]);
-  const [ready, setReady] = useState(false);
+  const { data: requests = [], isLoading } = usePortalRequests(!loading);
+  const { data: clusters = [] } = usePortalClusters(!loading);
+  const ready = !isLoading;
   const [filter, setFilter] = useState<FilterKey>('all');
-
-  useEffect(() => {
-    if (loading) return;
-    listRequests().then((list) => {
-      setRequests(list);
-      setReady(true);
-    });
-  }, [loading]);
 
   const pipeline = useMemo(
     () => requests.filter((r) => r.status === 'submitted' || r.status === 'in_review'),
@@ -74,6 +77,11 @@ export function RequestsPage() {
     if (filter === 'pipeline') return pipeline;
     return requests;
   }, [filter, requests, published, pipeline]);
+
+  const clusterSlugFor = (req: ClusterRequest) => {
+    if (!req.resultClusterId) return null;
+    return clusters.find((c) => c.id === req.resultClusterId)?.slug || null;
+  };
 
   if (loading) return null;
 
@@ -106,7 +114,7 @@ export function RequestsPage() {
                 fontFamily: DISPLAY_FONT,
                 fontWeight: 700,
                 letterSpacing: '-0.03em',
-                fontSize: { xs: '1.6rem', md: '2rem' },
+                fontSize: { xs: '1.45rem', md: '1.7rem' },
                 lineHeight: 1.15,
                 color: STITCH.primaryContainer,
               }}
@@ -114,8 +122,8 @@ export function RequestsPage() {
               My Requests
             </Typography>
             <Typography sx={{ mt: 0.75, color: STITCH.muted }}>
-              Custom clusters you&apos;ve asked us to build. We&apos;ll notify you here when one goes live — typically
-              24–48 hours after dispatch.
+              Custom clusters you&apos;ve asked us to build. Track progress here — typically live within
+              24–48 hours after triage.
             </Typography>
           </Box>
           <Button
@@ -179,61 +187,119 @@ export function RequestsPage() {
           </Typography>
 
           <Grid container spacing={2}>
-            {visible.map((req) => (
-              <Grid item xs={12} md={6} lg={4} key={req.id}>
-                <Box sx={{ ...panelSx, p: 2.5, height: '100%', display: 'flex', flexDirection: 'column' }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
-                    <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: STITCH.primary, fontSize: '1.05rem' }}>
-                      {req.title}
-                    </Typography>
-                    <Chip
-                      label={STATUS_LABEL[req.status]}
-                      size="small"
-                      sx={{
-                        height: 22,
-                        borderRadius: RADIUS.pill,
-                        fontWeight: 700,
-                        fontSize: '0.68rem',
-                        ...statusChipSx(req.status),
-                      }}
-                    />
-                  </Stack>
-                  <Typography sx={{ mt: 1, fontSize: '0.8125rem', color: STITCH.muted, flex: 1 }}>
-                    {STATUS_HINT[req.status]}
-                  </Typography>
-                  <Stack direction="row" flexWrap="wrap" gap={0.5} sx={{ mt: 1.5 }}>
-                    {[...req.industries, ...req.locations].slice(0, 4).map((tag) => (
+            {visible.map((req) => {
+              const slug = clusterSlugFor(req);
+              const title = humanLabel(req.title, 'Custom cluster request');
+              const tags = [
+                ...(req.roles || []).slice(0, 3),
+                ...(req.industries || []).slice(0, 2),
+                ...(req.locations || []).slice(0, 2),
+              ].filter((t) => humanLabel(t, '') !== '');
+              return (
+                <Grid item xs={12} md={6} lg={4} key={req.id}>
+                  <Box sx={{ ...panelSx, p: 2.5, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                      <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: STITCH.primary, fontSize: '1.05rem' }}>
+                        {title}
+                      </Typography>
                       <Chip
-                        key={tag}
-                        label={tag}
+                        label={STATUS_LABEL[req.status]}
                         size="small"
                         sx={{
                           height: 22,
+                          borderRadius: RADIUS.pill,
+                          fontWeight: 700,
                           fontSize: '0.68rem',
-                          bgcolor: STITCH.surfaceContainer,
-                          color: STITCH.onSurface,
-                          border: 'none',
+                          ...statusChipSx(req.status),
                         }}
                       />
-                    ))}
-                  </Stack>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2 }}>
-                    <Typography sx={{ fontSize: '0.72rem', color: STITCH.muted }}>
-                      Submitted {new Date(req.submittedAt).toLocaleDateString()}
+                    </Stack>
+                    <Typography sx={{ mt: 1, fontSize: '0.8125rem', color: STITCH.muted }}>
+                      {STATUS_HINT[req.status]}
                     </Typography>
-                    {req.status === 'published' ? (
-                      <Button component={Link} to="/user/clusters" size="small" sx={{ ...primaryButtonSx, py: 0.5 }}>
-                        View Active Cluster
-                      </Button>
-                    ) : (
-                      <Button component={Link} to="/user/requests/new" size="small" sx={{ textTransform: 'none', fontWeight: 700, color: STITCH.secondary }}>
-                        Track progress
-                      </Button>
+
+                    {req.status !== 'rejected' && (
+                      <Stepper
+                        activeStep={timelineActiveStep(req.status)}
+                        alternativeLabel
+                        sx={{
+                          mt: 1.5,
+                          mb: 0.5,
+                          '& .MuiStepLabel-label': { fontSize: '0.68rem', fontWeight: 600 },
+                          '& .MuiStepIcon-root.Mui-active, & .MuiStepIcon-root.Mui-completed': {
+                            color: STITCH.secondary,
+                          },
+                        }}
+                      >
+                        {TIMELINE_STEPS.map((label) => (
+                          <Step key={label} completed={timelineActiveStep(req.status) > TIMELINE_STEPS.indexOf(label)}>
+                            <StepLabel>{label}</StepLabel>
+                          </Step>
+                        ))}
+                      </Stepper>
                     )}
-                  </Stack>
-                </Box>
-              </Grid>
-            ))}
+
+                    <Stack direction="row" flexWrap="wrap" gap={0.5} sx={{ mt: 1.5 }}>
+                      {tags.slice(0, 5).map((tag) => (
+                        <Chip
+                          key={tag}
+                          label={tag}
+                          size="small"
+                          sx={{
+                            height: 22,
+                            fontSize: '0.68rem',
+                            bgcolor: STITCH.surfaceContainer,
+                            color: STITCH.onSurface,
+                            border: 'none',
+                          }}
+                        />
+                      ))}
+                      {req.urls && req.urls.length > 0 && (
+                        <Chip
+                          label={`${req.urls.length} URL${req.urls.length === 1 ? '' : 's'}`}
+                          size="small"
+                          sx={{
+                            height: 22,
+                            fontSize: '0.68rem',
+                            bgcolor: tint(STITCH.secondary, 0.14),
+                            color: STITCH.primary,
+                            border: 'none',
+                          }}
+                        />
+                      )}
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 'auto', pt: 2 }}>
+                      <Typography sx={{ fontSize: '0.72rem', color: STITCH.muted }}>
+                        Submitted {new Date(req.submittedAt).toLocaleDateString()}
+                      </Typography>
+                      {req.status === 'published' ? (
+                        <Button
+                          component={Link}
+                          to={slug ? `/user/clusters/${slug}` : '/user/clusters'}
+                          size="small"
+                          sx={{ ...primaryButtonSx, py: 0.5 }}
+                        >
+                          View cluster
+                        </Button>
+                      ) : req.status === 'rejected' ? (
+                        <Button
+                          component={Link}
+                          to="/user/requests/new"
+                          size="small"
+                          sx={{ textTransform: 'none', fontWeight: 700, color: STITCH.secondary }}
+                        >
+                          Submit again
+                        </Button>
+                      ) : (
+                        <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: STITCH.secondary }}>
+                          Tracking…
+                        </Typography>
+                      )}
+                    </Stack>
+                  </Box>
+                </Grid>
+              );
+            })}
           </Grid>
         </>
       )}

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Chip, InputAdornment, Stack, TextField, Typography } from '@mui/material';
+import React, { useMemo, useState } from 'react';
+import { Box, Chip, Grid, InputAdornment, Stack, TextField, Typography } from '@mui/material';
 import BookmarkBorder from '@mui/icons-material/BookmarkBorder';
 import SearchOffOutlined from '@mui/icons-material/SearchOffOutlined';
 import SearchOutlined from '@mui/icons-material/SearchOutlined';
@@ -7,31 +7,34 @@ import { useNavigate } from 'react-router-dom';
 import { EmptyState } from '../components/EmptyState';
 import { JobCard } from '../components/JobCard';
 import { PageHeader } from '../components/PageHeader';
+import { ReportJobDialog, type JobReportReason } from '../components/ReportJobDialog';
 import { JobListSkeleton } from '../components/Skeletons';
-import { useRequirePortalAuth } from '../hooks/usePortalAuth';
-import { listSaved, unsaveJob } from '../mock/mockApi';
-import type { FeedJob } from '../types';
+import { useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
+import { assignJob, reportJob, unsaveJob } from '../api/portalApi';
+import { invalidatePortalShell, usePortalSaved } from '../hooks/portalQueries';
 import { pluralize } from '../utils/format';
 import { FIRSTSTEP, RADIUS, tint } from '../tokens';
+import { useQueryClient } from '@tanstack/react-query';
+import { useGlobalInfoStore } from '../../context/globalInfo';
+import type { FeedJob } from '../types';
 
 export function SavedPage() {
   const { loading } = useRequirePortalAuth();
   const navigate = useNavigate();
-  const [jobs, setJobs] = useState<FeedJob[]>([]);
-  const [ready, setReady] = useState(false);
+  const { notify } = useGlobalInfoStore();
+  const queryClient = useQueryClient();
+  const { data: jobs = [], isLoading, refetch } = usePortalSaved(!loading);
+  const ready = !isLoading;
   const [search, setSearch] = useState('');
   const [company, setCompany] = useState('');
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<FeedJob | null>(null);
+  const [reporting, setReporting] = useState(false);
 
-  const load = () =>
-    listSaved().then((list) => {
-      setJobs(list);
-      setReady(true);
-    });
-
-  useEffect(() => {
-    if (loading) return;
-    load();
-  }, [loading]);
+  const load = () => {
+    void invalidatePortalShell(queryClient);
+    return refetch();
+  };
 
   const companies = useMemo(
     () => Array.from(new Set(jobs.map((j) => j.company))).sort(),
@@ -45,6 +48,36 @@ export function SavedPage() {
       return matchQ && (!company || j.company === company);
     });
   }, [jobs, search, company]);
+
+  const handleAssign = async (id: string) => {
+    setAssigningId(id);
+    try {
+      const result = await assignJob(id);
+      notify(
+        result.status === 'already_assigned' ? 'info' : 'success',
+        result.message || 'Assigned to OD Jobs',
+      );
+      void load();
+    } catch (err: any) {
+      notify('error', err?.response?.data?.error || err?.message || 'Could not assign job');
+    } finally {
+      setAssigningId(null);
+    }
+  };
+
+  const handleReportSubmit = async (payload: { reason: JobReportReason; note: string }) => {
+    if (!reportTarget) return;
+    setReporting(true);
+    try {
+      const result = await reportJob(reportTarget.id, payload);
+      notify('success', result.message || 'Report submitted');
+      setReportTarget(null);
+    } catch (err: any) {
+      notify('error', err?.response?.data?.error || err?.message || 'Could not submit report');
+    } finally {
+      setReporting(false);
+    }
+  };
 
   if (loading) return null;
 
@@ -144,22 +177,38 @@ export function SavedPage() {
               {filtered.length} of {jobs.length} shown
             </Typography>
           )}
-          <Stack spacing={1.5}>
+          <Grid container spacing={1.5}>
             {filtered.map((job) => (
-              <JobCard
-                key={job.id}
-                job={job}
-                showCluster
-                onOpen={(id) => navigate(`/user/jobs/${id}`)}
-                onUnsave={async (id) => {
-                  await unsaveJob(id);
-                  load();
-                }}
-              />
+              <Grid item xs={12} md={6} key={job.id}>
+                <JobCard
+                  job={job}
+                  showCluster
+                  dense
+                  assigning={assigningId === job.id}
+                  onOpen={(id) => navigate(`/user/jobs/${id}`)}
+                  onAssign={handleAssign}
+                  onReport={(id) => {
+                    const found = jobs.find((j) => j.id === id);
+                    if (found) setReportTarget(found);
+                  }}
+                  onUnsave={async (id) => {
+                    await unsaveJob(id);
+                    load();
+                  }}
+                />
+              </Grid>
             ))}
-          </Stack>
+          </Grid>
         </>
       )}
+
+      <ReportJobDialog
+        open={Boolean(reportTarget)}
+        job={reportTarget}
+        submitting={reporting}
+        onClose={() => !reporting && setReportTarget(null)}
+        onSubmit={handleReportSubmit}
+      />
     </Box>
   );
 }

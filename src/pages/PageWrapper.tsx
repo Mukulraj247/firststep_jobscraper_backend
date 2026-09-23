@@ -20,7 +20,7 @@ import { AlertSnackbar } from "../components/ui/AlertSnackbar";
 import Login from './Login';
 import Register from './Register';
 import UserRoute from '../routes/userRoute';
-import { Routes, Route, useNavigate, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, useNavigate, Navigate, useLocation, useParams } from 'react-router-dom';
 import { NotFoundPage } from '../components/dashboard/NotFound';
 import RobotCreate from '../components/robot/pages/RobotCreate';
 import { Box } from '@mui/material';
@@ -33,6 +33,13 @@ import { UserDashboardShell } from '../user-dashboard/UserDashboardShell';
 import { isUserDashboardPath } from '../user-dashboard/routeHelpers';
 import { NoAccessPage } from './NoAccessPage';
 import { urlLooksLikeAuth0Callback } from '../auth/ScoutXAuth0Provider';
+import { ClusterEditorShell } from './ClusterDetailPage';
+import { clusterAliasRedirectTarget } from '../utils/clusterStudioRoutes';
+
+function ClusterAliasRedirect() {
+  const { id } = useParams();
+  return <Navigate to={clusterAliasRedirectTarget(id)} replace />;
+}
 
 /** `/` used to Navigate→/dashboard and wipe Auth0 ?code=&state= before the SDK ran. */
 function RootRedirect() {
@@ -213,6 +220,12 @@ export const PageWrapper = () => {
                   <Route path="/dashboard" element={<MainPage handleEditRecording={handleEditRecording} initialContent="dashboard" />} />
                   <Route path="/automations" element={<MainPage handleEditRecording={handleEditRecording} initialContent="automations" />} />
                   <Route path="/jobs" element={<MainPage handleEditRecording={handleEditRecording} initialContent="jobs" />} />
+                  <Route path="/clusters" element={<MainPage handleEditRecording={handleEditRecording} initialContent="clusters" />} />
+                  <Route path="/clusters/new" element={<ClusterEditorShell />} />
+                  <Route path="/clusters/:id" element={<ClusterEditorShell />} />
+                  <Route path="/cluster/:id" element={<ClusterAliasRedirect />} />
+                  <Route path="/portal-users" element={<MainPage handleEditRecording={handleEditRecording} initialContent="portal-users" />} />
+                  <Route path="/reports" element={<MainPage handleEditRecording={handleEditRecording} initialContent="reports" />} />
                   <Route path="/scrapers/create" element={<PageMain><RobotCreate /></PageMain>} />
                   <Route path="/scrapers/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="scrapers" />} />
                   <Route path="/robots" element={<Navigate to="/scrapers" replace />} />
@@ -223,6 +236,7 @@ export const PageWrapper = () => {
                   <Route path="/runs/*" element={<MainPage handleEditRecording={handleEditRecording} initialContent="runs" />} />
                   <Route path="/failures" element={<MainPage handleEditRecording={handleEditRecording} initialContent="failures" />} />
                   <Route path="/enrichment" element={<MainPage handleEditRecording={handleEditRecording} initialContent="enrichment" />} />
+                  <Route path="/category-qa" element={<MainPage handleEditRecording={handleEditRecording} initialContent="category-qa" />} />
                   <Route path="/h1b" element={<MainPage handleEditRecording={handleEditRecording} initialContent="h1b" />} />
                   <Route path="/communication" element={<MainPage handleEditRecording={handleEditRecording} initialContent="communication" />} />
                   <Route path="/aggregators" element={<MainPage handleEditRecording={handleEditRecording} initialContent="aggregators" />} />

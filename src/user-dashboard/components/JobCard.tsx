@@ -2,12 +2,16 @@ import React from 'react';
 import { Avatar, Box, Button, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/material';
 import BookmarkAdded from '@mui/icons-material/Bookmark';
 import BookmarkBorder from '@mui/icons-material/BookmarkBorder';
+import AssignmentTurnedInOutlined from '@mui/icons-material/AssignmentTurnedInOutlined';
+import FlagOutlined from '@mui/icons-material/FlagOutlined';
 import OpenInNew from '@mui/icons-material/OpenInNew';
 import PaymentsOutlined from '@mui/icons-material/PaymentsOutlined';
 import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
 import ScheduleOutlined from '@mui/icons-material/ScheduleOutlined';
 import type { FeedJob } from '../types';
+import { humanLabel } from '../utils/displayLabels';
 import { timeAgo } from '../utils/format';
+import { stripTrackingParams } from '../utils/stripTrackingParams';
 import {
   BODY_FONT,
   DISPLAY_FONT,
@@ -26,6 +30,9 @@ type Props = {
   onSave?: (id: string) => void;
   onUnsave?: (id: string) => void;
   onOpen?: (id: string) => void;
+  onAssign?: (id: string) => void;
+  onReport?: (id: string) => void;
+  assigning?: boolean;
   /** Shows which cluster surfaced the job; useful on the "all subscriptions" feed. */
   showCluster?: boolean;
   /** Highlighted when this card is the active selection in the split feed. */
@@ -42,9 +49,21 @@ const metaSx = {
   fontSize: '0.8rem',
 } as const;
 
-export function JobCard({ job, onSave, onUnsave, onOpen, showCluster = false, selected = false, dense = false }: Props) {
+export function JobCard({
+  job,
+  onSave,
+  onUnsave,
+  onOpen,
+  onAssign,
+  onReport,
+  assigning = false,
+  showCluster = false,
+  selected = false,
+  dense = false,
+}: Props) {
   const toggleSave = () => (job.saved ? onUnsave?.(job.id) : onSave?.(job.id));
   const posted = timeAgo(job.postedAt);
+  const clusterLabel = humanLabel(job.clusterName, '');
 
   return (
     <Box
@@ -193,9 +212,9 @@ export function JobCard({ job, onSave, onUnsave, onOpen, showCluster = false, se
                 }}
               />
             )}
-            {showCluster && job.clusterName && (
+            {showCluster && clusterLabel && (
               <Chip
-                label={job.clusterName}
+                label={clusterLabel}
                 size="small"
                 variant="outlined"
                 sx={{
@@ -217,6 +236,35 @@ export function JobCard({ job, onSave, onUnsave, onOpen, showCluster = false, se
           sx={{ flexShrink: 0 }}
           onClick={(e) => e.stopPropagation()}
         >
+          {onAssign && (
+            <Button
+              size="small"
+              disabled={assigning || job.assigned}
+              startIcon={<AssignmentTurnedInOutlined sx={{ fontSize: 14 }} />}
+              onClick={() => onAssign(job.id)}
+              sx={{
+                borderRadius: RADIUS.pill,
+                fontWeight: 700,
+                textTransform: 'none',
+                color: job.assigned ? FIRSTSTEP.textMuted : FIRSTSTEP.navy,
+                minWidth: 0,
+              }}
+            >
+              {assigning ? '…' : job.assigned ? 'Assigned' : 'Assign'}
+            </Button>
+          )}
+          {onReport && (
+            <Tooltip title="Report this job">
+              <IconButton
+                size="small"
+                onClick={() => onReport(job.id)}
+                aria-label="Report job"
+                sx={{ color: FIRSTSTEP.textMuted }}
+              >
+                <FlagOutlined sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title={job.saved ? 'Remove from saved' : 'Save job'}>
             <IconButton
               size="small"
@@ -232,7 +280,7 @@ export function JobCard({ job, onSave, onUnsave, onOpen, showCluster = false, se
             </IconButton>
           </Tooltip>
           <Button
-            href={job.applyUrl}
+            href={stripTrackingParams(job.applyUrl)}
             target="_blank"
             rel="noopener noreferrer"
             size="small"

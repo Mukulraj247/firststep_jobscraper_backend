@@ -80,6 +80,12 @@ export interface IJobBoardListing extends Document {
   jobId: string;
   jobTitle: string;
   companyName: string;
+  /** Opaque company registry ID (CX-…). Empty until resolved. */
+  companyId: string;
+  /** Stable company identity key (apple.com | workday:hpe). */
+  companyKey: string;
+  /** Canonical display name from scoutx_companies (clustering / filters). */
+  companyResolvedName: string;
   jobDescription: string;
   descriptionSnippet: string;
   jobCategory: string;
@@ -177,6 +183,18 @@ export interface IJobBoardListing extends Document {
     contentHash?: string;
     candidates?: Array<{ city: string; state: string; population: number }>;
   };
+  /**
+   * Temporary Category QA cohort marker (e.g. cat-qa-2026-09).
+   * Used by /category-qa — not a durable product field.
+   */
+  categoryQaBatchId?: string;
+  /** cleared | backfilled | student_review */
+  categoryQaPhase?: 'cleared' | 'backfilled' | 'student_review' | '';
+  /**
+   * Light student/intern/new-grad/OPT escape — surface for review before
+   * treating as normal cluster filter fodder. Not full F1 scoring.
+   */
+  studentEscape?: boolean;
   listSnapshot: IJobBoardListSnapshot;
   enrichment: IJobBoardEnrichment;
   /** Origin of the listing, e.g. hiring_cafe for Aggregators. Empty for company scrapers. */
@@ -253,6 +271,9 @@ const JobBoardListingSchema: Schema = new Schema(
     jobId: { type: String, default: '' },
     jobTitle: { type: String, default: '' },
     companyName: { type: String, default: '' },
+    companyId: { type: String, default: '', index: true },
+    companyKey: { type: String, default: '', index: true },
+    companyResolvedName: { type: String, default: '', index: true },
     jobDescription: { type: String, default: '' },
     descriptionSnippet: { type: String, default: '' },
     jobCategory: { type: String, default: '' },
@@ -397,6 +418,14 @@ const JobBoardListingSchema: Schema = new Schema(
         default: undefined,
       },
     },
+    categoryQaBatchId: { type: String, default: '', index: true },
+    categoryQaPhase: {
+      type: String,
+      enum: ['cleared', 'backfilled', 'student_review', ''],
+      default: '',
+      index: true,
+    },
+    studentEscape: { type: Boolean, default: false, index: true },
     listSnapshot: { type: ListSnapshotSchema, default: () => ({}) },
     enrichment: { type: EnrichmentSchema, default: () => ({}) },
     source: { type: String, default: '', index: true },
@@ -457,11 +486,19 @@ JobBoardListingSchema.index(
   { name: 'job_board_owner_status_h1b_fy2026_idx' }
 );
 JobBoardListingSchema.index(
+  { categoryQaBatchId: 1, categoryQaPhase: 1, createdAt: -1 },
+  { name: 'job_board_category_qa_batch_phase_idx' }
+);
+JobBoardListingSchema.index(
   { status: 1, priority: -1, createdAt: 1 },
   { name: 'job_board_claim_scan_idx' }
 );
 JobBoardListingSchema.index({ status: 1, leaseUntil: 1 }, { name: 'job_board_lease_idx' });
 JobBoardListingSchema.index({ lastSeenAt: 1 }, { name: 'job_board_last_seen_at_idx' });
+JobBoardListingSchema.index(
+  { ownerId: 1, lastSeenAt: -1 },
+  { name: 'job_board_owner_last_seen_idx' }
+);
 JobBoardListingSchema.index(
   { jobTitle: 'text', companyName: 'text', location: 'text' },
   { name: 'job_board_text_idx', weights: { jobTitle: 10, companyName: 5, location: 2 } }

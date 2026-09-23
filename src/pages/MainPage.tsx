@@ -8,6 +8,10 @@ import { DashboardPage } from './DashboardPage';
 import { AutomationsPage } from './AutomationsPage';
 import { FailureDashboardPage } from './FailureDashboardPage';
 import { EnrichmentPage } from './EnrichmentPage';
+import { CategoryQaPage } from './CategoryQaPage';
+import { ClusterStudioPage } from './ClusterStudioPage';
+import { PortalUsersPage } from './PortalUsersPage';
+import { JobReportsPage } from './JobReportsPage';
 import { H1bPage } from './H1bPage';
 import { CommunicationPage } from './CommunicationPage';
 import { AggregatorsPage } from './AggregatorsPage';
@@ -366,6 +370,15 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
       // Rendered in the persistent slot below.
       body = null;
       break;
+    case 'clusters':
+      body = <ClusterStudioPage />;
+      break;
+    case 'portal-users':
+      body = <PortalUsersPage />;
+      break;
+    case 'reports':
+      body = <JobReportsPage />;
+      break;
     case 'runs':
       body = (
         <RunsPage
@@ -381,6 +394,9 @@ export const MainPage = ({ handleEditRecording, initialContent }: MainPageProps)
       break;
     case 'enrichment':
       body = <EnrichmentPage />;
+      break;
+    case 'category-qa':
+      body = <CategoryQaPage />;
       break;
     case 'h1b':
       body = <H1bPage />;

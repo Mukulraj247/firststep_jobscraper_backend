@@ -10,10 +10,12 @@ import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
 import ScheduleOutlined from '@mui/icons-material/ScheduleOutlined';
 import WorkOutline from '@mui/icons-material/WorkOutline';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useRequirePortalAuth } from '../hooks/usePortalAuth';
-import { getJob, saveJob, unsaveJob } from '../mock/mockApi';
+import { useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
+import { getJob, saveJob, unsaveJob } from '../api/portalApi';
 import type { FeedJob } from '../types';
 import { timeAgo } from '../utils/format';
+import { stripTrackingParams } from '../utils/stripTrackingParams';
+import { JobDescriptionBody } from '../components/JobDescriptionBody';
 import { BODY_FONT, FIRSTSTEP, RADIUS, ghostButtonSx, panelSx, primaryButtonSx, tint } from '../tokens';
 
 export function JobDetailPage() {
@@ -112,7 +114,7 @@ export function JobDetailPage() {
           <Button
             variant="contained"
             disableElevation
-            href={job.applyUrl}
+            href={stripTrackingParams(job.applyUrl)}
             target="_blank"
             rel="noopener noreferrer"
             endIcon={<OpenInNew sx={{ fontSize: 16 }} />}
@@ -160,12 +162,7 @@ export function JobDetailPage() {
       )}
 
       <Box sx={{ ...panelSx, p: { xs: 2.5, md: 3 }, mt: 2 }}>
-        <Typography sx={{ fontWeight: 700, color: FIRSTSTEP.navyDeep, mb: 1.5 }}>About this role</Typography>
-        <Typography
-          sx={{ fontFamily: BODY_FONT, whiteSpace: 'pre-wrap', color: FIRSTSTEP.navy, lineHeight: 1.7, fontSize: '0.92rem' }}
-        >
-          {job.description}
-        </Typography>
+        <JobDescriptionBody description={job.description || ''} heading="About this role" />
       </Box>
 
       <Stack
@@ -175,7 +172,7 @@ export function JobDetailPage() {
       >
         <InfoOutlined sx={{ fontSize: 18, color: '#8a5a00', flexShrink: 0, mt: 0.15 }} />
         <Typography variant="body2" sx={{ color: FIRSTSTEP.textMuted }}>
-          ScoutText shows historical and filing signals, not guarantees. Always read the original posting before
+          ScoutX shows historical and filing signals, not guarantees. Always read the original posting before
           applying.
         </Typography>
       </Stack>

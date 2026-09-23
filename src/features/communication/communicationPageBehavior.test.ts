@@ -10,13 +10,28 @@ import {
 } from './communicationPageBehavior';
 
 describe('sidebar Communication tab', () => {
-  it('sits after H-1B; Aggregators sits before Proxy', () => {
+  it('keeps primary ScoutX ops items first; tools sit after Reports', () => {
+    const dashboard = SIDEBAR_NAV_VALUES.indexOf('dashboard');
+    const automations = SIDEBAR_NAV_VALUES.indexOf('automations');
+    const clusters = SIDEBAR_NAV_VALUES.indexOf('clusters');
+    const portalUsers = SIDEBAR_NAV_VALUES.indexOf('portal-users');
+    const reports = SIDEBAR_NAV_VALUES.indexOf('reports');
+    const jobs = SIDEBAR_NAV_VALUES.indexOf('jobs');
+    const scrapers = SIDEBAR_NAV_VALUES.indexOf('scrapers');
     const enrichment = SIDEBAR_NAV_VALUES.indexOf('enrichment');
+    const categoryQa = SIDEBAR_NAV_VALUES.indexOf('category-qa');
     const h1b = SIDEBAR_NAV_VALUES.indexOf('h1b');
     const communication = SIDEBAR_NAV_VALUES.indexOf('communication');
     const aggregators = SIDEBAR_NAV_VALUES.indexOf('aggregators');
     const proxy = SIDEBAR_NAV_VALUES.indexOf('proxy');
-    expect(h1b).toBe(enrichment + 1);
+    expect(automations).toBe(dashboard + 1);
+    expect(clusters).toBe(automations + 1);
+    expect(portalUsers).toBe(clusters + 1);
+    expect(reports).toBe(portalUsers + 1);
+    expect(jobs).toBe(reports + 1);
+    expect(scrapers).toBe(jobs + 1);
+    expect(categoryQa).toBe(enrichment + 1);
+    expect(h1b).toBe(categoryQa + 1);
     expect(communication).toBe(h1b + 1);
     expect(aggregators).toBe(communication + 1);
     expect(proxy).toBe(aggregators + 1);

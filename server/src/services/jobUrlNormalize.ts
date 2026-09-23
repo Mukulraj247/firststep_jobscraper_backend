@@ -3,7 +3,7 @@ import { fixGoogleCareersJobsUrl } from '../utils/googleCareersUrl';
 
 /** Tracking / analytics query keys that never identify a job listing. */
 const TRACKING_PARAM_RE =
-  /^(utm_|fbclid$|gclid$|gbraid$|wbraid$|mc_eid$|mc_cid$|_ga$|_gl$|ref$|src$|trk$|si$|igshid$|mkt_tok$)/i;
+  /^(utm_|fbclid$|gclid$|gbraid$|wbraid$|mc_eid$|mc_cid$|_ga$|_gl$|ref$|src$|source$|trk$|si$|igshid$|mkt_tok$)/i;
 
 /**
  * Search / pagination / locale params that appear on list scrapes but do not

@@ -20,7 +20,10 @@ import PaymentsOutlined from '@mui/icons-material/PaymentsOutlined';
 import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
 import WorkOutline from '@mui/icons-material/WorkOutline';
 import type { FeedJob } from '../types';
+import { humanLabel } from '../utils/displayLabels';
 import { timeAgo } from '../utils/format';
+import { stripTrackingParams } from '../utils/stripTrackingParams';
+import { JobDescriptionBody } from './JobDescriptionBody';
 import { BODY_FONT, FIRSTSTEP, RADIUS, ghostButtonSx, primaryButtonSx, tint } from '../tokens';
 
 type Props = {
@@ -69,7 +72,7 @@ export function JobDetailDrawer({ job, open, onClose, onSave, onUnsave }: Props)
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="caption" sx={{ color: FIRSTSTEP.tealDark, fontWeight: 600 }}>
-                {job.clusterName}
+                {humanLabel(job.clusterName, 'Cluster')}
               </Typography>
               <Typography
                 sx={{ fontWeight: 700, fontSize: '1.3rem', letterSpacing: '-0.02em', color: FIRSTSTEP.navyDeep, lineHeight: 1.25 }}
@@ -132,7 +135,7 @@ export function JobDetailDrawer({ job, open, onClose, onSave, onUnsave }: Props)
           <Button
             variant="contained"
             disableElevation
-            href={job.applyUrl}
+            href={stripTrackingParams(job.applyUrl)}
             target="_blank"
             rel="noopener noreferrer"
             endIcon={<OpenInNew sx={{ fontSize: 16 }} />}
@@ -155,12 +158,7 @@ export function JobDetailDrawer({ job, open, onClose, onSave, onUnsave }: Props)
 
         <Divider sx={{ my: 2.5 }} />
 
-        <Typography
-          variant="body2"
-          sx={{ fontFamily: BODY_FONT, whiteSpace: 'pre-wrap', color: FIRSTSTEP.navy, lineHeight: 1.7 }}
-        >
-          {job.description}
-        </Typography>
+        <JobDescriptionBody description={job.description || ''} />
 
         <Stack
           direction="row"
@@ -169,7 +167,7 @@ export function JobDetailDrawer({ job, open, onClose, onSave, onUnsave }: Props)
         >
           <InfoOutlined sx={{ fontSize: 17, color: '#8a5a00', flexShrink: 0, mt: 0.1 }} />
           <Typography variant="caption" sx={{ color: FIRSTSTEP.textMuted, lineHeight: 1.6 }}>
-            ScoutText shows historical and filing signals, not guarantees. Always read the job posting before
+            ScoutX shows historical and filing signals, not guarantees. Always read the job posting before
             applying — a description stating &quot;will not sponsor&quot; overrides any badge.
           </Typography>
         </Stack>

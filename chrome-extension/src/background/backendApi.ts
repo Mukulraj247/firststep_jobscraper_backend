@@ -340,6 +340,14 @@ export type AutomationLookupResult = {
     name?: string;
     targetUrl?: string;
     companyName?: string;
+    companyId?: string;
+    companyKey?: string;
+  } | null;
+  company?: {
+    companyId: string;
+    companyKey: string;
+    displayName: string;
+    locked: boolean;
   } | null;
 };
 

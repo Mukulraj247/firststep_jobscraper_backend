@@ -61,6 +61,7 @@ import {
 import { classifyJobCategories } from '../services/jobCategoryTagger';
 import { resolveH1bSponsorship } from '../services/h1b/resolveH1bSponsorship';
 import { resolveFy2026JobMatch } from '../services/h1b/matchFy2026Role';
+import { detectStudentEscape } from '../../../src/shared/studentEscape';
 import {
   isCareerBoardScrapeDoEnabled,
   resolveHiringCafeScrapeDoForListing,
@@ -863,6 +864,12 @@ async function persistResult(
         remoteType: mergedRemote,
         visaSponsorship: $set.visaSponsorship || (doc as any).visaSponsorship || '',
         jobDescription: mergedDesc,
+        locationIsUs:
+          typeof $set.locationIsUs === 'boolean'
+            ? ($set.locationIsUs as boolean)
+            : typeof (doc as any).locationIsUs === 'boolean'
+              ? Boolean((doc as any).locationIsUs)
+              : undefined,
       };
       const h1b = await resolveH1bSponsorship(h1bInput);
       Object.assign($set, h1b);
@@ -872,6 +879,22 @@ async function persistResult(
       logger.log(
         'warn',
         `[jobEnrichment] H-1B resolve failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
+      );
+    }
+
+    try {
+      const student = detectStudentEscape({
+        title: mergedTitle,
+        description: mergedDesc,
+        seniorityLevel: String(
+          (fields as any).seniorityLevel || doc.seniorityLevel || list.seniorityLevel || ''
+        ),
+      });
+      $set.studentEscape = student.studentEscape;
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `[jobEnrichment] studentEscape failed (fail-open) for ${doc._id?.toString?.()}: ${err?.message || err}`
       );
     }
   }

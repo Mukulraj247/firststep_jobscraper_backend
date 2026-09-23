@@ -32,6 +32,98 @@ describe('resolveIndustryFromTitle', () => {
     expect(resolveIndustryFromTitle('Operations Manager').method).toBeNull();
     expect(resolveIndustryFromTitle('Analyst').method).toBeNull();
   });
+
+  it('maps DevSecOps / TPM / ML consultant titles', () => {
+    expect(resolveIndustryFromTitle('DevSecOps Engineer').industries).toEqual(['Cybersecurity']);
+    expect(resolveIndustryFromTitle('Principal Technical Program Manager').industries).toContain(
+      'Software / SaaS'
+    );
+    expect(resolveIndustryFromTitle('ML/AI Engineer - Consultant').industries).toContain(
+      'Software / SaaS'
+    );
+  });
+
+  it('maps SDE / Systems Engineer / hotel titles', () => {
+    expect(resolveIndustryFromTitle('Software Development Engineer').industries).toContain(
+      'Software / SaaS'
+    );
+    expect(resolveIndustryFromTitle('IT Support Specialist').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Hotel Engineer').industries).toEqual(['Travel & Hospitality']);
+  });
+
+  it('maps Rust / Help Desk / GTM / Mechanical titles', () => {
+    expect(resolveIndustryFromTitle('Staff Rust Developer').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Help Desk Tier 2').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Founding GTM Engineer').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Sr Mechanical Engineer').industries).toEqual(['Manufacturing']);
+    expect(resolveIndustryFromTitle('Team Lead, Cloud Infrastructure').industries).toContain(
+      'Cloud Infrastructure'
+    );
+  });
+
+  it('maps iOS / Web / Electrical / Counsel titles', () => {
+    expect(resolveIndustryFromTitle('iOS Engineer').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Web Engineer III').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Electrical Engineer').industries).toEqual([
+      'Construction & Engineering',
+    ]);
+    expect(resolveIndustryFromTitle('Counsel, Contracts & Distribution').industries).toEqual([
+      'Legal',
+    ]);
+  });
+
+  it('maps CISO / DevOps / Head of Data titles', () => {
+    expect(resolveIndustryFromTitle('Chief Information Security Officer (CISO)').industries).toEqual([
+      'Cybersecurity',
+    ]);
+    expect(resolveIndustryFromTitle('Manager of Platform DevOps').industries).toContain(
+      'Software / SaaS'
+    );
+    expect(resolveIndustryFromTitle('Head of Data Engineering, PRS').industries).toContain(
+      'Software / SaaS'
+    );
+  });
+
+  it('maps Software Engineering manager / BI / Restaurant / Reinsurance', () => {
+    expect(resolveIndustryFromTitle('Manager, Software Engineering').industries).toContain(
+      'Software / SaaS'
+    );
+    expect(resolveIndustryFromTitle('Business Intelligence Analyst').industries).toContain(
+      'Software / SaaS'
+    );
+    expect(resolveIndustryFromTitle('Restaurant Operations Manager').industries).toEqual([
+      'Food & Beverage',
+    ]);
+    expect(resolveIndustryFromTitle('Reinsurance Analyst').industries).toEqual(['Insurance']);
+  });
+
+  it('maps Category QA residual titles (UiPath / Tax / Plant / IAM)', () => {
+    expect(resolveIndustryFromTitle('Senior UiPath Developer').industries).toContain(
+      'Software / SaaS'
+    );
+    expect(resolveIndustryFromTitle('Tax Manager').industries).toEqual(['Financial Services']);
+    expect(resolveIndustryFromTitle('Plant Manager - Ready Mix Concrete').industries).toEqual([
+      'Manufacturing',
+    ]);
+    expect(resolveIndustryFromTitle('Manager, Security Incident Response').industries).toEqual([
+      'Cybersecurity',
+    ]);
+    expect(resolveIndustryFromTitle('Lifecycle Marketing Operations Manager').industries).toEqual([
+      'Marketing & Advertising',
+    ]);
+    expect(resolveIndustryFromTitle('Property Underwriter').industries).toEqual(['Insurance']);
+  });
+
+  it('maps healthcare / research / GIS residual titles', () => {
+    expect(resolveIndustryFromTitle('Radiology Manager').industries).toEqual(['Healthcare']);
+    expect(resolveIndustryFromTitle('Senior Research Scientist').industries).toEqual([
+      'Scientific Research',
+    ]);
+    expect(resolveIndustryFromTitle('GIS Analyst').industries).toContain('Software / SaaS');
+    expect(resolveIndustryFromTitle('Graduate Engineer (EIT)- Transportation').industries).toEqual([
+      'Construction & Engineering',
+    ]);
+  });
 });
 
 describe('resolveFrozenIndustries — role vs company', () => {

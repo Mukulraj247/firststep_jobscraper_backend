@@ -573,6 +573,8 @@ const mapAutomation = (
     scoutId: getScoutId(robot),
     name: robot.recording_meta.name,
     companyName: getCompanyName(robot),
+    companyId: String(robot.recording_meta?.companyId || '').trim() || undefined,
+    companyKey: String(robot.recording_meta?.companyKey || '').trim() || undefined,
     tags: getAutomationTags(robot),
     targetUrl: robot.recording_meta.url || '',
     createdAt: robot.recording_meta.createdAt,
@@ -1241,8 +1243,25 @@ router.get('/automations/lookup', async (req: any, res: any) => {
       }).lean();
     }
 
+    const { lookupCompanyForUrl } = await import('../services/companyRegistry');
+    let company: {
+      companyId: string;
+      companyKey: string;
+      displayName: string;
+      locked: boolean;
+    } | null = null;
+    const companyUrl =
+      (robot?.recording_meta?.url && String(robot.recording_meta.url)) || urlRaw || '';
+    if (companyUrl) {
+      try {
+        company = await lookupCompanyForUrl(companyUrl);
+      } catch {
+        company = null;
+      }
+    }
+
     if (!robot) {
-      return res.json({ found: false, automation: null });
+      return res.json({ found: false, automation: null, company });
     }
 
     const metaId = robot.recording_meta.id;
@@ -1252,6 +1271,7 @@ router.get('/automations/lookup', async (req: any, res: any) => {
     return res.json({
       found: true,
       automation: mapAutomation(robot, latestRun, 0),
+      company,
     });
   } catch (error: any) {
     logger.log('error', `Automation lookup failed: ${error.message}`);
@@ -1367,6 +1387,30 @@ router.post('/automations', async (req: any, res: any) => {
       return res.status(400).json({ error: 'companyName is required' });
     }
 
+    let companyId = '';
+    let companyKey = '';
+    let companyResolvedName = companyName;
+    try {
+      const { resolveAndUpsertCompany } = await import('../services/companyRegistry');
+      const resolved = await resolveAndUpsertCompany({
+        jobUrl: normalizedStartUrl,
+        applyUrl: normalizedStartUrl,
+        displayName: companyName,
+        nameSource: 'automation',
+        touchJob: false,
+      });
+      if (resolved?.stamp) {
+        companyId = resolved.stamp.companyId;
+        companyKey = resolved.stamp.companyKey;
+        companyResolvedName = resolved.stamp.companyResolvedName;
+      }
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `automation create company resolve failed (fail-open): ${err?.message || err}`
+      );
+    }
+
     const tagsResult = sanitizeAutomationTags(
       bodyTags !== undefined ? bodyTags : (config as any)?.tags
     );
@@ -1436,6 +1480,9 @@ router.post('/automations', async (req: any, res: any) => {
         id: robotMetaId,
         scoutId,
         companyName,
+        ...(companyId ? { companyId } : {}),
+        ...(companyKey ? { companyKey } : {}),
+        ...(companyResolvedName ? { companyResolvedName } : {}),
         tags,
         createdAt,
         updatedAt: createdAt,
@@ -1448,6 +1495,8 @@ router.post('/automations', async (req: any, res: any) => {
           webhookUrl: webhookUrl || config?.webhookUrl || '',
           databaseTargetColumns: resolvedDbCols,
           companyName,
+          ...(companyId ? { companyId } : {}),
+          ...(companyKey ? { companyKey } : {}),
           tags,
         },
       },
@@ -1468,6 +1517,8 @@ router.post('/automations', async (req: any, res: any) => {
         scoutId,
         name,
         companyName,
+        companyId: companyId || undefined,
+        companyKey: companyKey || undefined,
         tags,
         targetUrl: normalizedStartUrl,
         status: 'idle',

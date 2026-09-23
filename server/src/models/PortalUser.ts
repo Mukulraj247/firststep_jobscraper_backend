@@ -16,6 +16,18 @@ export interface IPortalUser extends Document {
   scoutxRoles: ScoutXRole[];
   firstStepRole?: string | null;
   firstStepPlan?: FirstStepPlanSnapshot | null;
+  /** When set, user explicitly started ScoutX cluster monitoring (not First Step billing). */
+  clusterServiceStartedAt?: Date | null;
+  /**
+   * When true, ops turned subscription off (distinct from "never started").
+   * Premium Plus defaults on unless this flag is set.
+   */
+  clusterServiceOptOut?: boolean;
+  /**
+   * Ops override for how many active clusters this user may hold (0–50).
+   * Null = use plan-included default (Premium Plus = 2, else 0).
+   */
+  adminClusterLimit?: number | null;
 }
 
 const FirstStepPlanSchema = new Schema(
@@ -46,6 +58,9 @@ const PortalUserSchema = new Schema(
     scoutxRoles: { type: [String], default: [] },
     firstStepRole: { type: String, default: null },
     firstStepPlan: { type: FirstStepPlanSchema, default: null },
+    clusterServiceStartedAt: { type: Date, default: null },
+    clusterServiceOptOut: { type: Boolean, default: false },
+    adminClusterLimit: { type: Number, default: null, min: 0, max: 50 },
   },
   {
     timestamps: true,

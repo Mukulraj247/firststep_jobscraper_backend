@@ -37,6 +37,8 @@ import {
 import { loadCompanyHistoricalStates } from './companyHistoricalStates';
 import { resolveH1bSponsorship } from './h1b/resolveH1bSponsorship';
 import { resolveFy2026JobMatch } from './h1b/matchFy2026Role';
+import { detectStudentEscape } from '../../../src/shared/studentEscape';
+import { resolveAndUpsertCompany, type CompanyStamp } from './companyRegistry';
 import logger from '../logger';
 
 export const JOB_BOARD_STALE_DAYS = parseInt(process.env.JOB_BOARD_STALE_DAYS || '14', 10);
@@ -416,6 +418,28 @@ export async function rekeySoftGateListingToEmployer(opts: {
     }
     $set.lastSeenAt = new Date();
 
+    try {
+      const resolved = await resolveAndUpsertCompany({
+        jobUrl: employerUrl,
+        applyUrl: employerUrl,
+        displayName:
+          String((existing as any).companyName || opts.doc.companyName || '').trim() ||
+          String((opts.doc.listSnapshot as any)?.companyName || '').trim(),
+        listingSource: String((opts.doc as any).source || (existing as any).source || ''),
+        touchJob: false,
+      });
+      if (resolved?.stamp) {
+        $set.companyId = resolved.stamp.companyId;
+        $set.companyKey = resolved.stamp.companyKey;
+        $set.companyResolvedName = resolved.stamp.companyResolvedName;
+      }
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `soft-gate merge company resolve failed (fail-open): ${err?.message || err}`
+      );
+    }
+
     await JobBoardListing.updateOne(
       { _id: existing._id },
       {
@@ -439,20 +463,44 @@ export async function rekeySoftGateListingToEmployer(opts: {
     };
   }
 
+  const rekeySet: Record<string, unknown> = {
+    jobUrl: employerUrl,
+    applyUrl: employerUrl,
+    jobUrlKey: newKey,
+    ...(posting
+      ? {
+          aggregatorPostingUrl: posting,
+          'listSnapshot.aggregatorPostingUrl': posting,
+        }
+      : {}),
+  };
+
+  try {
+    const resolved = await resolveAndUpsertCompany({
+      jobUrl: employerUrl,
+      applyUrl: employerUrl,
+      displayName:
+        String(opts.doc.companyName || '').trim() ||
+        String((opts.doc.listSnapshot as any)?.companyName || '').trim(),
+      listingSource: String((opts.doc as any).source || ''),
+      touchJob: false,
+    });
+    if (resolved?.stamp) {
+      rekeySet.companyId = resolved.stamp.companyId;
+      rekeySet.companyKey = resolved.stamp.companyKey;
+      rekeySet.companyResolvedName = resolved.stamp.companyResolvedName;
+    }
+  } catch (err: any) {
+    logger.log(
+      'warn',
+      `soft-gate rekey company resolve failed (fail-open): ${err?.message || err}`
+    );
+  }
+
   await JobBoardListing.updateOne(
     { _id: opts.doc._id },
     {
-      $set: {
-        jobUrl: employerUrl,
-        applyUrl: employerUrl,
-        jobUrlKey: newKey,
-        ...(posting
-          ? {
-              aggregatorPostingUrl: posting,
-              'listSnapshot.aggregatorPostingUrl': posting,
-            }
-          : {}),
-      },
+      $set: rekeySet,
     }
   );
   opts.doc.jobUrl = employerUrl;
@@ -708,6 +756,28 @@ export async function enqueueJobBoardEnrichments(opts: {
     .select('jobUrlKey status enrichment updatedAt')
     .lean();
   const existingByKey = new Map(existing.map((d: any) => [d.jobUrlKey, d]));
+
+  /** Resolve company stamps once per unique key (fail-open). */
+  const companyStampByKey = new Map<string, CompanyStamp>();
+  for (const [key, item] of byKey) {
+    try {
+      const resolved = await resolveAndUpsertCompany({
+        jobUrl: item.jobUrl,
+        applyUrl: item.applyUrl,
+        displayName: item.snapshot?.companyName || '',
+        listingSource,
+        touchJob: !existingByKey.has(key),
+      });
+      if (resolved?.stamp) {
+        companyStampByKey.set(key, resolved.stamp);
+      }
+    } catch (err: any) {
+      logger.log(
+        'warn',
+        `enqueueJobBoardEnrichments company resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+      );
+    }
+  }
   const nowDate = new Date();
   const ops: any[] = [];
   /**
@@ -764,6 +834,14 @@ export async function enqueueJobBoardEnrichments(opts: {
 
     const fields = applySnapshotToDoc(item.snapshot, item.jobUrl, item.jobId, item.applyUrl);
     const isNew = !prev;
+    const companyStamp = companyStampByKey.get(key);
+    const companyFields = companyStamp
+      ? {
+          companyId: companyStamp.companyId,
+          companyKey: companyStamp.companyKey,
+          companyResolvedName: companyStamp.companyResolvedName,
+        }
+      : {};
 
     if (acceptList) {
       // Only count brand-new employer/ATS board docs as "jobs added".
@@ -914,6 +992,7 @@ export async function enqueueJobBoardEnrichments(opts: {
             (fields as any).visaSponsorship || (snap as any).visaSponsorship || ''
           ),
           jobDescription: String(fields.jobDescription || snap.jobDescription || ''),
+          locationIsUs: tagFields.locationIsUs as boolean | undefined,
         };
         const h1b = await resolveH1bSponsorship(h1bInput);
         Object.assign(tagFields, h1b);
@@ -923,6 +1002,21 @@ export async function enqueueJobBoardEnrichments(opts: {
         logger.log(
           'warn',
           `enqueueJobBoardEnrichments H-1B resolve failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
+        );
+      }
+
+      try {
+        const snap = item.snapshot || {};
+        const student = detectStudentEscape({
+          title: String(fields.jobTitle || snap.jobTitle || ''),
+          description: String(fields.jobDescription || snap.jobDescription || ''),
+          seniorityLevel: String(snap.seniorityLevel || ''),
+        });
+        tagFields.studentEscape = student.studentEscape;
+      } catch (err: any) {
+        logger.log(
+          'warn',
+          `enqueueJobBoardEnrichments studentEscape failed (fail-open) for ${item.jobUrl}: ${err?.message || err}`
         );
       }
 
@@ -939,6 +1033,7 @@ export async function enqueueJobBoardEnrichments(opts: {
             $set: {
               ...fields,
               ...tagFields,
+              ...companyFields,
               ownerId,
               status: 'ready',
               lastSeenAt: nowDate,
@@ -988,6 +1083,7 @@ export async function enqueueJobBoardEnrichments(opts: {
           $addToSet: { robotMetaIds: opts.robotMetaId, runIds: String(opts.runId) },
           $set: {
             ...fields,
+            ...companyFields,
             ownerId,
             status: 'queued',
             lastSeenAt: nowDate,

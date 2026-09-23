@@ -3,7 +3,7 @@ import { Box, Button, Stack, Typography } from '@mui/material';
 import CheckCircleOutline from '@mui/icons-material/CheckCircleOutline';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../components/AuthLayout';
-import { usePortalAuth } from '../hooks/usePortalAuth';
+import { usePortalAuth } from '../hooks/usePortalAuth.tsx';
 import { FIRSTSTEP, primaryButtonSx } from '../tokens';
 import { isScoutXAuth0Configured } from '../../auth/ScoutXAuth0Provider';
 

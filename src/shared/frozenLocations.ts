@@ -12,10 +12,10 @@ import {
 } from './usCityGazetteer';
 import { resolveCompanyHqState } from './companyLocation';
 
-export const LOCATION_RULES_VERSION = 'location-2026-09-1';
+export const LOCATION_RULES_VERSION = 'location-2026-09-14';
 
-/** Population of top candidate must be ≥ this × second to auto-pick. */
-export const CITY_POPULATION_DOMINANCE_RATIO = 10;
+/** Population of top candidate must be ≥ this × second to auto-pick (Cambridge MA ~9.6× MD). */
+export const CITY_POPULATION_DOMINANCE_RATIO = 9;
 
 export type FrozenUsStateCode =
   | 'AL' | 'AK' | 'AZ' | 'AR' | 'CA' | 'CO' | 'CT' | 'DE' | 'FL' | 'GA'
@@ -201,16 +201,26 @@ export function canonicalizeStateToken(raw: string): FrozenUsStateCode | null {
 }
 
 const NON_US_COUNTRY_RE =
-  /\b(united\s+kingdom|u\.?k\.?|england|scotland|wales|canada|ontario|quebec|british\s+columbia|india|germany|france|australia|singapore|ireland|netherlands|mexico|brazil|china|japan|spain|italy|sweden|switzerland|poland|philippines|pakistan|bangladesh|nigeria|south\s+africa|new\s+zealand|hong\s+kong|uae|dubai|israel|korea|taiwan|vietnam|thailand|indonesia|malaysia|argentina|chile|colombia|peru|egypt|turkey|austria|belgium|denmark|norway|finland|portugal|greece|czech|romania|hungary|ukraine|russia)\b/i;
+  /\b(united\s+kingdom|u\.?k\.?|england|scotland|wales|canada|ontario|quebec|british\s+columbia|india|germany|france|australia|singapore|ireland|netherlands|mexico|brazil|china|japan|spain|italy|sweden|switzerland|poland|philippines|pakistan|bangladesh|nigeria|south\s+africa|new\s+zealand|hong\s+kong|uae|dubai|israel|korea|taiwan|vietnam|thailand|indonesia|malaysia|argentina|chile|colombia|peru|egypt|turkey|austria|belgium|denmark|norway|finland|portugal|greece|czech|romania|hungary|ukraine|russia|slovenia|croatia|serbia|slovakia|lithuania|latvia|estonia|iceland|portugal)\b/i;
+
+/** Well-known non-US cities — mark non-US only (no city/state chips).
+ * Prefer names uncommon as bare US postings; ambiguous US twins (London KY, Paris TX)
+ * still usually mean the international city when no state is present on a global board.
+ */
+const NON_US_CITY_RE =
+  /\b(london|paris|berlin|munich|amsterdam|dublin|toronto|vancouver|montreal|sydney|melbourne|auckland|tokyo|osaka|seoul|beijing|shanghai|hong\s+kong|singapore|mumbai|bangalore|bengaluru|hyderabad|pune|chennai|delhi|new\s+delhi|kolkata|sao\s+paulo|s[aã]o\s+paulo|rio\s+de\s+janeiro|mexico\s+city|buenos\s+aires|santiago|bogota|lima|zurich|geneva|stockholm|copenhagen|oslo|helsinki|warsaw|prague|budapest|lisbon|madrid|barcelona|milan|rome|tel\s+aviv|dubai|abu\s+dhabi|johannesburg|cape\s+town|nairobi|lagos|manila|makati|makati\s+city|jakarta|bangkok|taipei|belagavi|doha|qatar|sant\s+cugat|leiden|santa\s+catarina)\b/i;
 
 const US_COUNTRY_RE =
-  /\b(united\s+states(?:\s+of\s+america)?|u\.?\s*s\.?\s*a\.?|u\.?\s*s\.?)\b/i;
+  /\b(united\s+states(?:\s+of\s+america)?|u\.?\s*s\.?\s*a?\.?|u\.?\s*s\.?)\b/i;
 
 const REMOTE_ONLY_RE =
-  /^\s*(remote(?:\s*[-–—/]\s*(?:usa|u\.?s\.?a?\.?|united\s+states|us))?|work\s+from\s+home|wfh|fully\s+remote|100%\s*remote)\s*$/i;
+  /^\s*(remote(?:\s*[-–—/]\s*(?:usa|u\.?s\.?a?\.?|united\s+states|us))?|remote\s*\(\s*(?:usa|u\.?s\.?a?\.?|united\s+states|us)\s*\)|remote\s*[-–—]\s*|work\s+from\s+home|wfh|fully\s+remote|100%\s*remote)\s*$/i;
 
 const REMOTE_TOKEN_RE =
   /\b(remote|work\s+from\s+home|wfh)\b/i;
+
+/** Hybrid / flexible with no site listed — treat like remote-US for cluster filters. */
+const HYBRID_TOKEN_RE = /\b(hybrid|flexible\s+location|flex\s+location)\b/i;
 
 const TERRITORY_STANDALONE: Record<string, FrozenUsStateCode> = {
   guam: 'GU',
@@ -224,21 +234,64 @@ const TERRITORY_STANDALONE: Record<string, FrozenUsStateCode> = {
   'northern marianas': 'MP',
 };
 
+/** Common "X County" → state when no city/state otherwise. */
+const COUNTY_TO_STATE: Record<string, FrozenUsStateCode> = {
+  'citrus county': 'FL',
+  'wake county': 'NC',
+  'richland county': 'SC',
+  'fairfax county': 'VA',
+  'montgomery county': 'MD',
+  'king county': 'WA',
+  'cook county': 'IL',
+  'los angeles county': 'CA',
+  'orange county': 'CA',
+  'santa clara county': 'CA',
+  'travis county': 'TX',
+  'harris county': 'TX',
+  'maricopa county': 'AZ',
+};
+
 function splitLocationSites(raw: string): string[] {
-  return String(raw || '')
-    .split(/\s*[|·•/;]\s*|\s+\/\s+|\s+and\s+/i)
-    .map((p) => p.trim())
-    .filter(Boolean);
+  let parts = String(raw || '')
+    .split(/\s*[|·•/;]\s*|\s+\/\s+|\s+and\s+|\s+or\s+/i)
+    .map((p) => p.trim().replace(/\s+(?:or|and)\s*$/i, '').trim())
+    .filter((p) => p.length > 1);
+
+  // "NYC, Chicago, Seattle, San Francisco" (city list, no state tokens)
+  if (parts.length === 1 && /,/.test(parts[0]!)) {
+    const commas = parts[0]!
+      .split(/\s*,\s*/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 1);
+    const hasStateToken = commas.some(
+      (c) => /^[A-Za-z]{2}$/.test(c) || !!canonicalizeStateToken(c)
+    );
+    if (commas.length >= 2 && !hasStateToken) {
+      parts = commas;
+    }
+  }
+
+  return parts;
 }
 
 function stripCountrySuffix(value: string): string {
   return value
     .replace(
-      /(?:,\s*)?(?:united\s+states(?:\s+of\s+america)?|usa|u\.s\.a\.?|u\.s\.)\s*$/i,
+      /(?:,\s*)?(?:united\s+states(?:\s+of\s+america)?|usa|u\.s\.a\.?|u\.s\.|\bus\b)\s*$/i,
       ''
     )
     .replace(/\s+,/g, ',')
     .replace(/,\s*$/g, '')
+    .trim();
+}
+
+/** "United States, Washington, Redmond" → "Washington, Redmond" handled separately. */
+function stripCountryPrefix(value: string): string {
+  return value
+    .replace(
+      /^(?:united\s+states(?:\s+of\s+america)?|usa|u\.?\s*s\.?\s*a\.?|u\.?\s*s\.?)\s*,\s*/i,
+      ''
+    )
     .trim();
 }
 
@@ -257,12 +310,90 @@ function parseOneSite(raw: string): SiteParse {
 
   if (REMOTE_ONLY_RE.test(value)) return { remote: true };
 
-  // Clear non-US country without US marker
-  if (NON_US_COUNTRY_RE.test(value) && !US_COUNTRY_RE.test(value)) {
-    const maybeState = value.match(/,\s*([A-Za-z]{2})\s*$/);
-    if (maybeState && isFrozenUsStateCode(maybeState[1]!.toUpperCase())) {
-      // e.g. weird mixed strings — prefer US state if present
-    } else {
+  // "US West Coast (Bay Area strongly preferred)" / "Bay Area"
+  if (/\bbay\s+area\b/i.test(value) || /\b(?:us\s+)?west\s+coast\b/i.test(value)) {
+    return { state: 'CA', remote: REMOTE_TOKEN_RE.test(value) };
+  }
+
+  // "Work At Home-New Jersey" / "Work At Home - Texas"
+  const wfhState = value.match(/^work\s+at\s+home\s*[-–—:]\s*(.+)$/i);
+  if (wfhState) {
+    const st = canonicalizeStateToken(wfhState[1]!.trim());
+    if (st) return { state: st, remote: true };
+  }
+
+  // "Hybrid (Austin, TX)" / "Hybrid - Austin, TX" / "New York Office"
+  const hadHybrid = HYBRID_TOKEN_RE.test(value);
+  value = value.replace(HYBRID_TOKEN_RE, ' ').replace(/\s+/g, ' ').trim();
+  const wrapped = value.match(/^\((.+)\)$/);
+  if (wrapped) value = wrapped[1]!.trim();
+  value = value.replace(/\s+(office|hq|headquarters|campus)\s*$/i, '').trim();
+  if (!value) return hadHybrid ? { remote: true } : {};
+
+  // "Strella HQ (New York City)" / "Something HQ (Austin)"
+  const hqParen = value.match(/\bhq\b.*\(([^)]+)\)\s*$/i) || value.match(/^(.+?)\s+hq\s*\(([^)]+)\)\s*$/i);
+  if (hqParen) {
+    value = String(hqParen[hqParen.length - 1] || '').trim();
+  }
+
+  // "Irving-Irving Corporate Office-3939 West John Carpenter Freeway" → Irving
+  const dupCityOffice = value.match(/^([A-Za-z .]{2,40})-\1\b/i);
+  if (dupCityOffice) {
+    value = dupCityOffice[1]!.trim();
+  } else {
+    // "City-Street/Office…" when first token is a known unique US city
+    const head = value.split(/[-–—]/)[0]?.trim() || '';
+    if (
+      head.length >= 3 &&
+      head.length <= 40 &&
+      /[-–—]/.test(value) &&
+      !/^[A-Za-z]{2}$/.test(head)
+    ) {
+      const cands = lookupCityCandidates(head);
+      if (cands.length === 1) {
+        value = head;
+      }
+    }
+  }
+
+  // "U.S. - New York" / "USA - California" / "US – Texas"
+  const usDashPlace = value.match(
+    /^(?:u\.?\s*s\.?\s*a?\.?|united\s+states)\s*[-–—:]\s*(.+)$/i
+  );
+  if (usDashPlace) {
+    value = usDashPlace[1]!.trim();
+  }
+
+  // "Whitestown, IN, USA > IN > Lebanon > Route 267" → prefer City, ST head
+  if (/\s*>\s*/.test(value)) {
+    const head = value.split(/\s*>\s*/)[0]!.trim();
+    const headStripped = stripCountrySuffix(head);
+    if (
+      /,\s*[A-Za-z]{2}\b/.test(headStripped) ||
+      /,\s*[A-Za-z][A-Za-z .']{2,}$/.test(headStripped)
+    ) {
+      value = headStripped;
+    }
+  }
+
+  // "Dallas, TX - Uptown" / "Summerville, SC - Summerville Branch (…)"
+  value = value
+    .replace(
+      /,\s*([A-Za-z]{2}|[A-Za-z][A-Za-z .']{2,})\s*[-–—]\s*.+$/i,
+      ', $1'
+    )
+    .trim();
+
+  // Non-US country or well-known non-US city → non-US only (no state/city chips).
+  // Skip when a US state/code is present ("Brisbane, California").
+  if (
+    (NON_US_COUNTRY_RE.test(value) || NON_US_CITY_RE.test(value)) &&
+    !US_COUNTRY_RE.test(value)
+  ) {
+    const trailingState = value.match(/,\s*([A-Za-z]{2}|[A-Za-z][A-Za-z .']+)\s*$/);
+    const trailingIsUsState =
+      !!trailingState && !!canonicalizeStateToken(String(trailingState[1] || ''));
+    if (!trailingIsUsState) {
       return { nonUs: true };
     }
   }
@@ -270,11 +401,97 @@ function parseOneSite(raw: string): SiteParse {
   const territory = TERRITORY_STANDALONE[taxonomyKey(value)];
   if (territory) return { state: territory, displayCity: value };
 
+  const countyKey = taxonomyKey(value);
+  if (COUNTY_TO_STATE[countyKey]) {
+    return { state: COUNTY_TO_STATE[countyKey] };
+  }
+  const countyMatch = value.match(/^(.+?\s+county)\b/i);
+  if (countyMatch) {
+    const ck = taxonomyKey(countyMatch[1]!);
+    if (COUNTY_TO_STATE[ck]) return { state: COUNTY_TO_STATE[ck] };
+  }
+
   // ZIP alone or trailing
   const zipOnly = value.match(/^\s*(\d{5})(?:-\d{4})?\s*$/);
   if (zipOnly) return { zip: zipOnly[1] };
 
-  value = stripCountrySuffix(value);
+  // Country-first: "United States, Washington, Redmond" or "USA, CA, San Francisco"
+  const countryFirst = value.match(
+    /^(?:united\s+states(?:\s+of\s+america)?|usa|u\.?\s*s\.?\s*a\.?|u\.?\s*s\.?)\s*,\s*([A-Za-z][A-Za-z .']+?)(?:\s*,\s*(.+))?$/i
+  );
+  if (countryFirst) {
+    const state = canonicalizeStateToken(countryFirst[1]!);
+    if (state) {
+      const cityRaw = String(countryFirst[2] || '').trim();
+      if (cityRaw) {
+        return {
+          city: normalizeCityKey(cityRaw),
+          displayCity: titleCaseCity(cityRaw),
+          state,
+        };
+      }
+      return { state };
+    }
+  }
+
+  // Workday-ish "CA-San Diego" / "WA-Redmond"
+  const stCityHyphen = value.match(/^([A-Za-z]{2})\s*[-–—]\s*(.+)$/);
+  if (stCityHyphen && isFrozenUsStateCode(stCityHyphen[1]!.toUpperCase())) {
+    const state = stCityHyphen[1]!.toUpperCase() as FrozenUsStateCode;
+    const cityRaw = stCityHyphen[2]!.trim();
+    return {
+      city: normalizeCityKey(cityRaw),
+      displayCity: titleCaseCity(cityRaw),
+      state,
+    };
+  }
+
+  // "New York-161 Ave of the Americas" / "Chicago-123 Main St"
+  const cityStreet = value.match(
+    /^(New\s+York|Los\s+Angeles|San\s+Francisco|San\s+Jose|San\s+Diego|Chicago|Houston|Dallas|Austin|Seattle|Boston|Denver|Atlanta|Miami|Philadelphia|Phoenix|Washington)\s*[-–—]\s*\d/i
+  );
+  if (cityStreet) {
+    const cityRaw = cityStreet[1]!.trim();
+    const alone = canonicalizeStateToken(cityRaw);
+    if (alone) return { state: alone, displayCity: titleCaseCity(cityRaw) };
+    return {
+      city: normalizeCityKey(cityRaw),
+      displayCity: titleCaseCity(cityRaw),
+    };
+  }
+
+  // Workday path: "USA > KY > Brooks > 345 International" or "US > CA > San Jose"
+  const pathParts = value
+    .split(/\s*>\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (pathParts.length >= 2) {
+    const maybeCountry = pathParts[0]!;
+    const startIdx =
+      /^(?:usa|u\.?s\.?a?\.?|united\s+states)$/i.test(maybeCountry) ? 1 : 0;
+    if (startIdx < pathParts.length) {
+      const stateTok = pathParts[startIdx]!;
+      const state = canonicalizeStateToken(stateTok);
+      if (state) {
+        const cityRaw = pathParts[startIdx + 1] || '';
+        // Skip street-like segments (leading digits)
+        const city =
+          cityRaw && !/^\d/.test(cityRaw)
+            ? cityRaw
+            : '';
+        if (city) {
+          return {
+            city: normalizeCityKey(city),
+            displayCity: titleCaseCity(city),
+            state,
+          };
+        }
+        return { state };
+      }
+    }
+  }
+
+  value = stripCountryPrefix(stripCountrySuffix(value));
 
   // City, ST ZIP
   const cityStZip = value.match(
@@ -423,17 +640,35 @@ function pickDominant(
 export function resolveFrozenLocation(input: LocationResolveInput): LocationResolveResult {
   const location = String(input.location || '').trim();
   const remoteType = String(input.remoteType || '').trim();
+  const companyName = String(input.companyName || '').trim();
+
+  const tryCompanyHq = (): LocationResolveResult | null => {
+    const hqRaw = resolveCompanyHqState(companyName);
+    const hq = hqRaw && isFrozenUsStateCode(hqRaw) ? (hqRaw as FrozenUsStateCode) : null;
+    if (!hq) return null;
+    return {
+      frozenStates: [hq],
+      frozenCities: [],
+      locationIsRemote: REMOTE_TOKEN_RE.test(remoteType) || HYBRID_TOKEN_RE.test(remoteType),
+      locationIsUs: true,
+      method: 'company_hq',
+      confidence: 0.65,
+      rulesVersion: LOCATION_RULES_VERSION,
+    };
+  };
 
   if (!location && !remoteType) {
-    return emptyResult('none');
+    return tryCompanyHq() || emptyResult('none');
   }
 
-  // Remote-type alone with empty location
-  if (!location && REMOTE_TOKEN_RE.test(remoteType)) {
+  // Remote / hybrid type alone with empty location
+  if (!location && (REMOTE_TOKEN_RE.test(remoteType) || HYBRID_TOKEN_RE.test(remoteType))) {
+    const hq = tryCompanyHq();
+    if (hq) return hq;
     return emptyResult('remote', {
       locationIsRemote: true,
       locationIsUs: true,
-      confidence: 0.9,
+      confidence: 0.85,
     });
   }
 
@@ -590,6 +825,8 @@ export function resolveFrozenLocation(input: LocationResolveInput): LocationReso
         candidates: ambiguousCandidates,
       });
     }
+    const hqFallback = tryCompanyHq();
+    if (hqFallback && !anyNonUs) return hqFallback;
     // "United States" / USA alone
     if (US_COUNTRY_RE.test(location) && !NON_US_COUNTRY_RE.test(location)) {
       return emptyResult('none', {

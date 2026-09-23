@@ -6,11 +6,18 @@ export const MAX_PARSE_BYTES = parseInt(process.env.MAX_PARSE_BYTES || String(1.
 export const DESCRIPTION_SNIPPET_LEN = 280;
 
 const PORTAL_COMPANY_RE =
-  /^(careers?|jobs?|hiring|job\s*board|greenhouse|lever|workday|icims|taleo|smartrecruiters|jobvite|bamboohr|successfactors|workable|ashby|linkedin|indeed|glassdoor|search\s+results?|search\s+for|amazon\.jobs)$/i;
+  /^(careers?|jobs?|hiring|job\s*board|greenhouse|lever|workday|icims|taleo|smartrecruiters|jobvite|bamboohr|successfactors|workable|ashby|linkedin|indeed|glassdoor|search\s+results?|search\s+for|amazon\.jobs|professional|early\s+career|public|executive|executives|company\s+info|unknown|n\/?a)$/i;
 
 /** Portal / ATS chrome mistaken for employer names (e.g. "JPMC Candidate Experience page"). */
 const BAD_COMPANY_RE =
-  /candidate\s*experience|careers?\s*page|career\s*site|job\s*(?:board|portal|search|listing|opportunit)|hiring\s*portal|talent\s*(?:community|network)|welcome\s*to\s*our|workday|greenhouse|lever\.co|myworkdayjobs|smartrecruiters|successfactors|icims|taleo|oraclecloud|^jobs?\s+at\b|^\s*careers?\s*$|^\s*search\s+results?\s*$|^\s*search\s+for\s*$|amazon\.jobs/i;
+  /candidate\s*experience|careers?\s*page|career\s*site|job\s*(?:board|portal|search|listing|opportunit)|hiring\s*portal|talent\s*(?:community|network)|welcome\s*to\s*our|workday|greenhouse|lever\.co|myworkdayjobs|smartrecruiters|successfactors|icims|taleo|oraclecloud|paradox\.ai|^api\.[a-z0-9.-]+$|^jobs?\s+at\b|^\s*careers?\s*$|^\s*search\s+results?\s*$|^\s*search\s+for\s*$|amazon\.jobs|student\s+and\s+grad\s+programs|texas\s+executives|texas\s+staff\s+hq|other\s+staff|top\s+ai|myhrabc/i;
+
+/**
+ * Accel / aggregator list chrome: "See more open positions at Instana" → "Instana".
+ * Also "Jobs at X" / "Careers at X" when that is the whole company string.
+ */
+const AGGREGATOR_COMPANY_CHROME_RE =
+  /^(?:see\s+more\s+open\s+positions?\s+at|more\s+open\s+positions?\s+at|(?:view\s+)?(?:all\s+)?(?:jobs?|careers?|openings?)\s+at)\s+(.+)$/i;
 
 const BOT_WALL_RE = /cf-challenge|captcha|just a moment|attention required|access denied|bot.?detection/i;
 
@@ -165,8 +172,27 @@ export function isPortalCompanyName(name: string): boolean {
   return false;
 }
 
+/**
+ * Pull a real employer brand out of aggregator UI chrome before portal checks.
+ */
+export function unwrapAggregatorCompanyChrome(name: string): string {
+  const t = decodeHtmlEntities(String(name || '')).trim();
+  if (!t) return '';
+  const m = t.match(AGGREGATOR_COMPANY_CHROME_RE);
+  if (!m) return t;
+  return String(m[1] || '')
+    .replace(/[.…]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function sanitizeCompanyName(name: string): string {
-  const t = decodeHtmlEntities(String(name || ''));
+  let unwrapped = unwrapAggregatorCompanyChrome(name);
+  unwrapped = String(unwrapped || '')
+    // Exchange tickers scraped as company: "NASDAQ: TEAM", "NYSE: ABBV"
+    .replace(/^(?:nasdaq|nyse|amex)\s*:\s*/i, '')
+    .trim();
+  const t = decodeHtmlEntities(unwrapped);
   if (!t || isPortalCompanyName(t)) return '';
   return canonicalizeCompanyName(t);
 }

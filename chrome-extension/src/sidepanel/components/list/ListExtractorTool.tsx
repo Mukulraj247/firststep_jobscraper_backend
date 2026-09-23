@@ -2,6 +2,10 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { MSG } from '../../../shared/messages';
 import type { ListExtractionState, FieldConfig, SemanticType, PaginationConfig, CloudScheduleDraft, RowContextDraft } from '../../../shared/types';
 import { configScheduleFromDraft } from '../../../shared/types';
+import {
+  guessCompanyLabelFromUrl,
+  resolveExtensionPageUrl,
+} from '../../../shared/companyFromUrl';
 import { ExtensionScheduleForm, EXTENSION_SCHEDULE_OPTIONS, isValidCron } from '../ExtensionScheduleForm';
 import { ExtensionSchedulePicker } from '../ExtensionSchedulePicker';
 import { ExtensionTagPicker } from '../ExtensionTagPicker';
@@ -108,6 +112,7 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
   const [sendToMaxunName, setSendToMaxunName] = useState('');
   const [sendToMaxunScoutId, setSendToMaxunScoutId] = useState('');
   const [sendToMaxunCompany, setSendToMaxunCompany] = useState('');
+  const [sendToMaxunCompanyLocked, setSendToMaxunCompanyLocked] = useState(false);
   const [sendToMaxunTags, setSendToMaxunTags] = useState<string[]>([]);
   const [sendToMaxunError, setSendToMaxunError] = useState<string | null>(null);
   const [sendToMaxunSubmitting, setSendToMaxunSubmitting] = useState(false);
@@ -197,22 +202,52 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
 
   const openSendToMaxunModal = useCallback(() => {
     const savedName = state.savedAutomation?.name?.trim();
+    const savedCompany = (state.savedAutomation?.companyName || '').toString().trim();
     setSendToMaxunName(
       savedBackendAutomationId && savedName ? savedName : makeUniqueAutomationName()
     );
     setSendToMaxunScoutId(
       (state.savedAutomation?.scoutId || '').toString().trim().toUpperCase()
     );
-    setSendToMaxunCompany((state.savedAutomation?.companyName || '').toString());
+    setSendToMaxunCompany(savedCompany);
+    setSendToMaxunCompanyLocked(false);
     setPendingUpdate(null);
     setSendToMaxunError(null);
     setShowSendToMaxunModal(true);
+
+    // Instant pre-fill from the page URL (does not depend on backend).
+    // Then upgrade from /automations/lookup when the company is already in the registry.
+    void (async () => {
+      const pageUrl = await resolveExtensionPageUrl(state.previewUrl);
+      if (!pageUrl) return;
+
+      if (!savedCompany) {
+        const localHint = guessCompanyLabelFromUrl(pageUrl);
+        if (localHint) setSendToMaxunCompany(localHint);
+      }
+
+      try {
+        const lookup = await sendMessage(MSG.LOOKUP_AUTOMATION, { url: pageUrl });
+        const company = lookup?.result?.company;
+        if (company?.displayName) {
+          setSendToMaxunCompany(String(company.displayName));
+          setSendToMaxunCompanyLocked(Boolean(company.locked));
+        } else if (lookup?.result?.automation?.companyName) {
+          setSendToMaxunCompany(String(lookup.result.automation.companyName));
+          setSendToMaxunCompanyLocked(true);
+        }
+      } catch {
+        /* keep local hint — backend may be unreachable */
+      }
+    })();
   }, [
     savedBackendAutomationId,
     state.savedAutomation?.name,
     state.savedAutomation?.scoutId,
     state.savedAutomation?.companyName,
+    state.previewUrl,
     makeUniqueAutomationName,
+    sendMessage,
   ]);
 
   const finishSaveSuccess = (response: any) => {
@@ -905,14 +940,42 @@ export function ListExtractorTool({ state, sendMessage }: Props) {
                   </div>
                   <label style={styles.label}>Company name (required)</label>
                   <input
-                    style={{ ...styles.input, marginBottom: 8 }}
+                    style={{
+                      ...styles.input,
+                      marginBottom: sendToMaxunCompanyLocked ? 4 : 8,
+                      ...(sendToMaxunCompanyLocked
+                        ? { background: '#f3f4f6', color: '#374151' }
+                        : {}),
+                    }}
                     value={sendToMaxunCompany}
                     onChange={(e) => setSendToMaxunCompany(e.target.value)}
-                    disabled={sendToMaxunSubmitting}
+                    disabled={sendToMaxunSubmitting || sendToMaxunCompanyLocked}
                     maxLength={120}
                     placeholder="e.g. EY"
                     required
                   />
+                  {sendToMaxunCompanyLocked && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: 8,
+                        fontSize: 11,
+                        color: '#6b7280',
+                      }}
+                    >
+                      <span>Pre-filled from known company domain</span>
+                      <button
+                        type="button"
+                        onClick={() => setSendToMaxunCompanyLocked(false)}
+                        disabled={sendToMaxunSubmitting}
+                        style={styles.linkBtn}
+                      >
+                        Change
+                      </button>
+                    </div>
+                  )}
                   <ExtensionTagPicker
                     value={sendToMaxunTags}
                     onChange={setSendToMaxunTags}

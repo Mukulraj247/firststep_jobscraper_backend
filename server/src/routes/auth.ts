@@ -11,8 +11,9 @@ import {
   type ScoutXRole,
 } from "../services/scoutxAuth0";
 import { resolveOpsMongoUser } from "../services/scoutxOpsUser";
-import { fetchFirstStepPlanSnapshot } from "../services/firstStepSubscription";
+import { fetchFirstStepAccount, fetchFirstStepPlanSnapshot } from "../services/firstStepSubscription";
 import { upsertPortalUser } from "../services/portalUserService";
+import PortalUser from "../models/PortalUser";
 import { genAPIKey } from "../utils/api";
 import { google } from "googleapis";
 import { capture } from "../utils/analytics";
@@ -113,8 +114,6 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       aud: payload.aud,
     });
 
-    const firstStepPlan = await fetchFirstStepPlanSnapshot(auth0Sub);
-
     if (hasScoutXAdmin(roles)) {
       if (!email && !auth0Sub) {
         return res.status(400).json({
@@ -123,6 +122,9 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
           code: 'auth0.email_required',
         });
       }
+
+      const { plan: firstStepPlan, role: fetchedRole } = await fetchFirstStepAccount(auth0Sub, email);
+      const roleToStore = firstStepRole || fetchedRole;
 
       const opsUser = await resolveOpsMongoUser({ email, auth0Sub, payload });
       if (!opsUser) {
@@ -140,7 +142,7 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
             email,
             name,
             scoutxRoles: roles,
-            firstStepRole,
+            firstStepRole: roleToStore,
             firstStepPlan,
           });
         } catch (err) {
@@ -176,7 +178,7 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
           isActive: firstStepPlan.isActive,
           status: firstStepPlan.status,
         },
-        firstStepRole,
+        firstStepRole: roleToStore,
       });
     }
 
@@ -198,6 +200,20 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       ? roles
       : [...roles, SCOUTX_USER_ROLE];
 
+    // Fast login: reuse cached First Step plan; refresh in background.
+    // Entitlements/bootstrap will sync if still missing/stale.
+    let cachedPlan: Awaited<ReturnType<typeof fetchFirstStepPlanSnapshot>> | null = null;
+    try {
+      const existing = await PortalUser.findOne({ auth0Sub }).select('firstStepPlan').lean();
+      if (existing?.firstStepPlan) {
+        cachedPlan = existing.firstStepPlan as Awaited<
+          ReturnType<typeof fetchFirstStepPlanSnapshot>
+        >;
+      }
+    } catch {
+      /* ignore */
+    }
+
     try {
       await upsertPortalUser({
         auth0Sub,
@@ -205,7 +221,7 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
         name,
         scoutxRoles: portalRoles,
         firstStepRole,
-        firstStepPlan,
+        firstStepPlan: cachedPlan || undefined,
       });
     } catch (err: any) {
       console.error('Portal profile upsert failed:', err);
@@ -222,6 +238,17 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       });
     }
 
+    void fetchFirstStepAccount(auth0Sub, email)
+      .then(async ({ plan, role }) => {
+        const $set: Record<string, unknown> = { firstStepPlan: plan };
+        // Prefer Auth0 role from token; fill from First Step when missing.
+        if (role && !firstStepRole) $set.firstStepRole = role;
+        await PortalUser.updateOne({ auth0Sub }, { $set });
+      })
+      .catch((err) => {
+        console.warn('[auth0/exchange] background First Step sync failed:', err?.message || err);
+      });
+
     return res.json({
       id: auth0Sub,
       email,
@@ -230,12 +257,15 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       scoutxRoles: portalRoles,
       authSource: 'auth0',
       landing: '/user',
-      firstStepPlan: {
-        subscriptionType: firstStepPlan.subscriptionType,
-        isActive: firstStepPlan.isActive,
-        status: firstStepPlan.status,
-      },
+      firstStepPlan: cachedPlan
+        ? {
+            subscriptionType: cachedPlan.subscriptionType,
+            isActive: cachedPlan.isActive,
+            status: cachedPlan.status,
+          }
+        : null,
       firstStepRole,
+      firstStepPlanPending: !cachedPlan,
     });
   } catch (error: any) {
     console.error(`Auth0 exchange error: ${error?.message || error}`);

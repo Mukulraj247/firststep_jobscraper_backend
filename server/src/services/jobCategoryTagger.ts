@@ -8,6 +8,7 @@
  *   - one retry on abort; cooldown only after repeated failures (not one timeout)
  */
 import logger from '../logger';
+import { applySpecialtyTitleOverrides } from '../../../src/shared/specialtyTitleOverrides';
 
 export interface CategoryClassificationMeta {
   method: 'rules' | 'rules+ml';
@@ -164,12 +165,15 @@ interface TaggerResponseBody {
 function toResult(
   body: TaggerResponseBody,
   contentHash: string,
-  rulesVersionFallback: string | null
+  rulesVersionFallback: string | null,
+  title = ''
 ): JobCategoryTaggerResult {
+  const raw = Array.isArray(body.categories)
+    ? body.categories.map((c) => String(c || '').trim()).filter(Boolean).slice(0, maxBadges())
+    : [];
+  const overridden = applySpecialtyTitleOverrides(title, raw);
   return {
-    frozenCategories: Array.isArray(body.categories)
-      ? body.categories.map((c) => String(c || '').trim()).filter(Boolean).slice(0, maxBadges())
-      : [],
+    frozenCategories: overridden.categories,
     categoryClassification: {
       method: body.method === 'rules+ml' ? 'rules+ml' : 'rules',
       rulesVersion: body.rules_version || rulesVersionFallback || '',
@@ -207,7 +211,7 @@ async function classifyOnce(
     }
 
     noteTransportSuccess();
-    return toResult((await res.json()) as TaggerResponseBody, input.contentHash, rulesVersion);
+    return toResult((await res.json()) as TaggerResponseBody, input.contentHash, rulesVersion, title);
   } finally {
     clearTimeout(timer);
   }

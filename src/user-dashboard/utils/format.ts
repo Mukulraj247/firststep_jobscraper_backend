@@ -51,3 +51,24 @@ export function countActiveFilters(filters: Record<string, unknown>): number {
 export function pluralize(count: number, singular: string, plural?: string): string {
   return count === 1 ? singular : plural ?? `${singular}s`;
 }
+
+/** Host + path label for career-page chips (full URL kept for tooltip / href). */
+export function careerPageLabel(raw: string): string {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  try {
+    const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const u = new URL(withProto);
+    const path = u.pathname === '/' ? '' : u.pathname.replace(/\/$/, '');
+    const search = u.search && u.search.length <= 40 ? u.search : '';
+    return `${u.host}${path}${search}` || u.host;
+  } catch {
+    return trimmed.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+  }
+}
+
+export function careerPageHref(raw: string): string {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '#';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}

@@ -187,9 +187,25 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+/**
+ * Portal (Auth0 Bearer) must mount BEFORE any `router.use(requireSignIn*)`
+ * modules (e.g. adminClusters). Those apply cookie auth to every request that
+ * enters their router; without an ops `token` cookie, /api/portal/* was 401ing
+ * with plain "Unauthorized" before requirePortalUser could run.
+ */
+const portalRoute = require(path.join(__dirname, 'api', 'portal'));
+const portalRouter = portalRoute.default || portalRoute;
+if (typeof portalRouter === 'function') {
+  app.use('/api', portalRouter);
+} else {
+  console.error('Error: portal.ts does not export a valid router');
+}
+
 readdirSync(path.join(__dirname, 'api')).forEach((r) => {
   // Vitest/Jest files live next to routes but must never be require()'d at boot.
   if (/\.(test|spec)\.(ts|js|cjs|mjs)$/i.test(r) || r.endsWith('.d.ts')) return;
+  // Already mounted above.
+  if (/^portal\.(ts|js)$/i.test(r)) return;
   const route = require(path.join(__dirname, 'api', r));
   const router = route.default || route;
   if (typeof router === 'function') {

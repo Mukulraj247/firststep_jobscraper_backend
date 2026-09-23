@@ -1,17 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Button, Chip, Grid, InputAdornment, Stack, TextField, Typography } from '@mui/material';
 import AddCircleOutline from '@mui/icons-material/AddCircleOutline';
 import ArrowForward from '@mui/icons-material/ArrowForward';
 import SearchOffOutlined from '@mui/icons-material/SearchOffOutlined';
 import SearchOutlined from '@mui/icons-material/SearchOutlined';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ClusterCard } from '../components/ClusterCard';
 import { EmptyState } from '../components/EmptyState';
 import { GlassHero } from '../components/GlassHero';
 import { ClusterGridSkeleton } from '../components/Skeletons';
-import { useRequirePortalAuth } from '../hooks/usePortalAuth';
-import { listClusters, listSubscriptions } from '../mock/mockApi';
-import type { Cluster } from '../types';
+import { SlotLock, isSlotLocked } from '../components/SlotLock';
+import { useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
+import {
+  usePortalClusters,
+  usePortalEntitlements,
+  usePortalSubscriptions,
+} from '../hooks/portalQueries';
 import { pluralize } from '../utils/format';
 import {
   BODY_FONT,
@@ -34,26 +38,29 @@ const INDUSTRIES = [
 
 export function ClustersPage() {
   const { loading } = useRequirePortalAuth();
-  const [clusters, setClusters] = useState<Cluster[]>([]);
-  const [subscribedIds, setSubscribedIds] = useState<Set<string>>(new Set());
-  const [ready, setReady] = useState(false);
+  const location = useLocation();
+  const pickState = location.state as { pickSlots?: number; planLabel?: string } | null;
+  const enabled = !loading;
+  const { data: clusters = [], isLoading: clustersLoading } = usePortalClusters(enabled);
+  const { data: subs = [] } = usePortalSubscriptions(enabled);
+  const { data: entitlements = null } = usePortalEntitlements(enabled);
+  const ready = !clustersLoading;
+  const subscribedIds = useMemo(
+    () => new Set(subs.filter((s) => s.status !== 'pending').map((s) => s.clusterId)),
+    [subs]
+  );
   const [search, setSearch] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
-
-  useEffect(() => {
-    if (loading) return;
-    Promise.all([listClusters(), listSubscriptions()]).then(([list, subs]) => {
-      setClusters(list);
-      setSubscribedIds(new Set(subs.filter((s) => s.status !== 'pending').map((s) => s.clusterId)));
-      setReady(true);
-    });
-  }, [loading]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return clusters.filter((c) => {
-      const matchSearch =
-        !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
+      const companies = (c.includedCompanies || []).join(' ');
+      const careerPages = (c.careerPageUrls || []).join(' ');
+      const roles = (c.filter?.frozenCategories || []).join(' ');
+      const locations = (c.filter?.frozenStates || []).join(' ');
+      const hay = `${c.name} ${c.description} ${(c.filtersSummary || []).join(' ')} ${companies} ${careerPages} ${roles} ${locations}`.toLowerCase();
+      const matchSearch = !q || hay.includes(q);
       if (!industryFilter) return matchSearch;
       if (industryFilter === 'Custom') return matchSearch && c.kind === 'custom';
       if (industryFilter === 'H-1B') {
@@ -76,9 +83,24 @@ export function ClustersPage() {
 
   const totalJobs = clusters.reduce((sum, c) => sum + c.jobCountPreview, 0);
   const hasFilters = Boolean(search.trim() || industryFilter);
+  const planSlots =
+    entitlements?.subscribedSlots ??
+    entitlements?.includedSlots ??
+    entitlements?.maxActiveClusters ??
+    pickState?.pickSlots ??
+    0;
+  const used = entitlements?.activeClusterCount ?? entitlements?.includedActiveCount ?? 0;
+  const remaining =
+    entitlements?.availableSlots ?? Math.max(0, planSlots - used);
+  const showPickBanner =
+    Boolean(pickState?.pickSlots) ||
+    (Boolean(entitlements?.clusterServiceStarted) && remaining > 0);
+  const locked = isSlotLocked(entitlements);
+  const showLockBanner =
+    Boolean(entitlements?.clusterServiceStarted) && remaining === 0 && locked;
 
   return (
-    <Box>
+    <Box data-tour="scoutx-clusters-page">
       <GlassHero dense>
         <Stack
           direction={{ xs: 'column', md: 'row' }}
@@ -109,7 +131,7 @@ export function ClustersPage() {
                   fontFamily: BODY_FONT,
                 }}
               >
-                Real-Time Syndication Engine
+                Real-time syndication
               </Typography>
             </Box>
             <Typography
@@ -118,7 +140,7 @@ export function ClustersPage() {
                 fontFamily: DISPLAY_FONT,
                 fontWeight: 700,
                 letterSpacing: '-0.02em',
-                fontSize: { xs: '1.85rem', md: '2.5rem' },
+                fontSize: { xs: '1.5rem', md: '1.85rem' },
                 lineHeight: 1.15,
                 color: STITCH.primaryContainer,
               }}
@@ -149,16 +171,14 @@ export function ClustersPage() {
           container
           spacing={2}
           sx={{
-            mt: 3,
-            pt: 2.5,
+            mt: 1.5,
+            pt: 1.5,
             borderTop: `1px solid ${STITCH.outlineVariant}`,
           }}
         >
           {[
-            { value: `${totalJobs.toLocaleString()}+`, label: 'Active Openings Tracked' },
-            { value: '98.4%', label: 'Verified H-1B Sponsorship' },
-            { value: '14m', label: 'Median Refresh Window' },
-            { value: String(clusters.length), label: 'High-Velocity Clusters Ready' },
+            { value: `${totalJobs.toLocaleString()}+`, label: 'Active openings tracked' },
+            { value: String(clusters.length), label: 'Live curated clusters' },
           ].map((m) => (
             <Grid item xs={6} md={3} key={m.label}>
               <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.25rem', color: STITCH.primary }}>
@@ -170,11 +190,37 @@ export function ClustersPage() {
         </Grid>
       </GlassHero>
 
+      {showPickBanner && remaining > 0 && (
+        <Box
+          sx={{
+            mb: 2.5,
+            p: 2,
+            borderRadius: RADIUS.card,
+            bgcolor: tint(STITCH.secondaryBright, 0.12),
+            border: `1px solid ${tint(STITCH.secondaryBright, 0.35)}`,
+          }}
+        >
+          <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, color: STITCH.primary, fontSize: '1.05rem' }}>
+            Pick {remaining} cluster{remaining === 1 ? '' : 's'}
+          </Typography>
+          <Typography sx={{ mt: 0.5, fontSize: '0.875rem', color: STITCH.muted }}>
+            {pickState?.planLabel || entitlements?.subscriptionTypeDisplay || 'Your plan'} includes{' '}
+            {planSlots} free slot{planSlots === 1 ? '' : 's'}
+            {used > 0 ? ` · ${used} already active` : ''}. Extra clusters require payment —
+            unlock is not available in ScoutX yet.
+          </Typography>
+        </Box>
+      )}
+
+      {showLockBanner && (
+        <SlotLock entitlements={entitlements} compact sx={{ mb: 2.5 }} />
+      )}
+
       <Stack spacing={1.75} sx={{ mb: 2.5 }}>
         <TextField
           size="small"
           fullWidth
-          placeholder="Search clusters by company, role, tech stack, or location…"
+          placeholder="Search clusters by company, role, or location…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           sx={{
@@ -263,10 +309,14 @@ export function ClustersPage() {
           secondaryTo="/user/requests/new"
         />
       ) : (
-        <Grid container spacing={2}>
+        <Grid container spacing={1.75}>
           {filtered.map((c) => (
-            <Grid item xs={12} sm={6} lg={4} key={c.id}>
-              <ClusterCard cluster={c} subscribed={subscribedIds.has(c.id)} />
+            <Grid item xs={12} sm={6} lg={4} xl={3} key={c.id}>
+              <ClusterCard
+                cluster={c}
+                subscribed={subscribedIds.has(c.id)}
+                locked={locked}
+              />
             </Grid>
           ))}
         </Grid>

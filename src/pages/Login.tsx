@@ -22,6 +22,30 @@ import {
 
 const AUTH0_SCOPE = 'openid profile email offline_access';
 
+/** Auth0 silent (`prompt=none`) callbacks land as ?error=… — never treat as success code. */
+function auth0UrlError(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return new URLSearchParams(window.location.search).get('error');
+  } catch {
+    return null;
+  }
+}
+
+function clearAuth0UrlErrorParams(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('error') && !url.searchParams.has('error_description')) return;
+    url.searchParams.delete('error');
+    url.searchParams.delete('error_description');
+    url.searchParams.delete('state');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -44,6 +68,8 @@ function LoginAuth0Only() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authReadyOverride, setAuthReadyOverride] = useState(false);
   const exchangeOnceRef = useRef(false);
+  const silentPromptTriedRef = useRef(false);
+  const consentInteractiveTriedRef = useRef(false);
   const { notify } = useGlobalInfoStore();
   const { state, dispatch } = useContext(AuthContext);
   const { user: sessionUser } = state;
@@ -62,6 +88,46 @@ function LoginAuth0Only() {
       clearSkipAuth0AutoExchange();
     }
   }, []);
+
+  // prompt=none cannot show consent UI → Auth0 redirects with ?error=consent_required.
+  // Retry once WITHOUT prompt:none so the user can Accept (required on localhost).
+  useEffect(() => {
+    if (isLoading || sessionUser || isAuthenticated) return;
+    const err = auth0UrlError();
+    if (!err) return;
+    const needsInteractive =
+      err === 'consent_required' ||
+      err === 'login_required' ||
+      err === 'interaction_required';
+    if (!needsInteractive) {
+      setAuthError(`Auth0: ${err}`);
+      return;
+    }
+    if (consentInteractiveTriedRef.current) {
+      setAuthError(
+        'Auth0 needs a one-time consent for ScoutX API. Click Continue with Auth0 and Accept.'
+      );
+      return;
+    }
+    consentInteractiveTriedRef.current = true;
+    silentPromptTriedRef.current = true;
+    clearAuth0UrlErrorParams();
+    clearSkipAuth0AutoExchange();
+    void loginWithRedirect({
+      appState: { returnTo: '/login' },
+      authorizationParams: {
+        redirect_uri: auth0RedirectUri(),
+        audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+        scope: AUTH0_SCOPE,
+        // No prompt: 'none' — must show consent / login UI
+      },
+    }).catch(() => {
+      setAuthError(
+        'Auth0 needs a one-time consent for ScoutX API. Click Continue with Auth0 and Accept.'
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, sessionUser, isAuthenticated]);
 
   // Hydrate ScoutX session from localStorage before Auth0 auto-exchange.
   // Skip while an Auth0 callback is in flight — a stale local user would skip
@@ -129,6 +195,56 @@ function LoginAuth0Only() {
         navigate('/no-access');
         return;
       }
+      // First visit from First Step: Auth0 session exists on Auth0 domain but this
+      // origin has empty localStorage — try silent redirect once, then show button.
+      const errMsg = String(err?.error || err?.message || '').toLowerCase();
+      const errDesc = String(err?.error_description || '').toLowerCase();
+      const isConsent =
+        errMsg.includes('consent_required') || errDesc.includes('consent_required');
+      if (isConsent) {
+        exchangeOnceRef.current = false;
+        setExchanging(false);
+        try {
+          await loginWithRedirect({
+            appState: { returnTo: '/login' },
+            authorizationParams: {
+              redirect_uri: auth0RedirectUri(),
+              audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+              scope: AUTH0_SCOPE,
+            },
+          });
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+      const needsSilent =
+        !opts?.force &&
+        !silentPromptTriedRef.current &&
+        !isConsent &&
+        (errMsg.includes('login_required') ||
+          errMsg.includes('missing refresh') ||
+          errMsg.includes('timeout') ||
+          errMsg.includes('not authenticated'));
+      if (needsSilent) {
+        silentPromptTriedRef.current = true;
+        exchangeOnceRef.current = false;
+        setExchanging(false);
+        try {
+          await loginWithRedirect({
+            appState: { returnTo: '/login' },
+            authorizationParams: {
+              redirect_uri: auth0RedirectUri(),
+              audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+              scope: AUTH0_SCOPE,
+              prompt: 'none',
+            },
+          });
+          return;
+        } catch {
+          /* fall through to visible error */
+        }
+      }
       const msg =
         err?.response?.data?.error ||
         err?.message ||
@@ -141,10 +257,30 @@ function LoginAuth0Only() {
     }
   };
 
+  // When Auth0 is already authenticated (shared session from First Step), exchange.
+  // When not yet authenticated, attempt silent SSO once so new-tab users skip a click.
   useEffect(() => {
-    if (isLoading || !isAuthenticated || sessionUser) return;
+    if (isLoading || sessionUser) return;
     if (shouldSkipAuth0AutoExchange()) return;
-    void runExchange();
+    // Do not silent-retry when Auth0 already returned an authorize error.
+    if (auth0UrlError()) return;
+    if (isAuthenticated) {
+      void runExchange();
+      return;
+    }
+    if (silentPromptTriedRef.current || urlLooksLikeAuth0Callback()) return;
+    silentPromptTriedRef.current = true;
+    void loginWithRedirect({
+      appState: { returnTo: '/login' },
+      authorizationParams: {
+        redirect_uri: auth0RedirectUri(),
+        audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+        scope: AUTH0_SCOPE,
+        prompt: 'none',
+      },
+    }).catch(() => {
+      /* user will see Continue with Auth0 */
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, isAuthenticated, sessionUser]);
 

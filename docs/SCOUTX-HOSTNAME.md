@@ -17,7 +17,7 @@ PUBLIC_URL=https://scoutx-dev.firststepjob.com
 BACKEND_URL=https://scoutx-dev.firststepjob.com
 VITE_PUBLIC_URL=https://scoutx-dev.firststepjob.com
 VITE_BACKEND_URL=https://scoutx-dev.firststepjob.com
-VITE_AUTH0_CALLBACK_URL=https://scoutx-dev.firststepjob.com
+VITE_AUTH0_CALLBACK_URL=https://scoutx-dev.firststepjob.com/login
 ```
 
 Also add the HTTPS origins to the Auth0 SPA Allowed Callback / Logout / Web Origins (see `docs/SCOUTX-AUTH0-SETUP.md`).

@@ -40,6 +40,10 @@ export default defineConfig(() => {
         process.env.VITE_AUTH0_CALLBACK_URL || publicUrl
       ),
     },
+    resolve: {
+      // Prevent duplicate react-router-dom instances (useNavigate outside <Router>).
+      dedupe: ['react', 'react-dom', 'react-router-dom'],
+    },
     server: {
       host: parsedPublicUrl.hostname,
       port: serverPort,
@@ -63,7 +67,7 @@ export default defineConfig(() => {
       chunkSizeWarningLimit: 1024,
     },
     optimizeDeps: {
-      include: ['cron-parser'],
+      include: ['cron-parser', 'react-router-dom', 'react', 'react-dom'],
     },
     plugins: [react()],
   };

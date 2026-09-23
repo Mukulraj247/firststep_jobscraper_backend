@@ -17,21 +17,22 @@ export interface AlertSnackbarProps {
 };
 
 export const AlertSnackbar = ({ severity, message, isOpen }: AlertSnackbarProps) => {
-  const [open, setOpen] = React.useState(isOpen);
-
   const { closeNotify } = useGlobalInfoStore();
 
-  const handleClose = (event?: React.SyntheticEvent | Event, reason?: string) => {
+  const handleClose = (_event?: React.SyntheticEvent | Event, reason?: string) => {
     if (reason === 'clickaway') {
       return;
     }
-
     closeNotify();
-    setOpen(false);
   };
 
   return (
-    <Snackbar anchorOrigin={{ vertical: 'top', horizontal: 'center' }} open={open} autoHideDuration={5000} onClose={handleClose}>
+    <Snackbar
+      anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      open={isOpen}
+      autoHideDuration={4000}
+      onClose={handleClose}
+    >
       <Alert onClose={handleClose} severity={severity} sx={{ width: '100%', bgcolor: 'background.paper', border: "none" }} variant="outlined">
         {message}
       </Alert>

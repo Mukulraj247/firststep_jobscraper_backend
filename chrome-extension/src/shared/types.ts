@@ -223,7 +223,7 @@ export function buildEmptyState(): ExtensionState {
   return {
     activeTool: 'none',
     activeTabId: null,
-    backendUrl: 'http://174.138.34.210:8080/api',
+    backendUrl: 'https://scoutx-dev.firststepjob.com/api',
     apiKey: '',
     list: {
       phase: 'idle',

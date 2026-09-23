@@ -1,7 +1,17 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ButtonBase, Divider, IconButton, Paper, Stack, Tooltip, Typography, useTheme } from '@mui/material';
+import {
+  ButtonBase,
+  Collapse,
+  Divider,
+  IconButton,
+  Paper,
+  Stack,
+  Tooltip,
+  Typography,
+  useTheme,
+} from '@mui/material';
 import {
   AutoAwesome,
   Usb,
@@ -12,14 +22,24 @@ import {
   PrecisionManufacturing,
   ChevronLeft,
   ChevronRight,
+  ExpandLess,
+  ExpandMore,
   MailOutline,
   HubOutlined,
   InsightsOutlined,
   BadgeOutlined,
+  FactCheckOutlined,
+  CategoryOutlined,
+  PeopleOutline,
+  FlagOutlined,
 } from '@mui/icons-material';
 import { FIRSTSTEP, tint } from './ops/dashboardTokens';
 import { sidebarIconAriaHidden, sidebarNavButtonA11y } from './appShellBehavior';
-import { SIDEBAR_NAV_VALUES } from './sidebarNav';
+import {
+  SIDEBAR_MORE_VALUES,
+  SIDEBAR_NAV_VALUES,
+  SIDEBAR_PRIMARY_VALUES,
+} from './sidebarNav';
 
 export interface SidebarContentProps {
   value: string;
@@ -29,6 +49,8 @@ export interface SidebarContentProps {
   showCollapseToggle?: boolean;
   onNavigate?: () => void;
 }
+
+const MORE_OPEN_KEY = 'scoutx.opsNavMoreOpen';
 
 export const SidebarContent = ({
   value = 'scrapers',
@@ -41,6 +63,27 @@ export const SidebarContent = ({
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
+  const [moreOpen, setMoreOpen] = useState(() => {
+    try {
+      return localStorage.getItem(MORE_OPEN_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if ((SIDEBAR_MORE_VALUES as readonly string[]).includes(value)) {
+      setMoreOpen(true);
+    }
+  }, [value]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MORE_OPEN_KEY, moreOpen ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [moreOpen]);
 
   const itemMeta: Record<
     (typeof SIDEBAR_NAV_VALUES)[number],
@@ -52,6 +95,18 @@ export const SidebarContent = ({
       icon: <PrecisionManufacturing aria-hidden={sidebarIconAriaHidden} />,
     },
     jobs: { label: 'Job board', icon: <WorkOutline aria-hidden={sidebarIconAriaHidden} /> },
+    clusters: {
+      label: 'Clusters',
+      icon: <CategoryOutlined aria-hidden={sidebarIconAriaHidden} />,
+    },
+    'portal-users': {
+      label: 'Portal users',
+      icon: <PeopleOutline aria-hidden={sidebarIconAriaHidden} />,
+    },
+    reports: {
+      label: 'Reports',
+      icon: <FlagOutlined aria-hidden={sidebarIconAriaHidden} />,
+    },
     scrapers: { label: 'Scrapers', icon: <AutoAwesome aria-hidden={sidebarIconAriaHidden} /> },
     runs: { label: 'Runs', icon: <PlayArrow aria-hidden={sidebarIconAriaHidden} /> },
     failures: {
@@ -61,6 +116,10 @@ export const SidebarContent = ({
     enrichment: {
       label: 'Enrichment',
       icon: <InsightsOutlined aria-hidden={sidebarIconAriaHidden} />,
+    },
+    'category-qa': {
+      label: 'Category QA',
+      icon: <FactCheckOutlined aria-hidden={sidebarIconAriaHidden} />,
     },
     h1b: {
       label: 'H-1B',
@@ -77,11 +136,6 @@ export const SidebarContent = ({
     proxy: { label: 'Proxy', icon: <Usb aria-hidden={sidebarIconAriaHidden} /> },
   };
 
-  const items = SIDEBAR_NAV_VALUES.map((navValue) => ({
-    value: navValue,
-    ...itemMeta[navValue],
-  }));
-
   const activeColor =
     theme.palette.mode === 'light' ? theme.palette.primary.main : theme.palette.secondary.main;
 
@@ -91,6 +145,75 @@ export const SidebarContent = ({
     }
     handleChangeContent(next);
     onNavigate?.();
+  };
+
+  const renderNavButton = (navValue: (typeof SIDEBAR_NAV_VALUES)[number]) => {
+    const meta = itemMeta[navValue];
+    const selected = value === navValue;
+    const button = (
+      <ButtonBase
+        {...sidebarNavButtonA11y(meta.label)}
+        onClick={() => handleSelect(navValue)}
+        aria-current={selected ? 'page' : undefined}
+        sx={{
+          position: 'relative',
+          overflow: 'hidden',
+          width: '100%',
+          minHeight: 46,
+          px: collapsed ? 0 : 1.5,
+          borderRadius: '10px',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          gap: 1.5,
+          color: selected ? activeColor : 'text.primary',
+          fontWeight: selected ? 700 : 500,
+          fontSize: '0.9375rem',
+          fontFamily: 'inherit',
+          textAlign: 'left',
+          background: selected
+            ? `linear-gradient(135deg, ${tint(FIRSTSTEP.teal, 0.18)} 0%, ${tint(
+                FIRSTSTEP.teal,
+                0.06
+              )} 100%)`
+            : 'transparent',
+          transition: 'background-color 180ms ease, color 180ms ease',
+          '&::before': selected
+            ? {
+                content: '""',
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: 3,
+                bgcolor: FIRSTSTEP.teal,
+              }
+            : undefined,
+          '&:hover': {
+            backgroundColor: selected ? undefined : tint(FIRSTSTEP.navy, 0.05),
+          },
+          '&:focus-visible': {
+            outline: `2px solid ${FIRSTSTEP.teal}`,
+            outlineOffset: 2,
+          },
+          '& svg': { fontSize: 20, flexShrink: 0 },
+          '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+        }}
+      >
+        {meta.icon}
+        {!collapsed ? (
+          <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {meta.label}
+          </Box>
+        ) : null}
+      </ButtonBase>
+    );
+
+    return collapsed ? (
+      <Tooltip key={navValue} title={meta.label} placement="right" arrow>
+        {button}
+      </Tooltip>
+    ) : (
+      <React.Fragment key={navValue}>{button}</React.Fragment>
+    );
   };
 
   return (
@@ -154,80 +277,57 @@ export const SidebarContent = ({
               color: 'text.primary',
             }}
           >
-            Scout-X Scrapper
+            ScoutX
           </Typography>
         ) : null}
       </Stack>
 
       <Box sx={{ flexGrow: 1, overflowY: 'auto', overflowX: 'hidden', py: 1.25 }}>
         <Stack spacing={0.25} sx={{ px: 1.25 }}>
-          {items.map((item) => {
-            const selected = value === item.value;
-            const button = (
-              <ButtonBase
-                {...sidebarNavButtonA11y(item.label)}
-                onClick={() => handleSelect(item.value)}
-                aria-current={selected ? 'page' : undefined}
-                sx={{
-                  position: 'relative',
-                  overflow: 'hidden',
-                  width: '100%',
-                  minHeight: 46,
-                  px: collapsed ? 0 : 1.5,
-                  borderRadius: '10px',
-                  justifyContent: collapsed ? 'center' : 'flex-start',
-                  gap: 1.5,
-                  color: selected ? activeColor : 'text.primary',
-                  fontWeight: selected ? 700 : 500,
-                  fontSize: '0.9375rem',
-                  fontFamily: 'inherit',
-                  textAlign: 'left',
-                  background: selected
-                    ? `linear-gradient(135deg, ${tint(FIRSTSTEP.teal, 0.18)} 0%, ${tint(
-                        FIRSTSTEP.teal,
-                        0.06
-                      )} 100%)`
-                    : 'transparent',
-                  transition: 'background-color 180ms ease, color 180ms ease',
-                  '&::before': selected
-                    ? {
-                        content: '""',
-                        position: 'absolute',
-                        left: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: 3,
-                        bgcolor: FIRSTSTEP.teal,
-                      }
-                    : undefined,
-                  '&:hover': {
-                    backgroundColor: selected ? undefined : tint(FIRSTSTEP.navy, 0.05),
-                  },
-                  '&:focus-visible': {
-                    outline: `2px solid ${FIRSTSTEP.teal}`,
-                    outlineOffset: 2,
-                  },
-                  '& svg': { fontSize: 20, flexShrink: 0 },
-                  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
-                }}
-              >
-                {item.icon}
-                {!collapsed ? (
-                  <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {item.label}
-                  </Box>
-                ) : null}
-              </ButtonBase>
-            );
+          {SIDEBAR_PRIMARY_VALUES.map((navValue) => renderNavButton(navValue))}
 
-            return collapsed ? (
-              <Tooltip key={item.value} title={item.label} placement="right" arrow>
-                {button}
-              </Tooltip>
-            ) : (
-              <React.Fragment key={item.value}>{button}</React.Fragment>
-            );
-          })}
+          <Divider sx={{ my: 1 }} />
+
+          {!collapsed ? (
+            <ButtonBase
+              onClick={() => setMoreOpen((o) => !o)}
+              aria-expanded={moreOpen}
+              sx={{
+                width: '100%',
+                minHeight: 40,
+                px: 1.5,
+                borderRadius: '10px',
+                justifyContent: 'space-between',
+                color: 'text.secondary',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                fontFamily: 'inherit',
+                '&:hover': { backgroundColor: tint(FIRSTSTEP.navy, 0.05) },
+              }}
+            >
+              More
+              {moreOpen ? <ExpandLess sx={{ fontSize: 18 }} /> : <ExpandMore sx={{ fontSize: 18 }} />}
+            </ButtonBase>
+          ) : (
+            <Tooltip title={moreOpen ? 'Hide more' : 'Show more'} placement="right" arrow>
+              <IconButton
+                size="small"
+                onClick={() => setMoreOpen((o) => !o)}
+                aria-label="Toggle more navigation"
+                sx={{ alignSelf: 'center', color: 'text.secondary' }}
+              >
+                {moreOpen ? <ExpandLess /> : <ExpandMore />}
+              </IconButton>
+            </Tooltip>
+          )}
+
+          <Collapse in={moreOpen || collapsed} timeout={180}>
+            <Stack spacing={0.25}>
+              {SIDEBAR_MORE_VALUES.map((navValue) => renderNavButton(navValue))}
+            </Stack>
+          </Collapse>
         </Stack>
       </Box>
 

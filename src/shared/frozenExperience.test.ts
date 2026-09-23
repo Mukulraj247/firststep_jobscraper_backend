@@ -6,6 +6,7 @@ import {
   bandForYear,
   bandsForYears,
   bandsForYearRange,
+  bandsOverlappingYearRange,
   canonicalExperienceLevel,
   extractExperienceYears,
   normalizeExperienceLevelFilter,
@@ -58,6 +59,13 @@ describe('bandForYear / bandsForYears', () => {
     expect(bandsForYears([1, 3, 5])).toEqual(['5-7']);
     expect(bandsForYearRange(5, 7)).toEqual(['5-7']);
     expect(bandsForYearRange(5, 8)).toEqual(['7-10']);
+  });
+
+  it('returns all overlapping bands for a user YOE window', () => {
+    expect(bandsOverlappingYearRange(3, 10)).toEqual(['3-5', '5-7', '7-10']);
+    expect(bandsOverlappingYearRange(0, 3)).toEqual(['0-3']);
+    expect(bandsOverlappingYearRange(15, null)).toEqual(['15+']);
+    expect(bandsOverlappingYearRange(null, null)).toEqual([]);
   });
 });
 
@@ -283,6 +291,66 @@ describe('resolveFrozenExperience — badge vs rules', () => {
     expect(result.jobExperience).toBe(7);
     expect(['hc_structured', 'rules']).toContain(result.method);
   });
+
+  it('maps Engineer II / MTS / Consultant from title alone', () => {
+    expect(
+      resolveFrozenExperience({ title: 'Software Engineer II', description: '' })
+        .frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+    expect(
+      resolveFrozenExperience({
+        title: 'Software Engineering, MTS, Security and Network Defense',
+        description: '',
+      }).frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+    expect(
+      resolveFrozenExperience({ title: 'ML/AI Engineer - Consultant', description: '' })
+        .frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+  });
+
+  it('generic ladder: SVP → Leadership, Developer 3 → Senior, TPM → Mid-Senior, ELH → Entry', () => {
+    expect(
+      resolveFrozenExperience({
+        title: 'SVP, Communications, Moodys Analytics',
+        description: '12+ years of progressive communications experience required.',
+      }).frozenExperienceLevels
+    ).toEqual(['Leadership Level']);
+    expect(
+      resolveFrozenExperience({
+        title: 'SVP, Communications, Moodys Analytics',
+        description: '12+ years of progressive communications experience required.',
+      }).frozenExperienceYears
+    ).toEqual(['10-15']);
+
+    expect(
+      resolveFrozenExperience({ title: 'Software Developer 3', description: '' })
+        .frozenExperienceLevels
+    ).toEqual(['Senior Level']);
+
+    expect(
+      resolveFrozenExperience({
+        title: 'Technical Program Manager - Global Test Infrastructure',
+        description: '',
+      }).frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+
+    expect(
+      resolveFrozenExperience({
+        title: 'ELH Software Engineer / Agent Engineer - EDA - Austin 2027',
+        description: '',
+      }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+  });
+
+  it('still leaves bare Software Engineer empty without YOE (no Mid-Senior guess)', () => {
+    const r = resolveFrozenExperience({
+      title: 'Software Engineer, Networking (Edge)',
+      description: 'Build reliable edge networking systems for customers.',
+    });
+    expect(r.frozenExperienceLevels).toEqual([]);
+    expect(r.method).toBe('none');
+  });
 });
 
 describe('resolveFrozenExperience — intern / age false positives', () => {
@@ -317,6 +385,120 @@ describe('resolveFrozenExperience — intern / age false positives', () => {
     });
     expect(result.frozenExperienceLevels).toEqual(['Mid-Senior Level']);
     expect(result.frozenExperienceYears).toEqual(['5-7']);
+  });
+
+  it('badge "No Prior Experience Required" → Entry Level', () => {
+    const result = resolveFrozenExperience({
+      title: 'Retail Associate',
+      seniorityLevel: 'No Prior Experience Required',
+    });
+    expect(result.frozenExperienceLevels).toEqual(['Entry Level']);
+    expect(result.method).toBe('scrape_badge');
+  });
+
+  it('New Graduates / Co-op titles → Entry Level', () => {
+    expect(
+      resolveFrozenExperience({ title: 'Software Engineer - New Graduates' }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+    expect(
+      resolveFrozenExperience({ title: 'Software Engineer Co-op' }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+  });
+
+  it('DEVELOPER L1 → Entry Level', () => {
+    expect(resolveFrozenExperience({ title: 'DEVELOPER L1' }).frozenExperienceLevels).toEqual([
+      'Entry Level',
+    ]);
+  });
+
+  it('Entry Level / New College Graduate titles → Entry', () => {
+    expect(
+      resolveFrozenExperience({ title: 'Entry Level Back-End Developer-Tucson-AZ' })
+        .frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+    expect(
+      resolveFrozenExperience({
+        title: 'Applied Systems Engineering Rotation Engineer - New College Graduate 2026',
+      }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+  });
+
+  it('Account Manager IC → Mid-Senior (not empty, not People Manager)', () => {
+    expect(
+      resolveFrozenExperience({ title: 'High Value Account Manager' }).frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+  });
+
+  it('Product Manager IC → Mid-Senior', () => {
+    expect(
+      resolveFrozenExperience({ title: 'Product Manager, Clinical Trials' }).frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+  });
+
+  it('exec title wins over demoting Senior badge', () => {
+    expect(
+      resolveFrozenExperience({
+        title: 'Vice President, Quality and Commissioning',
+        seniorityLevel: 'Senior Level',
+      }).frozenExperienceLevels
+    ).toEqual(['Leadership Level']);
+  });
+
+  it('Senior title wins over Entry badge', () => {
+    expect(
+      resolveFrozenExperience({
+        title: 'Senior Mission Operations Engineer',
+        seniorityLevel: 'Entry Level',
+      }).frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+  });
+
+  it('Case Manager / Intermediate / Graduate year / L2 support', () => {
+    expect(
+      resolveFrozenExperience({ title: 'RN Case Manager Experienced (IKC-CA)' })
+        .frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+    expect(
+      resolveFrozenExperience({ title: 'Intermediate Backend Engineer, AMER' })
+        .frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+    expect(
+      resolveFrozenExperience({
+        title: '2027 Graduate – Software Engineer; Data Scientist',
+      }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+    expect(
+      resolveFrozenExperience({ title: 'Technical Support Engineer - L2' })
+        .frozenExperienceLevels
+    ).toEqual(['Mid-Senior Level']);
+  });
+
+  it('Graduate Assistant / Engineer I Graduate → Entry', () => {
+    expect(
+      resolveFrozenExperience({
+        title: 'Academic Affairs & Global Nursing Graduate Assistant',
+      }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+    expect(
+      resolveFrozenExperience({
+        title: 'Mechanical / Hardware Engineer I Graduate',
+      }).frozenExperienceLevels
+    ).toEqual(['Entry Level']);
+  });
+
+  it('Senior Warehouse Associate is not Entry (senior clears associate junior)', () => {
+    expect(
+      resolveFrozenExperience({ title: 'Senior Warehouse Associate' }).frozenExperienceLevels
+    ).not.toEqual(['Entry Level']);
+    expect(
+      resolveFrozenExperience({
+        title: 'Senior Warehouse Associate Days',
+        description: '2+ years of warehouse experience required.',
+      }).frozenExperienceLevels
+    ).not.toEqual(['Entry Level']);
+    expect(
+      resolveFrozenExperience({ title: 'Senior Associate, Ad Ops Platform' }).frozenExperienceLevels
+    ).not.toEqual(['Entry Level']);
   });
 });
 

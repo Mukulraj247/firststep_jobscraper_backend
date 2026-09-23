@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Avatar, Box, Button, Chip, Divider, Grid, Stack, Switch, Typography } from '@mui/material';
 import BookmarkBorder from '@mui/icons-material/BookmarkBorder';
 import EditNoteOutlined from '@mui/icons-material/EditNoteOutlined';
@@ -8,8 +8,8 @@ import { Link } from 'react-router-dom';
 import { DemoPersonaSwitcher } from '../components/DemoPersonaSwitcher';
 import { PageHeader } from '../components/PageHeader';
 import { PanelSkeleton } from '../components/Skeletons';
-import { usePortalAuth, useRequirePortalAuth } from '../hooks/usePortalAuth';
-import { listRequests, listSaved, listSubscriptions } from '../mock/mockApi';
+import { usePortalAuth, useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
+import { usePortalBootstrap } from '../hooks/portalQueries';
 import type { PersonaKey } from '../mock/mockPersonas';
 import { initialsOf } from '../utils/format';
 import { FIRSTSTEP, RADIUS, ghostButtonSx, panelSx, tint } from '../tokens';
@@ -39,18 +39,14 @@ function SettingsCard({ title, description, children }: { title: string; descrip
 export function ProfilePage() {
   const { user, loading, logout, switchDemoPersona, authMode } = usePortalAuth();
   useRequirePortalAuth();
-  const [counts, setCounts] = useState<Counts | null>(null);
-
-  useEffect(() => {
-    if (loading || !user) return;
-    Promise.all([listSubscriptions(), listSaved(), listRequests()]).then(([subs, saved, reqs]) =>
-      setCounts({
-        subs: subs.filter((s) => s.status === 'active').length,
-        saved: saved.length,
-        requests: reqs.filter((r) => r.status !== 'published').length,
-      }),
-    );
-  }, [loading, user]);
+  const { data: bootstrap } = usePortalBootstrap(Boolean(user) && !loading);
+  const counts: Counts | null = bootstrap
+    ? {
+        subs: bootstrap.subscriptions.filter((s) => s.status === 'active').length,
+        saved: bootstrap.savedCount,
+        requests: bootstrap.openRequestCount,
+      }
+    : null;
 
   if (loading || !user) return null;
 
@@ -67,7 +63,7 @@ export function ProfilePage() {
       <PageHeader
         eyebrow="Account"
         title="Profile & settings"
-        subtitle="Manage how ScoutText reaches you and review what's active on your account."
+        subtitle="Manage how ScoutX reaches you and review what's active on your account."
       />
 
       <Grid container spacing={{ xs: 2, md: 3 }}>
@@ -96,12 +92,12 @@ export function ProfilePage() {
                   </Typography>
                   {(user.firstStepPlan?.subscriptionType || user.firstStepRole) && (
                     <Typography variant="caption" sx={{ display: 'block', color: FIRSTSTEP.textMuted, mt: 0.5 }}>
-                      First Step: {user.firstStepPlan?.subscriptionType || '—'}
-                      {user.firstStepRole ? ` · role ${user.firstStepRole}` : ''}
+                      Plan: {user.firstStepPlan?.subscriptionType || '—'}
+                      {user.firstStepRole ? ` · ${user.firstStepRole}` : ''}
                     </Typography>
                   )}
                   <Chip
-                    label="ScoutText member"
+                    label="Scout member"
                     size="small"
                     sx={{
                       mt: 1,
@@ -205,7 +201,7 @@ export function ProfilePage() {
               )}
             </SettingsCard>
 
-            <SettingsCard title="Session" description="This prototype uses a mock session stored in your browser.">
+            <SettingsCard title="Session" description="Signed in with Auth0. Your plan controls cluster slot entitlements.">
               <Button
                 variant="outlined"
                 onClick={logout}

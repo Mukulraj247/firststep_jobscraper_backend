@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Button,
@@ -8,6 +8,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Grid,
   MenuItem,
   Stack,
   TextField,
@@ -22,17 +23,24 @@ import { EmptyState } from '../components/EmptyState';
 import { GlassHero } from '../components/GlassHero';
 import { SectionHeading } from '../components/SectionHeading';
 import { PanelSkeleton } from '../components/Skeletons';
-import { useRequirePortalAuth } from '../hooks/usePortalAuth';
+import { SlotLock } from '../components/SlotLock';
+import { useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
 import {
   cancelSubscription,
   changeFrequency,
-  listSubscriptions,
   pauseSubscription,
   resumeSubscription,
-} from '../mock/mockApi';
-import { MOCK_CLUSTERS } from '../mock/mockClusters';
-import type { ClusterSubscription, DeliveryFrequency } from '../types';
+  startClusterService,
+} from '../api/portalApi';
+import {
+  invalidatePortalShell,
+  usePortalClusters,
+  usePortalEntitlements,
+  usePortalSubscriptions,
+} from '../hooks/portalQueries';
+import type { DeliveryFrequency, ClusterSubscription } from '../types';
 import { FREQUENCY_LABEL } from '../types';
+import { humanLabel } from '../utils/displayLabels';
 import { timeUntil } from '../utils/format';
 import {
   BODY_FONT,
@@ -45,47 +53,62 @@ import {
   primaryButtonSx,
   tint,
 } from '../tokens';
-
-function clusterFor(clusterId: string) {
-  return MOCK_CLUSTERS.find((c) => c.id === clusterId);
-}
-
-function planName(sub: ClusterSubscription) {
-  return clusterFor(sub.clusterId)?.plans.find((p) => p.id === sub.planId)?.name;
-}
+import { useGlobalInfoStore } from '../../context/globalInfo';
+import BoltOutlined from '@mui/icons-material/BoltOutlined';
+import { useQueryClient } from '@tanstack/react-query';
 
 export function SubscriptionsPage() {
   const { loading } = useRequirePortalAuth();
-  const [subs, setSubs] = useState<ClusterSubscription[]>([]);
-  const [ready, setReady] = useState(false);
+  const { notify } = useGlobalInfoStore();
+  const queryClient = useQueryClient();
+  const enabled = !loading;
+  const { data: subs = [], isLoading: subsLoading, refetch: refetchSubs } = usePortalSubscriptions(enabled);
+  const { data: clusters = [] } = usePortalClusters(enabled);
+  const { data: entitlements = null, refetch: refetchEnts } = usePortalEntitlements(enabled);
+  const ready = !subsLoading;
   const [cancelId, setCancelId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [slotFull, setSlotFull] = useState(false);
 
-  const load = () =>
-    listSubscriptions().then((list) => {
-      setSubs(list);
-      setReady(true);
-    });
+  const clusterFor = (clusterId: string) => clusters.find((c) => c.id === clusterId);
 
-  useEffect(() => {
-    if (loading) return;
-    load();
-  }, [loading]);
+  const load = async () => {
+    await invalidatePortalShell(queryClient);
+    await Promise.all([refetchSubs(), refetchEnts()]);
+  };
 
   if (loading) return null;
 
   const active = subs.filter((s) => s.status === 'active');
   const inactive = subs.filter((s) => s.status !== 'active');
-  const monthlyTotal = active.reduce((sum, s) => {
-    const plan = clusterFor(s.clusterId)?.plans.find((p) => p.id === s.planId);
-    return sum + (plan?.priceMonthly ?? 0);
-  }, 0);
+  const needsStart =
+    Boolean(entitlements) &&
+    (entitlements?.maxActiveClusters ?? 0) > 0 &&
+    !entitlements?.clusterServiceStarted;
+  const planLabel =
+    entitlements?.subscriptionTypeDisplay || entitlements?.subscriptionType || 'plan';
+
+  const handleStart = async () => {
+    setStarting(true);
+    try {
+      await startClusterService();
+      await load();
+      notify('success', 'Cluster monitoring started');
+    } catch (err: any) {
+      notify('error', err?.response?.data?.error || err?.message || 'Could not start');
+    } finally {
+      setStarting(false);
+    }
+  };
 
   const renderCard = (sub: ClusterSubscription) => {
     const paused = sub.status !== 'active';
-    const slug = clusterFor(sub.clusterId)?.slug ?? '';
+    const matched = clusterFor(sub.clusterId);
+    const slug = matched?.slug ?? '';
+    const name = humanLabel(sub.clusterName || matched?.name, 'Custom cluster');
 
     return (
-      <Box key={sub.id} sx={{ ...panelSx, p: { xs: 2, md: 2.5 }, opacity: paused ? 0.82 : 1 }}>
+      <Box key={sub.id} sx={{ ...panelSx, p: { xs: 2, md: 2.25 }, height: '100%', opacity: paused ? 0.82 : 1 }}>
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           justifyContent="space-between"
@@ -106,7 +129,7 @@ export function SubscriptionsPage() {
                 }}
               />
               <Typography sx={{ fontWeight: 700, fontSize: '1.05rem', color: FIRSTSTEP.navyDeep }}>
-                {sub.clusterName}
+                {name}
               </Typography>
             </Stack>
             <Stack direction="row" flexWrap="wrap" gap={0.75} sx={{ mt: 1 }}>
@@ -122,14 +145,18 @@ export function SubscriptionsPage() {
                   color: paused ? '#8a5a00' : FIRSTSTEP.success,
                 }}
               />
-              {planName(sub) && (
-                <Chip
-                  label={`${planName(sub)} plan`}
-                  size="small"
-                  variant="outlined"
-                  sx={{ height: 22, borderRadius: RADIUS.pill, fontSize: '0.68rem', color: FIRSTSTEP.textMuted, borderColor: FIRSTSTEP.border }}
-                />
-              )}
+              <Chip
+                label={
+                  sub.source === 'admin_assigned' ||
+                  sub.source === 'request_fulfillment' ||
+                  clusterFor(sub.clusterId)?.kind === 'custom'
+                    ? 'Purchased / assigned'
+                    : 'Plan included'
+                }
+                size="small"
+                variant="outlined"
+                sx={{ height: 22, borderRadius: RADIUS.pill, fontSize: '0.68rem', color: FIRSTSTEP.textMuted, borderColor: FIRSTSTEP.border }}
+              />
               {!paused && (
                 <Chip
                   label={`Next refresh ${timeUntil(sub.nextRefreshAt)}`}
@@ -172,7 +199,7 @@ export function SubscriptionsPage() {
               '& .MuiOutlinedInput-root': { borderRadius: RADIUS.control, bgcolor: FIRSTSTEP.white },
             }}
           >
-            {(['1h', '2h', '24h'] as DeliveryFrequency[]).map((f) => (
+            {(['1h', '12h', '24h'] as DeliveryFrequency[]).map((f) => (
               <MenuItem key={f} value={f}>
                 Every {FREQUENCY_LABEL[f]}
               </MenuItem>
@@ -187,8 +214,20 @@ export function SubscriptionsPage() {
                 paused ? <PlayCircleOutline sx={{ fontSize: 17 }} /> : <PauseCircleOutline sx={{ fontSize: 17 }} />
               }
               onClick={async () => {
-                await (paused ? resumeSubscription(sub.id) : pauseSubscription(sub.id));
-                load();
+                try {
+                  await (paused ? resumeSubscription(sub.id) : pauseSubscription(sub.id));
+                  setSlotFull(false);
+                  load();
+                } catch (err: any) {
+                  const code = err?.response?.data?.code;
+                  if (code === 'portal.slot_full') {
+                    setSlotFull(true);
+                    notify('error', err?.response?.data?.error || 'All free cluster slots are in use');
+                    await load();
+                    return;
+                  }
+                  notify('error', err?.response?.data?.error || err?.message || 'Action failed');
+                }
               }}
               sx={ghostButtonSx}
             >
@@ -250,7 +289,7 @@ export function SubscriptionsPage() {
                   fontFamily: BODY_FONT,
                 }}
               >
-                Billing & delivery
+                Delivery & entitlements
               </Typography>
             </Box>
             <Typography
@@ -259,7 +298,7 @@ export function SubscriptionsPage() {
                 fontFamily: DISPLAY_FONT,
                 fontWeight: 700,
                 letterSpacing: '-0.03em',
-                fontSize: { xs: '1.6rem', md: '2rem' },
+                fontSize: { xs: '1.45rem', md: '1.7rem' },
                 lineHeight: 1.15,
                 color: STITCH.primaryContainer,
               }}
@@ -301,13 +340,10 @@ export function SubscriptionsPage() {
                 }}
               >
                 <Typography sx={{ fontSize: '0.68rem', color: STITCH.muted, fontWeight: 600 }}>
-                  Monthly total
+                  Billing
                 </Typography>
-                <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.35rem' }}>
-                  ${monthlyTotal}
-                  <Box component="span" sx={{ fontSize: '0.75rem', fontWeight: 500, opacity: 0.8 }}>
-                    /mo
-                  </Box>
+                <Typography sx={{ fontFamily: DISPLAY_FONT, fontWeight: 700, fontSize: '1.15rem' }}>
+                  Included
                 </Typography>
               </Box>
             </Stack>
@@ -315,11 +351,23 @@ export function SubscriptionsPage() {
         </Stack>
       </GlassHero>
 
+      {slotFull && (
+        <SlotLock entitlements={entitlements} sx={{ mb: 2.5 }} />
+      )}
+
       {!ready ? (
         <Stack spacing={2}>
           <PanelSkeleton height={168} />
           <PanelSkeleton height={168} />
         </Stack>
+      ) : needsStart ? (
+        <EmptyState
+          icon={BoltOutlined}
+          title="Start your cluster subscription"
+          description={`Your ${planLabel} plan includes ${entitlements?.maxActiveClusters ?? 0} free slot${(entitlements?.maxActiveClusters ?? 0) === 1 ? '' : 's'}. Start monitoring, then pick included clusters. Extra clusters are assigned by ops after purchase.`}
+          actionLabel={starting ? 'Starting…' : 'Start subscription'}
+          onAction={starting ? undefined : handleStart}
+        />
       ) : subs.length === 0 ? (
         <EmptyState
           icon={SubscriptionsOutlined}
@@ -335,13 +383,17 @@ export function SubscriptionsPage() {
           {active.length > 0 && (
             <Box>
               <SectionHeading title="Active" count={active.length} />
-              <Stack spacing={1.5}>{active.map(renderCard)}</Stack>
+              <Grid container spacing={1.5}>{active.map((sub) => (
+                <Grid item xs={12} md={6} key={sub.id}>{renderCard(sub)}</Grid>
+              ))}</Grid>
             </Box>
           )}
           {inactive.length > 0 && (
             <Box>
               <SectionHeading title="Paused" count={inactive.length} />
-              <Stack spacing={1.5}>{inactive.map(renderCard)}</Stack>
+              <Grid container spacing={1.5}>{inactive.map((sub) => (
+                <Grid item xs={12} md={6} key={sub.id}>{renderCard(sub)}</Grid>
+              ))}</Grid>
             </Box>
           )}
         </Stack>

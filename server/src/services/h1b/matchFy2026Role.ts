@@ -14,6 +14,7 @@ export type Fy2026ResolveInput = {
   remoteType?: string;
   visaSponsorship?: string;
   jobDescription?: string;
+  locationIsUs?: boolean;
 };
 
 export type Fy2026ResolveResult = {
@@ -87,7 +88,10 @@ export function matchFy2026Role(
 export async function resolveFy2026JobMatch(
   input: Fy2026ResolveInput
 ): Promise<Fy2026ResolveResult> {
-  if (!isUsJobLocation(input.location || '', input.remoteType)) {
+  if (input.locationIsUs === false) {
+    return { ...EMPTY };
+  }
+  if (input.locationIsUs !== true && !isUsJobLocation(input.location || '', input.remoteType)) {
     return { ...EMPTY };
   }
 

@@ -34,10 +34,22 @@ band with no year evidence — empty is correct.
 
 ## Level model
 
-Title family is evaluated first:
+Title family is evaluated first (generic production scorer — `scoreTitle`):
 
-1. Exec tokens (`director`, `VP`, `chief`, `president`, `partner`, `head of`) → `Leadership Level`
-2. Manager tokens (excluding IC compounds like `product manager`) → `People Manager Level`, demoted to `Mid-Senior Level` when max YOE ≤ 2
+```
+1. Exec (SVP/EVP/VP/chief/director/…)     → Leadership Level
+2. People manager (excl. IC *manager)     → People Manager Level
+3. Intern / ELH / early-career / junior   → Entry Level bias
+4. senior / staff / principal             → Mid-Senior or Senior by score
+5. Roman II–IV + numeric Developer N      → Entry(1) / Mid(2) / Senior(3+)
+6. TPM / technical|program|project mgr    → Mid-Senior (IC points, not people mgr)
+7. MTS / consultant / architect           → Mid-Senior+
+```
+
+Bare IC titles (`Software Engineer`) with **no YOE** still leave level empty — we do **not** invent Mid-Senior.
+
+1. Exec tokens (`director`, `VP`, `SVP`, `EVP`, `chief`, `president`, `partner`, `head of`) → `Leadership Level`
+2. Manager tokens (excluding IC compounds like `product manager` / `technical program manager`) → `People Manager Level`, demoted to `Mid-Senior Level` when max YOE ≤ 2
 3. Otherwise IC ladder: title points + years points → Entry (0–3) / Mid-Senior (4–8) / Senior (9+)
 4. Title-only (no YOE): junior → Entry; senior/lead/staff/architect → Mid-Senior; principal → Senior
 

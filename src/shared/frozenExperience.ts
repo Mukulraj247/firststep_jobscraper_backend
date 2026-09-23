@@ -34,7 +34,7 @@ export const MAX_FROZEN_EXPERIENCE_YEAR_FILTERS = 6;
 export const MAX_FROZEN_EXPERIENCE_YEARS_PER_JOB = 1;
 
 /** Rules version — bump when scoring / aliases change (backfill key). */
-export const EXPERIENCE_RULES_VERSION = 'exp-2026-09-6';
+export const EXPERIENCE_RULES_VERSION = 'exp-2026-09-15';
 
 export type ExperienceResolveMethod =
   | 'hc_structured'
@@ -84,6 +84,13 @@ const LEVEL_ALIASES: Record<string, FrozenExperienceLevel> = {
   entry: 'Entry Level',
   junior: 'Entry Level',
   'new grad': 'Entry Level',
+  'new graduate': 'Entry Level',
+  'new graduates': 'Entry Level',
+  'co op': 'Entry Level',
+  coop: 'Entry Level',
+  'no prior experience required': 'Entry Level',
+  'no experience required': 'Entry Level',
+  'no experience needed': 'Entry Level',
   associate: 'Entry Level',
   'mid level': 'Mid-Senior Level',
   mid: 'Mid-Senior Level',
@@ -104,6 +111,8 @@ const LEVEL_ALIASES: Record<string, FrozenExperienceLevel> = {
   'leadership level': 'Leadership Level',
   leadership: 'Leadership Level',
   vp: 'Leadership Level',
+  svp: 'Leadership Level',
+  evp: 'Leadership Level',
   'vice president': 'Leadership Level',
   executive: 'Leadership Level',
   'c suite': 'Leadership Level',
@@ -209,6 +218,40 @@ export function bandsForYearRange(lo: number, hi: number): FrozenExperienceYearB
   return band ? [band] : [];
 }
 
+/** Half-open band intervals matching `bandForYear`. */
+const YEAR_BAND_INTERVALS: Array<{ band: FrozenExperienceYearBand; lo: number; hi: number }> = [
+  { band: '0-3', lo: 0, hi: 3 },
+  { band: '3-5', lo: 3, hi: 5 },
+  { band: '5-7', lo: 5, hi: 7 },
+  { band: '7-10', lo: 7, hi: 10 },
+  { band: '10-15', lo: 10, hi: 15 },
+  { band: '15+', lo: 15, hi: 31 },
+];
+
+/**
+ * All year bands that overlap a user-requested YOE window.
+ * Used when mapping portal cluster requests → cluster filters.
+ * Missing min defaults to 0; missing max defaults to 30.
+ */
+export function bandsOverlappingYearRange(
+  min?: number | null,
+  max?: number | null
+): FrozenExperienceYearBand[] {
+  if (min == null && max == null) return [];
+  const loRaw = min == null ? 0 : Number(min);
+  const hiRaw = max == null ? 30 : Number(max);
+  if (!Number.isFinite(loRaw) && !Number.isFinite(hiRaw)) return [];
+  const lo = Math.max(0, Number.isFinite(loRaw) ? loRaw : 0);
+  const hi = Math.min(30, Number.isFinite(hiRaw) ? hiRaw : 30);
+  const low = Math.min(lo, hi);
+  const high = Math.max(lo, hi);
+  // Treat a single-point request (min===max) as including that band.
+  const exclusiveHigh = low === high ? high + 0.01 : high;
+  return YEAR_BAND_INTERVALS.filter(({ lo: a, hi: b }) => a < exclusiveHigh && b > low).map(
+    (x) => x.band
+  );
+}
+
 export type ExtractedYears = {
   /** Distinct year numbers found (for banding + max). */
   years: number[];
@@ -233,6 +276,10 @@ function hasExperienceContext(window: string): boolean {
       window
     )
   ) {
+    return true;
+  }
+  // "12+ years of progressive communications experience" / domain YOE
+  if (/\byears?\s*\+?\s+of\s+(?:progressive\s+)?[\w\s/&-]{0,40}\bexperience\b/i.test(window)) {
     return true;
   }
   // Common short form: "5+ years in data engineering" / "5 years as an ISSO"
@@ -288,9 +335,13 @@ export function extractExperienceYears(text: string): ExtractedYears {
     // excellence"). Only accept ≥15 when the match is explicitly "years of experience".
     if (v >= 15 && matchIndex != null && matchLen != null) {
       const around = raw
-        .slice(matchIndex, Math.min(raw.length, matchIndex + matchLen + 28))
+        .slice(matchIndex, Math.min(raw.length, matchIndex + matchLen + 72))
         .toLowerCase();
-      if (!/\byears?\s+of\s+experience\b/.test(around) && !/\b\d+\s*\+?\s*yoe\b/.test(around)) {
+      if (
+        !/\byears?\s+of\s+experience\b/.test(around) &&
+        !/\byears?\s+of\s+[\w\s/&-]{0,40}\bexperience\b/.test(around) &&
+        !/\b\d+\s*\+?\s*yoe\b/.test(around)
+      ) {
         return;
       }
     }
@@ -319,8 +370,9 @@ export function extractExperienceYears(text: string): ExtractedYears {
 
   const considerMatch = (matchIndex: number, matchLen: number, apply: () => void) => {
     if (isNonYoeYearPhrase(raw, matchIndex, matchLen)) return;
-    const start = Math.max(0, matchIndex - 40);
-    const end = Math.min(raw.length, matchIndex + matchLen + 40);
+    // Wide window: "12+ years of progressive communications experience"
+    const start = Math.max(0, matchIndex - 48);
+    const end = Math.min(raw.length, matchIndex + matchLen + 72);
     const window = raw.slice(start, end);
     if (!hasExperienceContext(window)) return;
     apply();
@@ -390,6 +442,20 @@ type TitleSignals = {
   isIntern: boolean;
 };
 
+/**
+ * Title → seniority score (generic production rules).
+ *
+ * Flow (flags set by family; IC points accumulate for ladder scoring):
+ *   1. Exec / leadership tokens (SVP, EVP, VP, chief, director, …)
+ *   2. People-manager tokens (excluding IC *manager compounds + TPM)
+ *   3. Intern / early-career / junior family → Entry bias
+ *   4. Explicit senior ladder words (senior, staff, principal, …)
+ *   5. Roman (II/III/IV) + numeric ladders (Engineer 2, Developer 3)
+ *   6. IC program roles (TPM / technical program manager) → Mid-Senior points
+ *   7. Consultant / MTS / architect specialist nouns
+ *
+ * Bare "Software Engineer" with no YOE still scores 0 → leave empty (no Mid-Senior guess).
+ */
 function scoreTitle(title: string): TitleSignals {
   const t = String(title || '').toLowerCase();
   const signals: string[] = [];
@@ -408,48 +474,137 @@ function scoreTitle(title: string): TitleSignals {
     return false;
   };
 
-  // Exec family — checked before points matter.
+  // --- 1. Exec / leadership ---
   if (
-    /\b(chief|cto|ceo|cfo|coo|ciso|cpo)\b/.test(t) ||
+    /\bchief\s+[a-z]+\s+officer\b/.test(t) ||
+    /\b(cto|ceo|cfo|coo|ciso|cpo|cbo)\b/.test(t) ||
+    /\b(svp|evp)\b/.test(t) ||
     /\bvice\s+president\b|\bvp\b/.test(t) ||
     /\bdirector\b/.test(t) ||
     /\bpresident\b/.test(t) ||
-    /\bpartner\b/.test(t) ||
     /\bhead\s+of\b/.test(t)
   ) {
     isExec = true;
     signals.push('title:exec');
+    if (/\b(svp|evp)\b/.test(t)) signals.push('title:svp_evp');
   }
 
-  // Manager family (not "product manager" as exec — still people-manager-ish for EM;
-  // "product manager" / "program manager" / "project manager" are IC-ish but plan says
-  // manager → People Manager. Keep "manager" as manager family except when clearly IC title
-  // patterns like "product manager" without engineering manager — plan: manager → People Manager.
+  // --- 2. People manager (exclude IC compounds including TPM) ---
   if (/\b(engineering\s+manager|people\s+manager|hiring\s+manager)\b/.test(t) || /\bmanager\b/.test(t)) {
-    // Exclude non-people "manager" compound roles that are typically IC.
     const icManager =
-      /\b(product|project|program|account|office|case|property|stage|brand)\s+manager\b/.test(t) &&
-      !/\bengineering\s+manager\b/.test(t);
+      /\b(product|project|program|technical\s+program|account|office|case|property|stage|brand)\s+manager\b/.test(
+        t
+      ) && !/\bengineering\s+manager\b/.test(t);
     if (!icManager) {
       isManager = true;
       signals.push('title:manager');
+    } else if (/\b(account|product|case)\s+manager\b/.test(t)) {
+      // Account / Product / Case Manager are IC roles — Mid-Senior when no YOE.
+      hit(/\b(account|product|case)\s+manager\b/, 'ic_named_manager', 3);
     }
   }
 
-  // Intern is a hard early-career signal (separate from junior/associate).
-  if (/\b(intern|internship)\b/.test(t)) {
+  // --- 3. Intern / early-career / junior ---
+  if (/\b(intern|internship|co-?op|student\s+worker|contract\s+student)\b/.test(t)) {
     isIntern = true;
     isJunior = true;
     signals.push('title:intern');
     score += 1;
-  } else if (hit(/\b(new\s*grad|junior|associate)\b/, 'junior', 1)) {
+  } else if (
+    hit(/\b(entry[\s-]?level)\b/, 'entry_level', 1) ||
+    hit(
+      /\b(new\s*grad(?:uate)?s?|new\s+college\s+grad(?:uate)?s?|college\s+grad(?:uate)?s?|junior)\b/,
+      'junior',
+      1
+    ) ||
+    // Bare "associate" is early-career only when no senior ladder word is present.
+    // "Senior Warehouse Associate" / "Senior Associate" must not become Entry.
+    (/\bassociate\b/.test(t) &&
+      !/\b(senior|sr\.?|staff|principal|lead)\b/.test(t) &&
+      hit(/\bassociate\b/, 'junior', 1)) ||
+    hit(/\b(20\d{2}\s+graduate|graduate\s*[–—-]|class\s+of\s+20\d{2})\b/, 'graduate_year', 1) ||
+    hit(
+      /\b(graduate\s+assistant|engineer\s+i\s+graduate|(?:mechanical|hardware|software|design)\s+(?:\/\s*)?(?:hardware\s+)?engineer\s+i\s+graduate)\b/,
+      'graduate_role',
+      1
+    ) ||
+    hit(/\b(early[\s-]?career|university[\s-]?hire|campus[\s-]?hire|rotation\s+engineer)\b/, 'early_career', 1) ||
+    hit(
+      /\b(elh|ech)\b.*\b(engineer|developer|analyst)\b|\b(engineer|developer|analyst)\b.*\b(elh|ech)\b/,
+      'early_career_code',
+      1
+    )
+  ) {
     isJunior = true;
   }
+
+  // --- 4. Explicit senior ladder words ---
   hit(/\b(senior|sr\.?)\b/, 'senior', 3);
   hit(/\b(lead|staff)\b/, 'lead_staff', 3);
   hit(/\b(principal|distinguished|fellow)\b/, 'principal', 4);
-  // Seniority-implying nouns (architect / specialist) when no other level word.
-  if (!/\b(intern|junior|associate|senior|sr\.?|lead|staff|principal)\b/.test(t)) {
+  // Senior/Staff/Principal clears junior flag from soft words (associate, etc.)
+  if (/\b(senior|sr\.?|staff|principal|lead)\b/.test(t) && isJunior && !isIntern) {
+    isJunior = false;
+    signals.push('title:senior_clears_junior');
+  }
+  hit(/\bintermediate\b/, 'intermediate', 3);
+  // Support ladders: L2 / 2nd line ≈ Mid-Senior
+  hit(/\b(?:l\s*[23]|2nd\s+line|second\s+line|tier\s*[23])\b/, 'support_ladder', 3);
+
+  // --- 5a. Roman ladder ---
+  if (/\b(?:i{1,3}|iv)\b/i.test(t)) {
+    if (/\biv\b/i.test(t)) hit(/\biv\b/i, 'roman_iv', 3);
+    else if (/\biii\b/i.test(t)) hit(/\biii\b/i, 'roman_iii', 3);
+    else if (/\bii\b/i.test(t)) hit(/\bii\b/i, 'roman_ii', 3);
+  }
+
+  // --- 5b. Numeric / L-band ladder: Developer 3 / Engineer 2 / DEVELOPER L1 ---
+  // 1 → Entry (1pt + junior), 2 → Mid-Senior (3pt), 3+ → Senior (4pt)
+  const numericLadder = t.match(
+    /\b(?:software\s+)?(?:developer|engineer|analyst|scientist|architect|consultant)\s+(?:l)?(\d)\b|\b(?:l)?(\d)\s+(?:software\s+)?(?:developer|engineer|analyst)\b/
+  );
+  if (numericLadder) {
+    const n = parseInt(numericLadder[1] || numericLadder[2] || '0', 10);
+    if (n === 1) {
+      signals.push('title:numeric_ladder_1');
+      score += 1;
+      isJunior = true;
+    } else if (n === 2) {
+      signals.push('title:numeric_ladder_2');
+      score += 3;
+    } else if (n >= 3 && n <= 9) {
+      signals.push(`title:numeric_ladder_${n}`);
+      score += 4;
+    }
+  }
+
+  // --- 6. IC program / project roles (not people managers) ---
+  if (
+    !isExec &&
+    !isManager &&
+    /\b(technical\s+program\s+manager|\btpm\b|program\s+manager|project\s+manager)\b/.test(t)
+  ) {
+    hit(
+      /\b(technical\s+program\s+manager|\btpm\b|program\s+manager|project\s+manager)\b/,
+      'ic_program_manager',
+      3
+    );
+  }
+
+  // --- 7. MTS / consultant / specialist nouns ---
+  hit(/\b(mts|member\s+of\s+(?:the\s+)?technical\s+staff)\b/, 'mts', 3);
+  if (!isExec && !isManager) {
+    if (/\b(senior\s+managing\s+consultant|managing\s+consultant)\b/.test(t)) {
+      hit(/\b(senior\s+managing\s+consultant|managing\s+consultant)\b/, 'managing_consultant', 3);
+    } else {
+      hit(/\bconsultant\b/, 'consultant', 3);
+    }
+  }
+  if (
+    !/\b(intern|junior|associate|senior|sr\.?|lead|staff|principal|ii|iii|iv|mts|consultant|tpm|manager)\b/i.test(
+      t
+    )
+  ) {
     hit(/\b(architect|specialist)\b/, 'architect_specialist', 3);
   }
 
@@ -617,8 +772,9 @@ export function resolveFrozenExperience(input: ExperienceResolveInput): Experien
     }
   }
 
-  // Precedence: scrape_badge wins for level when present — except a bad Entry/Intern
-  // badge must not override a real 4+ YOE requirement (would create Entry + 5-7 chips).
+  // Precedence: scrape_badge wins for level when present — except:
+  //  - bad Entry/Intern badge must not override a real 4+ YOE requirement
+  //  - badge must not demote clear exec / people-manager titles
   let finalLevel: FrozenExperienceLevel | null = rulesLevel;
   if (titleInfo.isIntern) {
     finalLevel = 'Entry Level';
@@ -636,6 +792,33 @@ export function resolveFrozenExperience(input: ExperienceResolveInput): Experien
       matchedSignals.push(`badge_entry_overridden_by_yoe:${badgeLevel}`);
       finalLevel = rulesLevel;
       method = usedHcStructured ? 'hc_structured' : 'rules';
+    } else if (
+      titleInfo.isExec &&
+      rulesLevel === 'Leadership Level' &&
+      badgeLevel !== 'Leadership Level'
+    ) {
+      matchedSignals.push(`badge_ignored_for_exec:${badgeLevel}`);
+      finalLevel = 'Leadership Level';
+      method = 'title_only';
+    } else if (
+      titleInfo.isManager &&
+      rulesLevel === 'People Manager Level' &&
+      badgeLevel === 'Entry Level'
+    ) {
+      matchedSignals.push(`badge_entry_ignored_for_manager`);
+      finalLevel = 'People Manager Level';
+      method = 'title_only';
+    } else if (
+      badgeLevel === 'Entry Level' &&
+      rulesLevel &&
+      rulesLevel !== 'Entry Level' &&
+      /\b(senior|sr\.?|staff|principal)\b/i.test(String(input.title || '')) &&
+      !/\b(intern|internship|junior|new\s*grad)\b/i.test(String(input.title || ''))
+    ) {
+      // ATS Entry badge must not demote clear Senior/Staff/Principal titles.
+      matchedSignals.push(`badge_entry_ignored_for_senior_title:${rulesLevel}`);
+      finalLevel = rulesLevel;
+      method = allYears.length || usedHcStructured ? 'rules' : 'title_only';
     } else {
       if (rulesLevel && rulesLevel !== badgeLevel) {
         matchedSignals.push(`rules_level:${rulesLevel}`);

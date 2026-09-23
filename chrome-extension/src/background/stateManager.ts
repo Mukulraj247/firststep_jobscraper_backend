@@ -11,6 +11,8 @@ const STORAGE_KEY = 'maxunExtensionState';
 const LEGACY_DEFAULT_BACKEND_URLS = [
   'https://scoutx-backend.onrender.com/api',
   'https://firststep-jobscraper-backend.onrender.com/api',
+  'http://174.138.34.210:8080/api',
+  'https://174.138.34.210:8080/api',
 ];
 
 function normalizeApiBase(url: string): string {
