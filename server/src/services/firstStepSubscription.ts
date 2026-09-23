@@ -21,9 +21,124 @@ export type FirstStepAccountSnapshot = {
   role: string | null;
 };
 
-async function fetchJson(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; body: any }> {
+/** Higher = better customer plan (for display / diagnostics only). */
+const PLAN_RANK: Record<string, number> = {
+  unknown: 0,
+  '': 0,
+  free: 1,
+  normal: 1,
+  normalplan: 1,
+  standard: 1,
+  standarduser: 1,
+  essentials: 2,
+  elite: 3,
+  falconlite: 4,
+  premium: 5,
+  premiumplan: 5,
+  falcon: 6,
+  premiumplus: 7,
+  'premium+': 7,
+};
+
+/** Soft / failed snapshots must not clobber a confirmed paid cache. */
+const UNTRUSTED_PLAN_ERRORS = new Set([
+  'no_subscription_row',
+  'missing_auth0_sub',
+  'timeout',
+  'fetch_failed',
+]);
+
+function compactPlanKey(raw: string | null | undefined): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s+]+/g, '');
+}
+
+/** Rank First Step subscription types (PremiumPlus > … > Normal Plan > unknown). */
+export function planTypeRank(subscriptionType: string | null | undefined): number {
+  const key = compactPlanKey(subscriptionType);
+  if (!key) return 0;
+  if (key in PLAN_RANK) return PLAN_RANK[key];
+  return 3;
+}
+
+/** True when cache should not be treated as a fresh First Step source of truth. */
+export function isSoftStandardPlan(plan: FirstStepPlanSnapshot | null | undefined): boolean {
+  if (!plan) return true;
+  const type = String(plan.subscriptionType || '').toLowerCase();
+  if (!type || type === 'unknown' || type === 'pending') return true;
+  if (plan.error) return true;
+  return planTypeRank(plan.subscriptionType) <= 1;
+}
+
+/** Untrusted = failed fetch or soft default — not a confirmed First Step row. */
+export function isUntrustedPlanSnapshot(plan: FirstStepPlanSnapshot | null | undefined): boolean {
+  if (!plan) return true;
+  const type = String(plan.subscriptionType || '').toLowerCase();
+  if (type === 'unknown' || type === 'pending') return true;
+  if (!plan.error) return false;
+  const err = String(plan.error);
+  if (UNTRUSTED_PLAN_ERRORS.has(err)) return true;
+  if (err.startsWith('http_') || err.startsWith('kept_paid_plan')) return true;
+  return true;
+}
+
+/**
+ * Apply a live First Step snapshot onto cache.
+ * - Trust confirmed API rows for upgrades AND downgrades.
+ * - Never replace a confirmed paid plan with unknown / soft Normal defaults.
+ */
+export function mergeFirstStepPlan(
+  previous: FirstStepPlanSnapshot | null | undefined,
+  incoming: FirstStepPlanSnapshot
+): FirstStepPlanSnapshot {
+  if (!previous) return incoming;
+
+  const prevRank = planTypeRank(previous.subscriptionType);
+  const incomingUntrusted = isUntrustedPlanSnapshot(incoming);
+
+  if (prevRank >= 2 && incomingUntrusted) {
+    return {
+      ...previous,
+      fetchedAt: incoming.fetchedAt,
+      error: incoming.error ? `kept_paid_plan;${incoming.error}` : previous.error || null,
+    };
+  }
+
+  // Confirmed First Step row wins (upgrade or downgrade).
+  return incoming;
+}
+
+/** Login wait budget — keep Auth0 exchange snappy; finish sync in background if needed. */
+export const FIRSTSTEP_LOGIN_SYNC_BUDGET_MS = Number(
+  process.env.FIRSTSTEP_LOGIN_SYNC_BUDGET_MS || 2500
+);
+
+/** In-process dedupe: exchange + bootstrap often fire within seconds. */
+const PLAN_MEM_TTL_MS = 20_000;
+const planMemCache = new Map<string, { at: number; account: FirstStepAccountSnapshot }>();
+const planInflight = new Map<string, Promise<FirstStepAccountSnapshot>>();
+
+function planCacheKey(auth0Sub: string | null | undefined, email?: string | null): string {
+  return String(auth0Sub || email || '').trim().toLowerCase();
+}
+
+export function clearFirstStepPlanMemCache(auth0Sub?: string | null): void {
+  if (!auth0Sub) {
+    planMemCache.clear();
+    return;
+  }
+  planMemCache.delete(planCacheKey(auth0Sub));
+}
+
+async function fetchJson(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = 8000
+): Promise<{ ok: boolean; status: number; body: any }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       ...init,
@@ -55,7 +170,8 @@ function snapshotFromDetails(
       isActive: true,
       status: 'active',
       fetchedAt,
-      error,
+      // Soft default — mergeFirstStepPlan must not let this clobber PremiumPlus.
+      error: error || 'no_subscription_row',
     };
   }
   return {
@@ -63,7 +179,7 @@ function snapshotFromDetails(
     isActive: typeof details.is_active === 'boolean' ? details.is_active : null,
     status: details.subscription_status ?? null,
     fetchedAt,
-    error,
+    error: null,
   };
 }
 
@@ -76,7 +192,10 @@ function roleFromDetails(details: SubscriptionDetails): string | null {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
-async function getSubscriptionByUserId(userId: string): Promise<{
+async function getSubscriptionByUserId(
+  userId: string,
+  timeoutMs = 8000
+): Promise<{
   ok: boolean;
   status: number;
   details: SubscriptionDetails;
@@ -84,22 +203,40 @@ async function getSubscriptionByUserId(userId: string): Promise<{
 }> {
   const base = getFirstStepApiBaseUrl();
   const url = `${base}/firstStep/subscription/getByUserId?user_id=${encodeURIComponent(userId)}`;
-  const { ok, status, body } = await fetchJson(url, { method: 'GET' });
+  const { ok, status, body } = await fetchJson(url, { method: 'GET' }, timeoutMs);
   if (!ok) {
     return { ok: false, status, details: null, error: `http_${status}` };
   }
   return { ok: true, status, details: extractDetails(body) };
 }
 
+function staffPlan(fetchedAt: Date, role: string | null): FirstStepAccountSnapshot {
+  return {
+    plan: {
+      subscriptionType: null,
+      isActive: false,
+      status: 'staff',
+      fetchedAt,
+      error: null,
+    },
+    role,
+  };
+}
+
 /**
  * Fetch First Step plan + role for a portal user.
  * Never throws — plan.error is set on failure so login still succeeds.
+ *
+ * Prefer auth0 `sub` subscription row (identity for this login). Parallel email
+ * lookup is only a fallback when the sub has no row — avoids orphaned old
+ * user_id PremiumPlus winning over the current identity.
  */
 export async function fetchFirstStepAccount(
   auth0Sub: string | null | undefined,
   email?: string | null
 ): Promise<FirstStepAccountSnapshot> {
   const fetchedAt = new Date();
+  const timeoutMs = 5000;
   if (!auth0Sub && !email) {
     return {
       plan: {
@@ -113,83 +250,68 @@ export async function fetchFirstStepAccount(
     };
   }
 
-  const triedIds: string[] = [];
-  const candidates: string[] = [];
-  if (auth0Sub) candidates.push(auth0Sub);
-  if (email && email !== auth0Sub) candidates.push(email);
-
   let lastError: string | null = null;
   let role: string | null = null;
 
   try {
-    for (const id of candidates) {
-      triedIds.push(id);
-      const result = await getSubscriptionByUserId(id);
-      if (!result.ok) {
-        lastError = result.error || `http_${result.status}`;
-        continue;
-      }
-      if (result.details) {
-        role = roleFromDetails(result.details) || role;
-        const plan = snapshotFromDetails(result.details, fetchedAt, null);
-        if (isFirstStepStaffRole(role)) {
-          // Staff have no customer plan — keep type null so UI shows role, not Standard/Unknown.
-          return {
-            plan: {
-              ...plan,
-              subscriptionType: null,
-              isActive: false,
-              status: 'staff',
-            },
-            role,
-          };
-        }
-        return { plan, role };
-      }
+    const lookups: Array<Promise<{
+      ok: boolean;
+      status: number;
+      details: SubscriptionDetails;
+      error?: string;
+      source: 'sub' | 'email';
+    }>> = [];
+
+    if (auth0Sub) {
+      lookups.push(
+        getSubscriptionByUserId(auth0Sub, timeoutMs).then((r) => ({ ...r, source: 'sub' as const }))
+      );
+    }
+    if (email && email !== auth0Sub) {
+      lookups.push(
+        getSubscriptionByUserId(email, timeoutMs).then((r) => ({ ...r, source: 'email' as const }))
+      );
+    }
+
+    const results = await Promise.all(lookups);
+    const bySub = results.find((r) => r.source === 'sub');
+    const byEmail = results.find((r) => r.source === 'email');
+
+    for (const r of results) {
+      if (!r.ok) lastError = r.error || `http_${r.status}`;
+      if (r.details) role = roleFromDetails(r.details) || role;
+    }
+
+    // Prefer auth0 sub row when present (source of truth for this session).
+    if (bySub?.ok && bySub.details) {
+      role = roleFromDetails(bySub.details) || role;
+      if (isFirstStepStaffRole(role)) return staffPlan(fetchedAt, role);
+      return { plan: snapshotFromDetails(bySub.details, fetchedAt, null), role };
+    }
+
+    if (byEmail?.ok && byEmail.details) {
+      role = roleFromDetails(byEmail.details) || role;
+      if (isFirstStepStaffRole(role)) return staffPlan(fetchedAt, role);
+      return { plan: snapshotFromDetails(byEmail.details, fetchedAt, null), role };
     }
 
     if (email) {
       const resolved = await resolveFirstStepUserByEmail(email);
       if (resolved.role) role = resolved.role;
-      if (resolved.userId && !triedIds.includes(resolved.userId)) {
-        const result = await getSubscriptionByUserId(resolved.userId);
+      if (resolved.userId && resolved.userId !== auth0Sub && resolved.userId !== email) {
+        const result = await getSubscriptionByUserId(resolved.userId, timeoutMs);
         if (result.ok && result.details) {
           role = roleFromDetails(result.details) || role;
-          const plan = snapshotFromDetails(result.details, fetchedAt, null);
-          if (isFirstStepStaffRole(role)) {
-            return {
-              plan: {
-                ...plan,
-                subscriptionType: null,
-                isActive: false,
-                status: 'staff',
-              },
-              role,
-            };
-          }
-          return { plan, role };
+          if (isFirstStepStaffRole(role)) return staffPlan(fetchedAt, role);
+          return { plan: snapshotFromDetails(result.details, fetchedAt, null), role };
         }
         if (!result.ok) lastError = result.error || `http_${result.status}`;
       }
 
-      // No subscription row but we know the First Step user (common for staff).
+      if (isFirstStepStaffRole(role)) return staffPlan(fetchedAt, role);
+
       if (resolved.userId || role) {
-        if (isFirstStepStaffRole(role)) {
-          return {
-            plan: {
-              subscriptionType: null,
-              isActive: false,
-              status: 'staff',
-              fetchedAt,
-              error: null,
-            },
-            role,
-          };
-        }
-        return {
-          plan: snapshotFromDetails(null, fetchedAt, null),
-          role,
-        };
+        return { plan: snapshotFromDetails(null, fetchedAt, null), role };
       }
     }
 
@@ -221,12 +343,111 @@ export async function fetchFirstStepAccount(
   }
 }
 
+/**
+ * Deduped + short TTL cache so login exchange and portal bootstrap do not
+ * double-hit First Step within the same few seconds.
+ */
+export async function fetchFirstStepAccountCached(
+  auth0Sub: string | null | undefined,
+  email?: string | null,
+  maxAgeMs = PLAN_MEM_TTL_MS
+): Promise<FirstStepAccountSnapshot> {
+  const key = planCacheKey(auth0Sub, email);
+  if (!key) return fetchFirstStepAccount(auth0Sub, email);
+
+  const hit = planMemCache.get(key);
+  if (hit && Date.now() - hit.at < maxAgeMs) {
+    return hit.account;
+  }
+
+  let inflight = planInflight.get(key);
+  if (!inflight) {
+    inflight = fetchFirstStepAccount(auth0Sub, email)
+      .then((account) => {
+        planMemCache.set(key, { at: Date.now(), account });
+        return account;
+      })
+      .finally(() => {
+        planInflight.delete(key);
+      });
+    planInflight.set(key, inflight);
+  }
+  return inflight;
+}
+
+export type LoginPlanSyncResult = {
+  plan: FirstStepPlanSnapshot | null;
+  role: string | null;
+  /** True when we returned cache because First Step exceeded the login budget. */
+  timedOut: boolean;
+  /** Background persist still running after timeout. */
+  pending: boolean;
+};
+
+/**
+ * Production login sync for every portal user:
+ * 1. Always fetch First Step (upgrades + downgrades).
+ * 2. Wait up to `budgetMs` so the response usually has the fresh plan.
+ * 3. If slow, return previous cache immediately; `onBackgroundComplete` persists later.
+ */
+export async function syncFirstStepPlanOnLogin(opts: {
+  auth0Sub: string;
+  email: string | null;
+  previous: FirstStepPlanSnapshot | null | undefined;
+  budgetMs?: number;
+  /** Called only when the login budget elapsed and the fetch finishes later. */
+  onBackgroundComplete?: (
+    merged: FirstStepPlanSnapshot,
+    role: string | null
+  ) => void | Promise<void>;
+}): Promise<LoginPlanSyncResult> {
+  const budgetMs = opts.budgetMs ?? FIRSTSTEP_LOGIN_SYNC_BUDGET_MS;
+  const fetchPromise = fetchFirstStepAccountCached(opts.auth0Sub, opts.email).then((account) => {
+    const merged = mergeFirstStepPlan(opts.previous, account.plan);
+    return { account, merged };
+  });
+
+  type RaceOk = { kind: 'ok'; account: FirstStepAccountSnapshot; merged: FirstStepPlanSnapshot };
+  type RaceTimeout = { kind: 'timeout' };
+
+  const raced = await Promise.race<RaceOk | RaceTimeout>([
+    fetchPromise.then((r) => ({ kind: 'ok' as const, ...r })),
+    new Promise<RaceTimeout>((resolve) => {
+      setTimeout(() => resolve({ kind: 'timeout' }), budgetMs);
+    }),
+  ]);
+
+  if (raced.kind === 'ok') {
+    return {
+      plan: raced.merged,
+      role: raced.account.role,
+      timedOut: false,
+      pending: false,
+    };
+  }
+
+  void fetchPromise
+    .then(async ({ account, merged }) => {
+      if (opts.onBackgroundComplete) await opts.onBackgroundComplete(merged, account.role);
+    })
+    .catch((err) => {
+      logger.log('warn', `[firstStep] login sync background failed: ${err?.message || err}`);
+    });
+
+  return {
+    plan: opts.previous || null,
+    role: null,
+    timedOut: true,
+    pending: true,
+  };
+}
+
 /** @deprecated Prefer fetchFirstStepAccount — kept for call sites that only need the plan. */
 export async function fetchFirstStepPlanSnapshot(
   auth0Sub: string | null | undefined,
   email?: string | null
 ): Promise<FirstStepPlanSnapshot> {
-  const { plan } = await fetchFirstStepAccount(auth0Sub, email);
+  const { plan } = await fetchFirstStepAccountCached(auth0Sub, email);
   return plan;
 }
 

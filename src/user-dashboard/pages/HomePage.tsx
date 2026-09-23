@@ -605,14 +605,23 @@ export function HomePage() {
   const planUnresolved =
     Boolean(entitlements) &&
     (entitlements?.source === 'unknown' ||
-      String(entitlements?.subscriptionType || '').toLowerCase() === 'unknown' ||
-      Boolean(entitlements?.planError));
+      String(entitlements?.subscriptionType || '').toLowerCase() === 'unknown') &&
+    // Soft API errors must not hide a known plan (sidebar already shows it).
+    !entitlements?.subscriptionTypeDisplay &&
+    !entitlements?.subscriptionType;
   const planLabel =
-    entitlements?.subscriptionTypeDisplay || entitlements?.subscriptionType || 'Free';
+    entitlements?.subscriptionTypeDisplay ||
+    entitlements?.subscriptionType ||
+    user?.firstStepPlan?.subscriptionType ||
+    'Free';
+  const normalizedPlanLabel = String(planLabel)
+    .replace(/PremiumPlus/i, 'Premium Plus')
+    .replace(/Normal Plan/i, 'Standard')
+    .replace(/FalconLite/i, 'Falcon Lite');
   const showPlanRibbon =
-    Boolean(planLabel) &&
-    planLabel.toLowerCase() !== 'free' &&
-    planLabel.toLowerCase() !== 'unknown' &&
+    Boolean(normalizedPlanLabel) &&
+    normalizedPlanLabel.toLowerCase() !== 'free' &&
+    normalizedPlanLabel.toLowerCase() !== 'unknown' &&
     !planUnresolved;
   const subscribedSlots =
     entitlements?.subscribedSlots ??
@@ -721,7 +730,7 @@ export function HomePage() {
           position: 'relative',
           mb: { xs: 3, md: 4 },
           minHeight: { xs: 'auto', md: 500 },
-          overflow: 'hidden',
+          overflow: 'visible',
           background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
           // Match stats cards below — no extra inset / no centered max-width
           p: { xs: 2, sm: 2.5, md: 3 },
@@ -733,21 +742,36 @@ export function HomePage() {
           ...fadeUpSx(0),
         }}
       >
-        <GradientBlob index={1} />
-        <GradientBlob index={2} />
-        <GradientBlob index={3} />
+        {/* Clip blobs only — ribbon must stay visible (overflow visible on parent). */}
+        <Box
+          aria-hidden
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: 0,
+          }}
+        >
+          <GradientBlob index={1} />
+          <GradientBlob index={2} />
+          <GradientBlob index={3} />
+        </Box>
 
         {showPlanRibbon && (
           <Box
             sx={{
               position: 'absolute',
-              top: { xs: 12, sm: 16, md: 24 },
-              right: { xs: 12, sm: 16, md: 24 },
+              top: { xs: 8, sm: 12, md: 20 },
+              right: { xs: 8, sm: 12, md: 28 },
               zIndex: 10,
-              display: { xs: 'none', md: 'block' },
+              // Always show — sidebar plan badge is not a substitute for the hero ribbon.
+              display: 'block',
+              // Keep notch triangles inside the hero (parent uses overflow:hidden).
+              maxWidth: 'calc(100% - 24px)',
             }}
           >
-            <PlanRibbon label={planLabel} />
+            <PlanRibbon label={normalizedPlanLabel} />
           </Box>
         )}
 
@@ -1220,7 +1244,7 @@ export function HomePage() {
             <EmptyState
               icon={ExploreOutlined}
               title="Pick your first cluster"
-              description={`You have ${subscribedSlots} included slot${subscribedSlots === 1 ? '' : 's'} on ${planLabel}.`}
+              description={`You have ${subscribedSlots} included slot${subscribedSlots === 1 ? '' : 's'} on ${normalizedPlanLabel}.`}
               actionLabel="Browse clusters"
               actionTo="/user/clusters"
             />

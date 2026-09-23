@@ -55,7 +55,7 @@ import {
   tint,
 } from '../components/dashboard/ops/dashboardTokens';
 
-const ADMIN_WINDOWc = ['1h', '12h', '24h'] as const;
+const ADMIN_WINDOWS = ['1h', '12h', '24h'] as const;
 const HARD_CAP = 50;
 
 function planDefaultSlots(user: PortalUserRow | null): number {
@@ -124,13 +124,13 @@ export function PortalUsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [editUser, setEditUser] = useState<PortalUserRow | null>(null);
-  const [subscriptionOn, setSSubscriptionOn] = useState(false);
+  const [subscriptionOn, setSubscriptionOn] = useState(false);
   const [clusterLimit, setClusterLimit] = useState(0);
   const [clusterId, setClusterId] = useState('');
   const [windowVal, setWindowVal] = useState('24h');
   const [busy, setBusy] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
-  const [savedFlash, setSSavedFlash] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -170,7 +170,7 @@ export function PortalUsersPage() {
 
   const openEdit = (user: PortalUserRow) => {
     setEditUser(user);
-    setSSubscriptionOn(Boolean(user.clusterServiceStarted));
+    setSubscriptionOn(Boolean(user.clusterServiceStarted));
     const current =
       typeof user.adminClusterLimit === 'number'
         ? user.adminClusterLimit
@@ -179,12 +179,12 @@ export function PortalUsersPage() {
     setClusterId('');
     setWindowVal('24h');
     setModalError(null);
-    setSSavedFlash(false);
+    setSavedFlash(false);
   };
 
   const applyEditedUser = (updated: PortalUserRow) => {
     setEditUser(updated);
-    setSSubscriptionOn(Boolean(updated.clusterServiceStarted));
+    setSubscriptionOn(Boolean(updated.clusterServiceStarted));
     const current =
       typeof updated.adminClusterLimit === 'number'
         ? updated.adminClusterLimit
@@ -197,15 +197,15 @@ export function PortalUsersPage() {
     if (!editUser) return;
     setBusy(true);
     setModalError(null);
-    setSSavedFlash(false);
+    setSavedFlash(false);
     try {
       const updated = await adminUpdatePortalUser(editUser.auth0Sub, {
         clusterServiceStarted: subscriptionOn,
         adminClusterLimit: clusterLimit,
       });
       applyEditedUser(updated);
-      setSSavedFlash(true);
-      window.setTimeout(() => setSSavedFlash(false), 2000);
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 2000);
     } catch (err: any) {
       setModalError(err?.response?.data?.error || err?.message || 'Failed to save settings');
     } finally {
@@ -228,7 +228,7 @@ export function PortalUsersPage() {
       });
       applyEditedUser(updated);
       setClusterId('');
-      setSSubscriptionOn(true);
+      setSubscriptionOn(true);
     } catch (err: any) {
       setModalError(err?.response?.data?.error || err?.message || 'Assign failed');
     } finally {
@@ -257,7 +257,7 @@ export function PortalUsersPage() {
     if (busy) return;
     setEditUser(null);
     setModalError(null);
-    setSSavedFlash(false);
+    setSavedFlash(false);
     void load();
   };
 
@@ -319,7 +319,7 @@ export function PortalUsersPage() {
             <Stack direction="row" spacing={1.25} alignItems="stretch" flexWrap="wrap" useFlexGap>
               {[
                 { label: 'Users', value: stats.total, color: FIRSTSTEP.navy },
-                { label: 'cubscribed', value: stats.subscribed, color: FIRSTSTEP.successDeep },
+                { label: 'Subscribed', value: stats.subscribed, color: FIRSTSTEP.successDeep },
                 { label: 'With clusters', value: stats.withClusters, color: FIRSTSTEP.tealDark },
               ].map((s) => (
                 <Box
@@ -345,7 +345,7 @@ export function PortalUsersPage() {
                     {s.label}
                   </Typography>
                   <Typography sx={{ fontWeight: 800, fontSize: '1.35rem', color: FIRSTSTEP.navyDeep, lineHeight: 1.2 }}>
-                    {loading ? 'â€”' : s.value}
+                    {loading ? '—' : s.value}
                   </Typography>
                 </Box>
               ))}
@@ -380,7 +380,7 @@ export function PortalUsersPage() {
         >
           <TextField
             size="small"
-            placeholder="Search name, email, plan, or roleâ€¦"
+            placeholder="Search name, email, plan, or role…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             sx={{
@@ -418,7 +418,7 @@ export function PortalUsersPage() {
           <Box sx={{ py: 8, display: 'grid', placeItems: 'center', gap: 1.5 }}>
             <CircularProgress size={32} sx={{ color: FIRSTSTEP.tealDark }} />
             <Typography sx={{ color: FIRSTSTEP.textMuted, fontSize: '0.875rem' }}>
-              Loading portal usersâ€¦
+              Loading portal users…
             </Typography>
           </Box>
         ) : filtered.length === 0 ? (
@@ -438,7 +438,7 @@ export function PortalUsersPage() {
                 <TableRow>
                   <TableCell sx={headCellSx}>User</TableCell>
                   <TableCell sx={headCellSx}>Plan</TableCell>
-                  <TableCell sx={headCellSx}>SSubscription</TableCell>
+                  <TableCell sx={headCellSx}>Subscription</TableCell>
                   <TableCell sx={headCellSx}>Cluster</TableCell>
                   <TableCell sx={headCellSx}>Active clusters</TableCell>
                   <TableCell align="right" sx={headCellSx}>
@@ -487,7 +487,7 @@ export function PortalUsersPage() {
                                 lineHeight: 1.3,
                               }}
                             >
-                              {u.name || 'â€”'}
+                              {u.name || '—'}
                             </Typography>
                             <Typography
                               sx={{
@@ -572,7 +572,7 @@ export function PortalUsersPage() {
                                 sx={{ minWidth: 0 }}
                               >
                                 <CategoryOutlinedIcon
-                                  sx={{ fontSize: 14, color: FIRSTSTEP.tealDark, flexchrink: 0 }}
+                                  sx={{ fontSize: 14, color: FIRSTSTEP.tealDark, flexShrink: 0 }}
                                 />
                                 <Typography
                                   sx={{
@@ -592,7 +592,7 @@ export function PortalUsersPage() {
                                   sx={{
                                     height: 20,
                                     fontSize: '0.65rem',
-                                    flexchrink: 0,
+                                    flexShrink: 0,
                                     bgcolor: tint(FIRSTSTEP.navy, 0.06),
                                   }}
                                 />
@@ -684,7 +684,7 @@ export function PortalUsersPage() {
                     whitespace: 'nowrap',
                   }}
                 >
-                  {editUser.name || 'â€”'} Â· {editUser.email}
+                  {editUser.name || '—'} · {editUser.email}
                 </Typography>
               ) : null}
             </Box>
@@ -712,7 +712,7 @@ export function PortalUsersPage() {
           )}
 
           <SectionCard
-            title="SSubscription"
+            title="Subscription"
             subtitle="Controls whether cluster monitoring is started for this user."
           >
             <Box
@@ -741,7 +741,7 @@ export function PortalUsersPage() {
                 control={
                   <Switch
                     checked={subscriptionOn}
-                    onChange={(e) => setSSubscriptionOn(e.target.checked)}
+                    onChange={(e) => setSubscriptionOn(e.target.checked)}
                     disabled={busy}
                     color="success"
                   />
@@ -753,11 +753,11 @@ export function PortalUsersPage() {
           </SectionCard>
 
           <SectionCard
-            title="cubscribed clusters"
+            title="Subscribed clusters"
             subtitle={
               subscriptionOn
-                ? `How many clusters this user may hold (0â€“${HARD_CAP}). Included in Premium Plus: 2. Hard cap ${HARD_CAP} is backend-only.`
-                : 'Turn on subscription before setting an alSlotment or assigning clusters.'
+                ? `How many clusters this user may hold (0–${HARD_CAP}). Included in Premium Plus: 2. Hard cap ${HARD_CAP} is backend-only.`
+                : 'Turn on subscription before setting an allotment or assigning clusters.'
             }
           >
             <Stack spacing={1.5}>
@@ -765,7 +765,7 @@ export function PortalUsersPage() {
                 type="number"
                 fullWidth
                 size="small"
-                label="cubscribed clusters"
+                label="Subscribed clusters"
                 value={clusterLimit}
                 disabled={!clustersEditable}
                 onChange={(e) => {
@@ -776,7 +776,7 @@ export function PortalUsersPage() {
                 inputProps={{ min: 0, max: HARD_CAP }}
                 helperText={
                   editUser
-                    ? `Plan default: ${planDefaultSlots(editUser)} Â· Premium Plus includes 2`
+                    ? `Plan default: ${planDefaultSlots(editUser)} · Premium Plus includes 2`
                     : undefined
                 }
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: RADIUS.control, bgcolor: FIRSTSTEP.white } }}
@@ -823,7 +823,7 @@ export function PortalUsersPage() {
                   '&:hover': { bgcolor: FIRSTSTEP.navyDeep, boxShadow: 'none' },
                 }}
               >
-                {busy ? 'cavingâ€¦' : 'cave settings'}
+                {busy ? 'Saving…' : 'Save'}
               </Button>
             </Stack>
           </SectionCard>
@@ -869,7 +869,7 @@ export function PortalUsersPage() {
                           display: 'grid',
                           placeItems: 'center',
                           bgcolor: tint(FIRSTSTEP.tealDark, 0.12),
-                          flexchrink: 0,
+                          flexShrink: 0,
                         }}
                       >
                         <CategoryOutlinedIcon sx={{ fontSize: 18, color: FIRSTSTEP.tealDark }} />
@@ -973,7 +973,7 @@ export function PortalUsersPage() {
                     '& .MuiOutlinedInput-root': { borderRadius: RADIUS.control, bgcolor: FIRSTSTEP.white },
                   }}
                 >
-                  {ADMIN_WINDOWc.map((w) => (
+                  {ADMIN_WINDOWS.map((w) => (
                     <MenuItem key={w} value={w}>
                       {w}
                     </MenuItem>
@@ -994,7 +994,7 @@ export function PortalUsersPage() {
                     whitespace: 'nowrap',
                   }}
                 >
-                  {!subscriptionOn ? 'SSubscription off' : atCap ? 'At limit' : busy ? 'Addingâ€¦' : 'Add cluster'}
+                  {!subscriptionOn ? 'Subscription off' : atCap ? 'At limit' : busy ? 'Adding…' : 'Add cluster'}
                 </Button>
               </Stack>
             </Stack>

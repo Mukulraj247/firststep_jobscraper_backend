@@ -11,7 +11,11 @@ import {
   type ScoutXRole,
 } from "../services/scoutxAuth0";
 import { resolveOpsMongoUser } from "../services/scoutxOpsUser";
-import { fetchFirstStepAccount, fetchFirstStepPlanSnapshot } from "../services/firstStepSubscription";
+import {
+  fetchFirstStepAccount,
+  fetchFirstStepPlanSnapshot,
+  syncFirstStepPlanOnLogin,
+} from "../services/firstStepSubscription";
 import { upsertPortalUser } from "../services/portalUserService";
 import PortalUser from "../models/PortalUser";
 import { genAPIKey } from "../utils/api";
@@ -200,8 +204,8 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       ? roles
       : [...roles, SCOUTX_USER_ROLE];
 
-    // Fast login: reuse cached First Step plan; refresh in background.
-    // Entitlements/bootstrap will sync if still missing/stale.
+    // Always sync First Step plan on login (every user). Wait up to ~2.5s;
+    // if First Step is slow, return cache and finish persist in background.
     let cachedPlan: Awaited<ReturnType<typeof fetchFirstStepPlanSnapshot>> | null = null;
     try {
       const existing = await PortalUser.findOne({ auth0Sub }).select('firstStepPlan').lean();
@@ -214,14 +218,32 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       /* ignore */
     }
 
+    const sync = await syncFirstStepPlanOnLogin({
+      auth0Sub,
+      email,
+      previous: cachedPlan,
+      onBackgroundComplete: async (merged, role) => {
+        try {
+          const $set: Record<string, unknown> = { firstStepPlan: merged };
+          if (role && !firstStepRole) $set.firstStepRole = role;
+          await PortalUser.updateOne({ auth0Sub }, { $set });
+        } catch (err: any) {
+          console.warn('[auth0/exchange] plan persist failed:', err?.message || err);
+        }
+      },
+    });
+
+    const planForResponse = sync.plan || cachedPlan;
+    const syncedRole = sync.role;
+
     try {
       await upsertPortalUser({
         auth0Sub,
         email,
         name,
         scoutxRoles: portalRoles,
-        firstStepRole,
-        firstStepPlan: cachedPlan || undefined,
+        firstStepRole: firstStepRole || syncedRole || undefined,
+        firstStepPlan: planForResponse || undefined,
       });
     } catch (err: any) {
       console.error('Portal profile upsert failed:', err);
@@ -238,17 +260,6 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       });
     }
 
-    void fetchFirstStepAccount(auth0Sub, email)
-      .then(async ({ plan, role }) => {
-        const $set: Record<string, unknown> = { firstStepPlan: plan };
-        // Prefer Auth0 role from token; fill from First Step when missing.
-        if (role && !firstStepRole) $set.firstStepRole = role;
-        await PortalUser.updateOne({ auth0Sub }, { $set });
-      })
-      .catch((err) => {
-        console.warn('[auth0/exchange] background First Step sync failed:', err?.message || err);
-      });
-
     return res.json({
       id: auth0Sub,
       email,
@@ -257,15 +268,15 @@ router.post("/auth0/exchange", requireAuth0AccessToken, async (req: Auth0Request
       scoutxRoles: portalRoles,
       authSource: 'auth0',
       landing: '/user',
-      firstStepPlan: cachedPlan
+      firstStepPlan: planForResponse
         ? {
-            subscriptionType: cachedPlan.subscriptionType,
-            isActive: cachedPlan.isActive,
-            status: cachedPlan.status,
+            subscriptionType: planForResponse.subscriptionType,
+            isActive: planForResponse.isActive,
+            status: planForResponse.status,
           }
         : null,
-      firstStepRole,
-      firstStepPlanPending: !cachedPlan,
+      firstStepRole: firstStepRole || syncedRole,
+      firstStepPlanPending: sync.pending || !planForResponse,
     });
   } catch (error: any) {
     console.error(`Auth0 exchange error: ${error?.message || error}`);

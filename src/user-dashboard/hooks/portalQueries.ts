@@ -27,6 +27,8 @@ export const portalKeys = {
   sampleJobs: (slug: string) => [...portalKeys.all, 'sample-jobs', slug] as const,
   companies: (slug: string) => [...portalKeys.all, 'companies', slug] as const,
   saved: () => [...portalKeys.all, 'saved'] as const,
+  savedPage: (page: number, limit: number, q: string, company: string) =>
+    [...portalKeys.all, 'saved', page, limit, q, company] as const,
   requests: () => [...portalKeys.all, 'requests'] as const,
   feed: (subscriptionId: string, filters: FeedFilters) =>
     [...portalKeys.all, 'feed', subscriptionId, filters] as const,
@@ -49,7 +51,7 @@ export async function invalidatePortalShell(qc: QueryClient) {
     qc.invalidateQueries({ queryKey: portalKeys.entitlements() }),
     qc.invalidateQueries({ queryKey: portalKeys.subscriptions() }),
     qc.invalidateQueries({ queryKey: portalKeys.clusters() }),
-    qc.invalidateQueries({ queryKey: portalKeys.saved() }),
+    qc.invalidateQueries({ queryKey: [...portalKeys.all, 'saved'] }),
     qc.invalidateQueries({ queryKey: portalKeys.requests() }),
     qc.invalidateQueries({ queryKey: [...portalKeys.all, 'feed'] }),
   ]);
@@ -105,12 +107,20 @@ export function usePortalClusters(enabled: boolean) {
   });
 }
 
-export function usePortalSaved(enabled: boolean) {
+export function usePortalSaved(
+  enabled: boolean,
+  opts?: { page?: number; limit?: number; q?: string; company?: string }
+) {
+  const page = opts?.page ?? 1;
+  const limit = opts?.limit ?? 24;
+  const q = opts?.q ?? '';
+  const company = opts?.company ?? '';
   return useQuery({
-    queryKey: portalKeys.saved(),
-    queryFn: listSaved,
+    queryKey: portalKeys.savedPage(page, limit, q, company),
+    queryFn: () => listSaved({ page, limit, q, company }),
     enabled,
     staleTime: STALE_MS,
+    placeholderData: (prev) => prev,
   });
 }
 

@@ -140,6 +140,19 @@ Use this section when First Step → ScoutX SSO or login misbehaves. Check top t
 
 **Fix:** Assign Auth0 RBAC role `ScoutX_Admin`, ensure Post-Login Action copies roles to claim `https://scoutx.app/roles`, then **full logout + login** (old tokens lack the claim). See checklist item 7 below.
 
+### F2. First Step shows Premium Plus but ScoutX shows Standard
+
+**Cause:** ScoutX caches `scoutx_portal_users.firstStepPlan` from `FIRSTSTEP_API_BASE_URL`. That API must use the **same** Mongo as First Step ([firststep-frontend.onrender.com](https://firststep-frontend.onrender.com/) → `firststep-usa-dev`).
+
+**Production sync (every user on login):**
+1. `/auth/auth0/exchange` always fetches First Step plan (upgrade + downgrade).
+2. Waits up to `FIRSTSTEP_LOGIN_SYNC_BUDGET_MS` (default 2500ms); if slower, login returns cached plan and persists when the fetch completes.
+3. Portal bootstrap/entitlements re-check every **5 minutes** (unknown/error refresh immediately).
+4. In-process 20s dedupe avoids double-hitting First Step when exchange + bootstrap race.
+5. Confirmed API rows always win; soft `no_subscription_row` / fetch failures never clobber a paid cache.
+
+**Ops:** Set `FIRSTSTEP_API_BASE_URL` to the backend that reads `firststep-usa-dev`.
+
 ### G. Local env checklist (First Step + ScoutX)
 
 | Check | First Step | ScoutX |

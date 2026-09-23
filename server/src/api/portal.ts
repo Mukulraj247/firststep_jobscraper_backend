@@ -19,7 +19,12 @@ import {
   CLUSTER_WINDOW_MS,
   type ClusterWindow,
 } from '../services/clusterEntitlements';
-import { fetchFirstStepPlanSnapshot, assignJobUrlToOdJobs } from '../services/firstStepSubscription';
+import {
+  fetchFirstStepAccountCached,
+  fetchFirstStepPlanSnapshot,
+  mergeFirstStepPlan,
+  assignJobUrlToOdJobs,
+} from '../services/firstStepSubscription';
 import {
   queryClusterFeed,
   queryMergedClusterFeed,
@@ -508,18 +513,23 @@ async function ensurePlanFresh(user: NonNullable<PortalRequest['portalUser']>, a
   const cached = user.firstStepPlan;
   const type = String(cached?.subscriptionType || '').toLowerCase();
   const staleMs = Date.now() - new Date(cached?.fetchedAt || 0).getTime();
-  const shouldRefresh =
-    force ||
+  // All plans re-check First Step within 5 minutes so upgrades/downgrades land
+  // without waiting for the next login. Soft/unknown refresh immediately.
+  const soft =
     !cached ||
     type === 'unknown' ||
     type === 'pending' ||
-    Boolean(cached.error) ||
+    Boolean(cached?.error);
+  const ttlMs = soft ? 0 : 5 * 60 * 1000;
+  const shouldRefresh =
+    force ||
+    soft ||
     Number.isNaN(staleMs) ||
-    staleMs > 60 * 60 * 1000;
+    staleMs > ttlMs;
 
   if (shouldRefresh) {
-    const plan = await fetchFirstStepPlanSnapshot(auth0Sub, user.email);
-    user.firstStepPlan = plan;
+    const { plan } = await fetchFirstStepAccountCached(auth0Sub, user.email);
+    user.firstStepPlan = mergeFirstStepPlan(cached, plan);
     await user.save();
   }
 }
@@ -759,7 +769,7 @@ router.post('/portal/cluster-service/start', async (req: PortalRequest, res) => 
 
     // Re-sync plan before start so PremiumPlus is not stuck as "unknown".
     const plan = await fetchFirstStepPlanSnapshot(req.auth0Sub, user.email);
-    user.firstStepPlan = plan;
+    user.firstStepPlan = mergeFirstStepPlan(user.firstStepPlan, plan);
 
     const slots = resolveSubscribedSlots({
       plan: user.firstStepPlan,
@@ -1358,10 +1368,23 @@ router.post('/portal/jobs/:id/report', async (req: PortalRequest, res) => {
 
 // ─── Saved jobs ─────────────────────────────────────────────────────────────
 
+const SAVED_PAGE_DEFAULT = 24;
+const SAVED_PAGE_MAX = 48;
+
 router.get('/portal/saved', async (req: PortalRequest, res) => {
   try {
+    const pageRaw = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitRaw = parseInt(String(req.query.limit || String(SAVED_PAGE_DEFAULT)), 10) || SAVED_PAGE_DEFAULT;
+    const limit = Math.min(SAVED_PAGE_MAX, Math.max(1, limitRaw));
+    const q = String(req.query.q || '')
+      .trim()
+      .toLowerCase();
+    const companyFilter = String(req.query.company || '').trim();
+
     const saved = await SavedJob.find({ auth0Sub: req.auth0Sub }).sort({ savedAt: -1 }).lean();
-    if (!saved.length) return res.json({ jobs: [] });
+    if (!saved.length) {
+      return res.json({ jobs: [], total: 0, page: pageRaw, limit, companies: [] });
+    }
 
     const keys = saved.map((s) => s.jobUrlKey);
     const ownerId = getPortalJobBoardOwnerId();
@@ -1390,7 +1413,36 @@ router.get('/portal/saved', async (req: PortalRequest, res) => {
       });
       if (job) jobs.push(job);
     }
-    return res.json({ jobs });
+
+    const companies = Array.from(new Set(jobs.map((j) => j.company).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b)
+    );
+
+    let filtered = jobs;
+    if (companyFilter) {
+      filtered = filtered.filter((j) => j.company === companyFilter);
+    }
+    if (q) {
+      filtered = filtered.filter((j) => {
+        const hay = `${j.title} ${j.company} ${j.location || ''} ${j.jobCategory || ''}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.min(pageRaw, totalPages);
+    const start = (page - 1) * limit;
+    const pageJobs = filtered.slice(start, start + limit);
+
+    return res.json({
+      jobs: pageJobs,
+      total,
+      page,
+      limit,
+      totalPages,
+      companies,
+    });
   } catch (err: any) {
     logger.log('error', `portal saved list: ${err?.message || err}`);
     return res.status(500).json({ error: 'Failed to list saved jobs' });

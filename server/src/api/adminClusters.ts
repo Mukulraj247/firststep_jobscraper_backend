@@ -30,7 +30,7 @@ import {
   type ClusterWindow,
 } from '../services/clusterEntitlements';
 import { staffRoleDisplayOverride, isFirstStepStaffRole } from '../services/firstStepRoles';
-import { fetchFirstStepAccount } from '../services/firstStepSubscription';
+import { fetchFirstStepAccount, mergeFirstStepPlan } from '../services/firstStepSubscription';
 import { getScoutXOpsUserId } from '../services/scoutxAuth0';
 import { normalizeOwnerIdForWrite, ownerIdFilter } from '../utils/ownerId';
 import {
@@ -1809,7 +1809,9 @@ async function enrichPortalUsersFromFirstStep(users: any[]): Promise<any[]> {
           const account = await fetchFirstStepAccount(u.auth0Sub, u.email);
           const updates: Record<string, unknown> = {};
           if (account.role) updates.firstStepRole = account.role;
-          if (account.plan) updates.firstStepPlan = account.plan;
+          if (account.plan) {
+            updates.firstStepPlan = mergeFirstStepPlan(u.firstStepPlan, account.plan);
+          }
           if (!Object.keys(updates).length) return;
           await PortalUser.updateOne({ _id: u._id }, { $set: updates });
           byId.set(String(u._id), { ...u, ...updates });

@@ -227,9 +227,42 @@ export async function unsaveJob(id: string): Promise<FeedJob> {
   return (await portalDelete<FeedJob>(`/saved/${encodeURIComponent(id)}`)) as FeedJob;
 }
 
-export async function listSaved(): Promise<FeedJob[]> {
-  const data = await portalGet<{ jobs: FeedJob[] }>('/saved');
-  return data.jobs || [];
+export type SavedJobsPage = {
+  jobs: FeedJob[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  companies: string[];
+};
+
+export async function listSaved(opts?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+  company?: string;
+}): Promise<SavedJobsPage> {
+  const params = new URLSearchParams();
+  params.set('page', String(opts?.page ?? 1));
+  params.set('limit', String(opts?.limit ?? 24));
+  if (opts?.q?.trim()) params.set('q', opts.q.trim());
+  if (opts?.company?.trim()) params.set('company', opts.company.trim());
+  const data = await portalGet<Partial<SavedJobsPage> & { jobs?: FeedJob[] }>(
+    `/saved?${params.toString()}`
+  );
+  const jobs = data.jobs || [];
+  const limit = data.limit ?? opts?.limit ?? 24;
+  const total = data.total ?? jobs.length;
+  const page = data.page ?? opts?.page ?? 1;
+  const totalPages = data.totalPages ?? Math.max(1, Math.ceil(total / limit));
+  return {
+    jobs,
+    total,
+    page,
+    limit,
+    totalPages,
+    companies: data.companies || [],
+  };
 }
 
 export async function subscribe(

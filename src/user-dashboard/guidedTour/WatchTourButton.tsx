@@ -18,8 +18,9 @@ export function WatchTourButton() {
         onClick={openSelector}
         sx={{
           position: 'fixed',
-          bottom: { xs: 16, sm: 32 },
-          left: { xs: 16, sm: 32 },
+          // Sit above the sidebar account row (avatar + Premium Plus), not on top of it.
+          bottom: { xs: 24, sm: 28, md: 100 },
+          left: { xs: 16, sm: 24, md: 20 },
           display: 'flex',
           alignItems: 'center',
           gap: 1,
