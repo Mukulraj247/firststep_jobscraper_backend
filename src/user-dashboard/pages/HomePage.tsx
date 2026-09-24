@@ -1054,7 +1054,7 @@ export function HomePage() {
                 onClick={() =>
                   handleInfoClick(
                     'Cluster slots used',
-                    'Your plan includes a fixed number of cluster slots. Active clusters count against this allotment.',
+                    'Only Premium Plus includes 2 clusters in the plan. Other plans get slots when ops starts subscription and assigns an allotment. Active clusters count against that limit.',
                   )
                 }
               />

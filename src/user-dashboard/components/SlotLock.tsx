@@ -18,36 +18,76 @@ type Props = {
   sx?: Record<string, unknown>;
 };
 
-/** True when the user has used all subscribed cluster slots. */
-export function isSlotLocked(entitlements: PortalEntitlements | null | undefined): boolean {
-  if (!entitlements) return false;
-  if (!entitlements.clusterServiceStarted) return false;
-  const allotment =
-    entitlements.subscribedSlots ?? entitlements.maxActiveClusters ?? 0;
-  if (allotment <= 0) return false;
-  return (entitlements.availableSlots ?? 0) <= 0;
+/** Plan-included clusters only (Premium Plus / Falcon = 2; everyone else = 0). */
+export function planIncludedClusterCount(
+  entitlements: PortalEntitlements | null | undefined
+): number {
+  return entitlements?.planIncludedSlots ?? entitlements?.includedSlots ?? 0;
+}
+
+/** Effective allotment (ops assignment, or Premium Plus plan default). */
+export function effectiveAllotment(
+  entitlements: PortalEntitlements | null | undefined
+): number {
+  return entitlements?.subscribedSlots ?? entitlements?.maxActiveClusters ?? 0;
 }
 
 /**
- * Paywall lock when allotment is exhausted.
+ * True when the user cannot subscribe to more clusters.
+ * Locked when: subscription is off, allotment is 0, or all slots are used.
+ * Premium Plus defaults subscription on (via API) with 2 slots.
+ */
+export function isSlotLocked(entitlements: PortalEntitlements | null | undefined): boolean {
+  if (!entitlements) return false;
+  if (!entitlements.clusterServiceStarted) return true;
+  const allotment = effectiveAllotment(entitlements);
+  if (allotment <= 0) return true;
+  return (entitlements.availableSlots ?? 0) <= 0;
+}
+
+/** Browse / pick banner body — never claims non–Premium Plus plans “include free slots”. */
+export function pickSlotsBannerBody(opts: {
+  entitlements: PortalEntitlements | null | undefined;
+  remaining: number;
+  used: number;
+  allotment: number;
+}): string {
+  const included = planIncludedClusterCount(opts.entitlements);
+  const activeNote = opts.used > 0 ? ` · ${opts.used} already active` : '';
+  if (included >= 2) {
+    return `Premium Plus includes ${included} clusters in your plan${activeNote}. You have ${opts.remaining} remaining. Extra clusters need ops to raise your allotment — unlock is not available in ScoutX yet.`;
+  }
+  return `Ops assigned you ${opts.allotment} cluster slot${opts.allotment === 1 ? '' : 's'}${activeNote}. Pick up to ${opts.remaining} more. Ask ops if you need a higher allotment.`;
+}
+
+/**
+ * Paywall / gate lock when subscription is off or allotment is exhausted.
  * Payment / upgrade is intentionally a dead-end for now — ops assigns extras.
  */
 export function SlotLock({ entitlements, compact = false, sx }: Props) {
-  const planSlots =
-    entitlements?.subscribedSlots ??
-    entitlements?.includedSlots ??
-    entitlements?.maxActiveClusters ??
-    0;
+  const allotment = effectiveAllotment(entitlements);
+  const included = planIncludedClusterCount(entitlements);
   const planLabel =
     entitlements?.subscriptionTypeDisplay ||
     entitlements?.subscriptionType ||
     'Your plan';
-  const title =
-    planSlots === 2
-      ? 'Both Premium Plus cluster slots are in use'
-      : planSlots === 1
-        ? 'Your cluster slot is in use'
-        : 'All cluster slots are in use';
+  const subscriptionOff = !entitlements?.clusterServiceStarted;
+  const title = subscriptionOff
+    ? 'Cluster subscription is not active'
+    : allotment <= 0
+      ? 'No cluster slots assigned'
+      : included >= 2 && allotment <= included
+        ? 'Both Premium Plus cluster slots are in use'
+        : allotment === 1
+          ? 'Your cluster slot is in use'
+          : 'All assigned cluster slots are in use';
+  const body = subscriptionOff
+    ? `Your ${planLabel} plan does not unlock clusters until an admin starts your subscription and assigns how many you can hold.`
+    : allotment <= 0
+      ? `Ask ops to assign a cluster allotment for your ${planLabel} plan before you can subscribe.`
+      : included >= 2 && allotment <= included
+        ? `Premium Plus includes ${included} clusters in your plan. Ask ops to increase your allotment for more — unlock is not available in ScoutX yet.`
+        : `You've used all ${allotment} slot${allotment === 1 ? '' : 's'} assigned by ops. Ask them to increase your allotment if you need more.`;
 
   return (
     <Box
@@ -103,11 +143,9 @@ export function SlotLock({ entitlements, compact = false, sx }: Props) {
               mx: compact ? 0 : 'auto',
             }}
           >
-            {planLabel} includes {planSlots} cluster{planSlots === 1 ? '' : 's'}. Additional
-            clusters require payment — unlock is not available in ScoutX yet. Ask ops to increase
-            your allotment after payment.
+            {body}
           </Typography>
-          {!compact && (
+          {!compact && !subscriptionOff && (
             <Button
               variant="contained"
               disableElevation
@@ -118,7 +156,7 @@ export function SlotLock({ entitlements, compact = false, sx }: Props) {
               Unlock more clusters
             </Button>
           )}
-          {compact && (
+          {compact && !subscriptionOff && (
             <Button
               size="small"
               disabled

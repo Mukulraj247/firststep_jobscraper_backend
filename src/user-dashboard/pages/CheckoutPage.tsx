@@ -179,8 +179,9 @@ export function CheckoutPage() {
             Activate cluster
           </Typography>
           <Typography sx={{ mt: 0.75, color: STITCH.muted, maxWidth: 560 }}>
-            Uses one free slot from your plan. Extra clusters are assigned by ops after you request
-            them — no payment in ScoutX.
+            Uses one slot from your allotment (Premium Plus includes 2 in-plan; other plans get
+            slots only when ops assigns them). Extra clusters need ops to raise your limit — no
+            payment in ScoutX.
           </Typography>
         </Box>
       </GlassHero>

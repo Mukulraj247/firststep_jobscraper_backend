@@ -41,6 +41,51 @@ const FEED_CACHE_TTL_MS = 30_000;
 type FeedCacheEntry = { expiresAt: number; body: ClusterFeedPage };
 const feedCache = new Map<string, FeedCacheEntry>();
 
+/**
+ * Newest-first for portal feed cards.
+ * Must match the timestamp cards show (`postedAt` ← listing `date`).
+ * Sorting by `lastSeenAt` (scrape freshness) puts recently re-scraped old postings
+ * ahead of genuinely new roles — which is what broke "Newest first" UX.
+ */
+export const FEED_NEWEST_SORT = { date: -1, lastSeenAt: -1, createdAt: -1, _id: -1 } as const;
+
+/**
+ * Lean projection for feed cards — avoids shipping multi-KB enrichment blobs
+ * when paging through large clusters. Keep fields `mapListingToFeedJob` needs.
+ */
+export const FEED_CARD_PROJECTION = {
+  jobUrlKey: 1,
+  jobUrl: 1,
+  applyUrl: 1,
+  jobId: 1,
+  jobTitle: 1,
+  companyName: 1,
+  companyResolvedName: 1,
+  jobDescription: 1,
+  descriptionSnippet: 1,
+  jobCategory: 1,
+  frozenCategories: 1,
+  frozenExperienceLevels: 1,
+  location: 1,
+  salaryRange: 1,
+  employmentType: 1,
+  remoteType: 1,
+  jobExperience: 1,
+  sectorIndustry: 1,
+  date: 1,
+  companyLogoUrl: 1,
+  skills: 1,
+  h1bEligible: 1,
+  h1bFy2026Match: 1,
+  source: 1,
+  aggregatorPostingUrl: 1,
+  robotMetaId: 1,
+  robotMetaIds: 1,
+  listSnapshot: 1,
+  createdAt: 1,
+  lastSeenAt: 1,
+} as const;
+
 export function clearClusterFeedCache(): void {
   feedCache.clear();
 }
@@ -318,7 +363,8 @@ export async function sampleJobsForCluster(
 ) {
   const match = clusterToJobQuery(cluster, ownerId);
   const rows = await JobBoardListing.find(match)
-    .sort({ lastSeenAt: -1, createdAt: -1 })
+    .select(FEED_CARD_PROJECTION)
+    .sort(FEED_NEWEST_SORT)
     .limit(Math.min(Math.max(limit * 2, 8), 40))
     .lean();
 
@@ -402,7 +448,8 @@ export async function queryClusterFeed(opts: {
   const [total, rows] = await Promise.all([
     JobBoardListing.countDocuments(match),
     JobBoardListing.find(match)
-      .sort({ lastSeenAt: -1, createdAt: -1 })
+      .select(FEED_CARD_PROJECTION)
+      .sort(FEED_NEWEST_SORT)
       .skip(skip)
       .limit(fetchLimit)
       .lean(),
@@ -493,7 +540,8 @@ export async function distinctCompaniesForCluster(
 
 /**
  * Merge jobs across subscribed clusters with no time-window cutoff.
- * Sorted newest-first by lastSeenAt / createdAt. Real pagination via skip/limit.
+ * Sorted newest-first by posting date (`date` → UI `postedAt`), then scrape freshness.
+ * Real pagination via skip/limit — never loads the full cluster into memory.
  */
 export async function queryMergedClusterFeed(opts: {
   clusters: Array<
@@ -521,12 +569,14 @@ export async function queryMergedClusterFeed(opts: {
   match = applyUserFilters(match, filters);
 
   const skip = (page - 1) * limit;
+  // Over-fetch slightly because mapListingToJob may drop quality fails.
   const fetchLimit = Math.min(limit * 3, 100);
 
   const [total, rows] = await Promise.all([
     JobBoardListing.countDocuments(match),
     JobBoardListing.find(match)
-      .sort({ lastSeenAt: -1, createdAt: -1 })
+      .select(FEED_CARD_PROJECTION)
+      .sort(FEED_NEWEST_SORT)
       .skip(skip)
       .limit(fetchLimit)
       .lean(),

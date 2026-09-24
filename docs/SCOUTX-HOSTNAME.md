@@ -14,17 +14,20 @@ Until DNS is live, local Auth0 continues on `http://localhost:5173`.
 
 **Local `.env`** — keep localhost for `npm run start:dev`.
 
-**Droplet UI builds on your PC** — put prod URLs in `.env.production` (copy from `.env.production.example`). Vite loads that file automatically on `npm run build` / `npm run build:droplet`, so you do **not** flip `.env` every deploy:
+**Droplet builds on your PC** — put prod URLs in `.env.production` (copy from `.env.production.example`). Vite loads that file automatically on `npm run build`, so you do **not** flip `.env` every deploy:
 
-```bash
-# once
+```powershell
+# once (if missing)
 copy .env.production.example .env.production
 
-# every UI deploy from PC
+# every deploy from PC (repo root)
+$env:NODE_OPTIONS="--max-old-space-size=4096"
 npm run build:server
-npm run build:droplet
+npm run build
+scp -r server\dist root@DROPLET:/opt/scout-x/server/
 scp -r build root@DROPLET:/opt/scout-x/
 # then on droplet: chmod -R o+rX /opt/scout-x/build && chmod o+x /opt/scout-x /opt/scout-x/build
+# then: cd /opt/scout-x && git pull mukulraj247-backend main && pm2 restart scout-x --update-env
 ```
 
 `.env.production` should contain:

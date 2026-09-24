@@ -614,7 +614,7 @@ router.get('/portal/bootstrap', async (req: PortalRequest, res) => {
       .flat()
       .sort(
         (a, b) =>
-          Date.parse(b.lastSeenAt || b.postedAt) - Date.parse(a.lastSeenAt || a.postedAt)
+          Date.parse(b.postedAt || b.lastSeenAt) - Date.parse(a.postedAt || a.lastSeenAt)
       )
       .filter((j) => {
         if (seen.has(j.id)) return false;

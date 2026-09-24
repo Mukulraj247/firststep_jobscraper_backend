@@ -1,5 +1,5 @@
 import React from 'react';
-import { Avatar, Box, Button, Chip, Divider, Grid, Stack, Switch, Typography } from '@mui/material';
+import { Avatar, Box, Button, Divider, Grid, Stack, Switch, Typography } from '@mui/material';
 import BookmarkBorder from '@mui/icons-material/BookmarkBorder';
 import EditNoteOutlined from '@mui/icons-material/EditNoteOutlined';
 import LogoutOutlined from '@mui/icons-material/LogoutOutlined';
@@ -96,19 +96,6 @@ export function ProfilePage() {
                       {user.firstStepRole ? ` · ${user.firstStepRole}` : ''}
                     </Typography>
                   )}
-                  <Chip
-                    label="Scout member"
-                    size="small"
-                    sx={{
-                      mt: 1,
-                      height: 22,
-                      borderRadius: RADIUS.pill,
-                      fontSize: '0.68rem',
-                      fontWeight: 700,
-                      bgcolor: tint(FIRSTSTEP.teal, 0.14),
-                      color: FIRSTSTEP.tealDark,
-                    }}
-                  />
                 </Box>
               </Stack>
             </Box>

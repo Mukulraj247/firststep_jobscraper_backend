@@ -109,6 +109,12 @@ const CORS_CONFIG = {
 };
 
 const app = express();
+// nginx (droplet) sets X-Forwarded-For; express-rate-limit needs this or it throws
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and cannot key clients correctly.
+const trustProxyHops = Number(process.env.TRUST_PROXY ?? (process.env.NODE_ENV === 'production' ? 1 : 0));
+if (trustProxyHops > 0) {
+  app.set('trust proxy', trustProxyHops);
+}
 app.use(cors(CORS_CONFIG));
 app.use(express.json());
 

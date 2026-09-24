@@ -364,7 +364,7 @@ export function SubscriptionsPage() {
         <EmptyState
           icon={BoltOutlined}
           title="Start your cluster subscription"
-          description={`Your ${planLabel} plan includes ${entitlements?.maxActiveClusters ?? 0} free slot${(entitlements?.maxActiveClusters ?? 0) === 1 ? '' : 's'}. Start monitoring, then pick included clusters. Extra clusters are assigned by ops after purchase.`}
+          description={`Your ${planLabel} plan is ready. Only Premium Plus includes 2 clusters in-plan by default; other plans need ops to start subscription and assign slots. Start monitoring, then pick from your allotment.`}
           actionLabel={starting ? 'Starting…' : 'Start subscription'}
           onAction={starting ? undefined : handleStart}
         />

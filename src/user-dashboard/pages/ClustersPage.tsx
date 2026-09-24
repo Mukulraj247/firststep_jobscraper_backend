@@ -9,7 +9,12 @@ import { ClusterCard } from '../components/ClusterCard';
 import { EmptyState } from '../components/EmptyState';
 import { GlassHero } from '../components/GlassHero';
 import { ClusterGridSkeleton } from '../components/Skeletons';
-import { SlotLock, isSlotLocked } from '../components/SlotLock';
+import {
+  SlotLock,
+  effectiveAllotment,
+  isSlotLocked,
+  pickSlotsBannerBody,
+} from '../components/SlotLock';
 import { useRequirePortalAuth } from '../hooks/usePortalAuth.tsx';
 import {
   usePortalClusters,
@@ -84,11 +89,7 @@ export function ClustersPage() {
   const totalJobs = clusters.reduce((sum, c) => sum + c.jobCountPreview, 0);
   const hasFilters = Boolean(search.trim() || industryFilter);
   const planSlots =
-    entitlements?.subscribedSlots ??
-    entitlements?.includedSlots ??
-    entitlements?.maxActiveClusters ??
-    pickState?.pickSlots ??
-    0;
+    effectiveAllotment(entitlements) || pickState?.pickSlots || 0;
   const used = entitlements?.activeClusterCount ?? entitlements?.includedActiveCount ?? 0;
   const remaining =
     entitlements?.availableSlots ?? Math.max(0, planSlots - used);
@@ -96,8 +97,8 @@ export function ClustersPage() {
     Boolean(pickState?.pickSlots) ||
     (Boolean(entitlements?.clusterServiceStarted) && remaining > 0);
   const locked = isSlotLocked(entitlements);
-  const showLockBanner =
-    Boolean(entitlements?.clusterServiceStarted) && remaining === 0 && locked;
+  // Banner when subscription is off, allotment is 0, or slots are full.
+  const showLockBanner = locked;
 
   return (
     <Box data-tour="scoutx-clusters-page">
@@ -204,10 +205,12 @@ export function ClustersPage() {
             Pick {remaining} cluster{remaining === 1 ? '' : 's'}
           </Typography>
           <Typography sx={{ mt: 0.5, fontSize: '0.875rem', color: STITCH.muted }}>
-            {pickState?.planLabel || entitlements?.subscriptionTypeDisplay || 'Your plan'} includes{' '}
-            {planSlots} free slot{planSlots === 1 ? '' : 's'}
-            {used > 0 ? ` · ${used} already active` : ''}. Extra clusters require payment —
-            unlock is not available in ScoutX yet.
+            {pickSlotsBannerBody({
+              entitlements,
+              remaining,
+              used,
+              allotment: planSlots,
+            })}
           </Typography>
         </Box>
       )}
